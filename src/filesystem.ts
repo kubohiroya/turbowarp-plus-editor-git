@@ -1,17 +1,29 @@
 export class GitPanelError extends Error {
-    constructor(public code: 'invalid' | 'changed' | 'large' | 'unsupported', message: string = code) {
+    constructor(public code: 'invalid' | 'changed' | 'large' | 'unsupported' | 'pullUnsafe' | 'diverged' |
+        'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }
 }
 
-const fileError = (code: string, path: string) => Object.assign(new Error(`${code}: ${path}`), {code});
+export const fileError = (code: string, path: string) => Object.assign(new Error(`${code}: ${path}`), {code});
 export const errorCode = (error: unknown) => (error as {code?: string})?.code;
 
 export function pathParts(path: string): string[] {
     const parts = path.split('/').filter(part => part && part !== '.');
     if (parts.some(part => part === '..' || part.includes('\0'))) throw fileError('EACCES', path);
     return parts;
+}
+
+export function fileStat(file: {size: number; lastModified: number} | null) {
+    const time = file?.lastModified ?? 0;
+    return {
+        isFile: () => file !== null, isDirectory: () => file === null, isSymbolicLink: () => false,
+        size: file?.size ?? 0, mode: file ? 0o100644 : 0o40755,
+        mtimeMs: time, ctimeMs: time, atimeMs: time, birthtimeMs: time,
+        mtime: new Date(time), ctime: new Date(time), atime: new Date(time), birthtime: new Date(time),
+        dev: 0, ino: 0, uid: 0, gid: 0
+    };
 }
 
 /** Adapt granted handles without exposing any filesystem mutation. */
@@ -61,17 +73,7 @@ export function createReadOnlyFs(root: FileSystemDirectoryHandle) {
         const item = await handle(path);
         const file = item.kind === 'file' ? await item.getFile() : null;
         if (file) observe(path, file);
-        const time = file?.lastModified ?? 0;
-        return {
-            isFile: () => item.kind === 'file',
-            isDirectory: () => item.kind === 'directory',
-            isSymbolicLink: () => false,
-            size: file?.size ?? 0,
-            mode: file ? 0o100644 : 0o40755,
-            mtimeMs: time, ctimeMs: time, atimeMs: time, birthtimeMs: time,
-            mtime: new Date(time), ctime: new Date(time), atime: new Date(time), birthtime: new Date(time),
-            dev: 0, ino: 0, uid: 0, gid: 0
-        };
+        return fileStat(file);
     };
     const rejectWrite = async (path: string): Promise<never> => {throw fileError('EROFS', path);};
     return {

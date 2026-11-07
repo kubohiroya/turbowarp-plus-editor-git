@@ -15,6 +15,16 @@ export const messages = {
         invalid: 'Choose a repository with a .git directory, and a project inside that repository.',
         changed: 'Files or Git state changed while reading. Refresh to read the current state.',
         unsupported: 'This repository contains an entry the browser cannot represent.',
+        pullUnsafe: 'Stop the project and clear unsaved or local Git changes before pulling.',
+        diverged: 'Pull requires a fast-forward. Your local branch and files are intact.',
+        session: 'Reconnect GitHub for this repository and requested permission.',
+        pushUnknown: 'The push result is unknown. Fetch and check the remote branch before retrying.',
+        pushRefresh: 'The push succeeded. Fetch to refresh the local tracking branch.',
+        rollbackFailed: 'Git could not restore all local changes. Check the working tree and Git status.',
+        remoteFailed: 'The Git operation failed. Check the selected connection and retry.',
+        remoteDone: 'Git operation completed.',
+        pulledProject: 'Pull completed. Use Reload Project to open the updated files.',
+        confirmPush: 'Push the current branch to its GitHub origin?',
         failed: 'Could not read the repository. Check folder access and refresh.'
     },
     ja: {
@@ -33,6 +43,16 @@ export const messages = {
         invalid: '.git ディレクトリを持つリポジトリと、その配下の作品を選んでください。',
         changed: '読込中にファイルまたは Git の状態が変わりました。再取得してください。',
         unsupported: 'ブラウザーで扱えない種類の Git エントリーがあります。',
+        pullUnsafe: 'pull の前に実行を止め、未保存編集とローカルの Git 変更を解消してください。',
+        diverged: 'fast-forward できません。ローカルブランチとファイルは保持されています。',
+        session: 'このリポジトリと操作に必要な権限で GitHub に接続してください。',
+        pushUnknown: 'push の結果が不明です。再試行する前に fetch でリモートブランチを確認してください。',
+        pushRefresh: 'push は成功しました。fetch でローカルの追跡ブランチを更新してください。',
+        rollbackFailed: 'Git がローカルの変更をすべて復元できませんでした。作業ツリーと Git の状態を確認してください。',
+        remoteFailed: 'Git 操作に失敗しました。選択中の接続を確認して再試行してください。',
+        remoteDone: 'Git 操作が完了しました。',
+        pulledProject: 'pull が完了しました。「作品を再読込」で更新済みのファイルを開けます。',
+        confirmPush: '現在のブランチを GitHub の origin に push しますか？',
         failed: 'リポジトリを読み込めませんでした。フォルダへのアクセスを確認し、再取得してください。'
     }
 };

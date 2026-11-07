@@ -116,7 +116,8 @@ export async function startFixture(t) {
                 PATH_INFO: pathInfo, QUERY_STRING: query, REMOTE_USER: 'fixture-user',
                 CONTENT_TYPE: headers['content-type'] ?? '', CONTENT_LENGTH: headers['content-length'] ?? '0'}
         });
-        if (fixture.dropPush && method === 'POST' && service === 'git-receive-pack') {
+        const dropPush = fixture.dropPush && method === 'POST' && service === 'git-receive-pack';
+        if (dropPush && fixture.dropPush !== 'after-headers') {
             res.destroy();
             return;
         }
@@ -126,6 +127,10 @@ export async function startFixture(t) {
         const statusLine = lines.find(line => line.startsWith('Status: '));
         const contentType = lines.find(line => line.startsWith('Content-Type: '));
         if (contentType) res.setHeader('Content-Type', contentType.slice(14));
+        if (dropPush) {
+            res.setHeader('Content-Length', output.length - end - 3);
+            res.setHeader('Connection', 'close');
+        }
         res.writeHead(statusLine ? Number(statusLine.slice(8, 11)) : 200);
         res.end(output.subarray(end + 4));
     }
