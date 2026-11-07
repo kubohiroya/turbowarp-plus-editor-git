@@ -1,0 +1,90 @@
+import React, {useEffect, useRef, useState} from 'react';
+
+type Mode = 'desktop' | 'cloudflare';
+type Status = 'disconnected' | 'connecting' | 'connected' | 'reauth-required';
+export interface GitConnectionSettings {
+    modes: readonly Mode[];
+    getView(): {
+        mode: Mode | null;
+        state: {status: Status; account?: {login: string}; expiresAt?: number};
+        proxyOrigin?: string;
+        authorization?: {url: string; userCode?: string};
+    };
+    select(mode: Mode): Promise<void>;
+    connect(remote: string): Promise<void>;
+    refresh(): Promise<void>;
+    disconnect(): Promise<void>;
+}
+
+const en = {
+    title: 'GitHub connection', mode: 'Connection mode', select: 'Choose a connection',
+    desktop: 'Desktop local', cloudflare: 'Cloudflare', proxy: 'Proxy', account: 'Account',
+    'disconnected': 'Disconnected', 'connecting': 'Waiting for GitHub', 'connected': 'Connected',
+    'reauth-required': 'Sign in again', connect: 'Connect to GitHub', open: 'Open GitHub authorization',
+    check: 'Check connection', disconnect: 'Disconnect', noRemote: 'Choose a repository with a GitHub HTTPS origin.',
+    unavailable: 'No GitHub connection is configured.', changed: 'Switching disconnects the current session.',
+    error: 'GitHub connection failed. Retry using the selected connection.',
+    invalid: 'The selected repository needs a GitHub HTTPS origin.'
+};
+const ja: typeof en = {
+    title: 'GitHub 接続', mode: '接続方式', select: '接続方式を選択',
+    desktop: 'Desktop ローカル', cloudflare: 'Cloudflare', proxy: 'プロキシ', account: 'アカウント',
+    'disconnected': '未接続', 'connecting': 'GitHub の認証待ち', 'connected': '接続済み',
+    'reauth-required': '再認証が必要', connect: 'GitHub に接続', open: 'GitHub の認証を開く',
+    check: '接続を確認', disconnect: '切断', noRemote: 'GitHub の HTTPS リモート origin があるリポジトリを選択してください。',
+    unavailable: 'GitHub 接続先が設定されていません。', changed: '方式を切り替えると現在のセッションを切断します。',
+    error: 'GitHub 接続に失敗しました。選択中の方式で再試行してください。',
+    invalid: '選択したリポジトリには GitHub の HTTPS リモート origin が必要です。'
+};
+
+export function ConnectionSettings({settings, locale, readOrigin}: {
+    settings: GitConnectionSettings; locale: string; readOrigin?: () => Promise<string | undefined>;
+}) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    const [, update] = useState(0);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<'error' | 'invalid' | null>(null);
+    const active = useRef(true);
+    useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
+    const run = async (action: () => Promise<void>) => {
+        if (busy) return;
+        setBusy(true);
+        setError(null);
+        try {await action();} catch (failure) {
+            if (active.current) setError((failure as Error).message === 'INVALID_REMOTE' ? 'invalid' : 'error');
+        } finally {
+            if (active.current) {setBusy(false); update(value => value + 1);}
+        }
+    };
+    const {mode, state, proxyOrigin, authorization} = settings.getView();
+    const connect = () => run(async () => {
+        const remote = await readOrigin?.();
+        if (!remote) throw new Error('INVALID_REMOTE');
+        await settings.connect(remote);
+    });
+    return <details className="twgit-connection">
+        <summary>{labels.title}</summary>
+        {!settings.modes.length ? <p>{labels.unavailable}</p> : <>
+            <label>{labels.mode} <select value={mode ?? ''} disabled={busy}
+                onChange={event => {const choice = event.currentTarget.value as Mode; void run(() => settings.select(choice));}}>
+                <option value="" disabled>{labels.select}</option>
+                {settings.modes.map(choice => <option key={choice} value={choice}>{labels[choice]}</option>)}
+            </select></label>
+            <p>{labels.changed}</p>
+            <p data-git-connection-state="" role="status">{labels[state.status]}</p>
+            {proxyOrigin && <p>{labels.proxy} · <code>{proxyOrigin}</code></p>}
+            {state.account && <p>{labels.account} · {state.account.login}</p>}
+            {!readOrigin && <p>{labels.noRemote}</p>}
+            {mode && <>
+                <button disabled={busy || !readOrigin || state.status === 'connecting' || state.status === 'connected'}
+                    onClick={connect}>{labels.connect}</button>
+                {authorization && <p>{authorization.userCode && <code>{authorization.userCode} </code>}
+                    <a href={authorization.url} target="_blank" rel="noopener noreferrer">{labels.open}</a></p>}
+                {state.status !== 'disconnected' && <button disabled={busy}
+                    onClick={() => void run(settings.refresh)}>{labels.check}</button>}
+                <button disabled={busy} onClick={() => void run(settings.disconnect)}>{labels.disconnect}</button>
+            </>}
+            {error && <p className="twgit-error" role="alert">{labels[error]}</p>}
+        </>}
+    </details>;
+}

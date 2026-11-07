@@ -213,6 +213,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         return directory;
     };
     return {root, openProject, browse,
+        readOrigin: () => serial(() => git.getConfig({...options, path: 'remote.origin.url'})),
         read: (scope?: string) => serial(() => read(scope)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid))

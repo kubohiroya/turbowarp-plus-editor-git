@@ -30,3 +30,5 @@ await git.fetch({fs, dir, remote: remoteName, ...transport});
 同じ接続オプションで `git.fastForward` による fast-forward 限定の pull と、明示操作での `git.push`（`force: false`）を利用できます。作業ツリーの安全確認は呼び出し元で行います。アダプターは Git の設定を書き換えず、プロキシ専用の資格情報を固定の接続先にだけ送信します。Git の探索と RPC は `/v1/git/<owner>/<repo>.git/` に変換します。要求の上限は32 MiBで、呼び出し元から引き下げられます。成功時の応答は isomorphic-git にストリームで返します。`PUSH_OUTCOME_UNKNOWN` の場合は再送前にリモートの参照を確認します。
 
 `npm test` はローカル Git のテストと、IPv4 ループバック上の `git-http-backend` を使うヘッドレステストを実行します。一時リポジトリとテスト用の資格情報を使用します。 [プロキシ・認証・CORS の契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315)
+
+Editor のホストが接続設定を渡すと、ローカル Git パネルで、選択したリポジトリの既存の HTTPS リモート `origin` に対して GitHub 認証ができます。選択中の方式、接続状態、アカウントを表示します。パネルの作業ツリー操作は読み取り専用です。
