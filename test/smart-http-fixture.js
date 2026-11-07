@@ -127,7 +127,10 @@ export async function startFixture(t) {
         const statusLine = lines.find(line => line.startsWith('Status: '));
         const contentType = lines.find(line => line.startsWith('Content-Type: '));
         if (contentType) res.setHeader('Content-Type', contentType.slice(14));
-        if (dropPush) res.setHeader('Content-Length', output.length - end - 3);
+        if (dropPush) {
+            res.setHeader('Content-Length', output.length - end - 3);
+            res.setHeader('Connection', 'close');
+        }
         res.writeHead(statusLine ? Number(statusLine.slice(8, 11)) : 200);
         res.end(output.subarray(end + 4));
     }
