@@ -13,3 +13,20 @@ A Chromium-based browser with File System Access support is required. The first 
 Use Node.js 26, run `npm ci`, then `npm test`. Vite builds the library and stylesheet, and TypeScript emits declarations. `npm pack` prepares the artifact used by the Editor build. The Editor enables the panel by default. Start it with `twPlusLocalGit=0` in its URL to disable the integration.
 
 The panel structure and local Git approach were informed by [duff](https://github.com/chigichan24/duff). The implementation uses [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git) and [react-diff-view](https://github.com/otakustay/react-diff-view). Bundled licenses are listed in the build's third-party notices.
+
+## Smart HTTP adapter
+
+Import `createGitSmartHttp` from `@kubohiroya/turbowarp-plus-editor-git/smart-http`. Pass the selected GitHub HTTPS remote from Git config, a trusted connection (`mode` and `proxyOrigin`), and a function that returns the current proxy session or `null`. A `GitAuthProvider` from the auth package satisfies this contract. The Git package uses the session fields structurally, so the read-only panel and the adapter can be installed independently of the auth package.
+
+```ts
+const transport = createGitSmartHttp({
+    remote: configuredRemoteUrl,
+    connection: provider.connection,
+    getSession: () => provider.getSession()
+});
+await git.fetch({fs, dir, remote: remoteName, ...transport});
+```
+
+Pass the same transport options to `git.fastForward` for fast-forward-only pulls and to `git.push` with `force: false` for explicit pushes. Keep the existing worktree safety checks in the caller. The adapter writes no Git configuration and sends only proxy credentials to the fixed proxy. It maps Git discovery and RPC requests to `/v1/git/<owner>/<repo>.git/`. Requests have a 32 MiB cap, which the caller can lower, and successful responses stream back to isomorphic-git. A `PUSH_OUTCOME_UNKNOWN` error means the remote ref must be checked before another push.
+
+`npm test` runs the local Git tests and a headless Smart HTTP fixture on IPv4 loopback using `git-http-backend`. The fixture uses disposable repositories and test credentials. [Proxy, authentication and CORS contract](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315).

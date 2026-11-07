@@ -19,7 +19,11 @@
       "types": "./dist/repository.d.ts",
       "default": "./dist/repository.js"
     },
-    "./style.css": "./dist/style.css"
+    "./style.css": "./dist/style.css",
+    "./smart-http": {
+      "types": "./dist/smart-http.d.ts",
+      "default": "./dist/smart-http.js"
+    }
   },
   "files": [
     "dist",
