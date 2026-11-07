@@ -29,6 +29,8 @@ await git.fetch({fs, dir, remote: remoteName, ...transport});
 
 Pass the same transport options to `git.fastForward` for fast-forward-only pulls and to `git.push` with `force: false` for explicit pushes. Keep the existing worktree safety checks in the caller. The adapter writes no Git configuration and sends only proxy credentials to the fixed proxy. It maps Git discovery and RPC requests to `/v1/git/<owner>/<repo>.git/`. Requests have a 32 MiB cap, which the caller can lower, and successful responses stream back to isomorphic-git. A `PUSH_OUTCOME_UNKNOWN` error means the remote ref must be checked before another push.
 
+Each receive-pack POST carries a new UUID v4 in `Git-Push-Id`. A browser replay carries the same ID. The proxy's `409 PUSH_DUPLICATE` is exposed as `PUSH_OUTCOME_UNKNOWN` so the caller can reconcile the remote ref with a fetch.
+
 `npm test` runs the local Git tests and a headless Smart HTTP fixture on IPv4 loopback using `git-http-backend`. The fixture uses disposable repositories and test credentials. [Proxy, authentication and CORS contract](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315).
 
 When the Editor host supplies connection settings, the Local Git panel offers fetch, fast-forward pull and push for the current branch and its existing GitHub HTTPS `origin`. Authorize push when connecting to enable the explicit push action. Fetch updates Git metadata. Pull requires a stopped project, a clean worktree, and regular non-executable files. Pull stages the changes, rechecks the local state, and then applies them. Reopen the project from the panel after a successful pull.
