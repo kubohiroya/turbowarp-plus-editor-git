@@ -31,4 +31,4 @@ Pass the same transport options to `git.fastForward` for fast-forward-only pulls
 
 `npm test` runs the local Git tests and a headless Smart HTTP fixture on IPv4 loopback using `git-http-backend`. The fixture uses disposable repositories and test credentials. [Proxy, authentication and CORS contract](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315).
 
-When the Editor host supplies connection settings, the Local Git panel exposes GitHub authorization for the selected repository's existing HTTPS `origin`. The settings show the selected provider, connection state and account. The panel's worktree commands remain read-only.
+When the Editor host supplies connection settings, the Local Git panel offers fetch, fast-forward pull and push for the current branch and its existing GitHub HTTPS `origin`. Authorize push when connecting to enable the explicit push action. Fetch updates Git metadata. Pull requires a stopped project, a clean worktree, and regular non-executable files. Pull stages the changes, rechecks the local state, and then applies them. Reopen the project from the panel after a successful pull.

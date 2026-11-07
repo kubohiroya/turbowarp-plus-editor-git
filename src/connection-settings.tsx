@@ -1,4 +1,5 @@
 import React, {useEffect, useRef, useState} from 'react';
+import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
 
 type Mode = 'desktop' | 'cloudflare';
 type Status = 'disconnected' | 'connecting' | 'connected' | 'reauth-required';
@@ -8,12 +9,14 @@ export interface GitConnectionSettings {
         mode: Mode | null;
         state: {status: Status; account?: {login: string}; expiresAt?: number};
         proxyOrigin?: string;
+        write?: boolean;
         authorization?: {url: string; userCode?: string};
     };
     select(mode: Mode): Promise<void>;
-    connect(remote: string): Promise<void>;
+    connect(remote: string, write?: boolean): Promise<void>;
     refresh(): Promise<void>;
     disconnect(): Promise<void>;
+    getSession?: GetRemoteSession;
 }
 
 const en = {
@@ -24,7 +27,8 @@ const en = {
     check: 'Check connection', disconnect: 'Disconnect', noRemote: 'Choose a repository with a GitHub HTTPS origin.',
     unavailable: 'No GitHub connection is configured.', changed: 'Switching disconnects the current session.',
     error: 'GitHub connection failed. Retry using the selected connection.',
-    invalid: 'The selected repository needs a GitHub HTTPS origin.'
+    invalid: 'The selected repository needs a GitHub HTTPS origin.',
+    allowPush: 'Authorize push', fetch: 'Fetch', pull: 'Pull (fast-forward only)', push: 'Push'
 };
 const ja: typeof en = {
     title: 'GitHub 接続', mode: '接続方式', select: '接続方式を選択',
@@ -34,15 +38,18 @@ const ja: typeof en = {
     check: '接続を確認', disconnect: '切断', noRemote: 'GitHub の HTTPS リモート origin があるリポジトリを選択してください。',
     unavailable: 'GitHub 接続先が設定されていません。', changed: '方式を切り替えると現在のセッションを切断します。',
     error: 'GitHub 接続に失敗しました。選択中の方式で再試行してください。',
-    invalid: '選択したリポジトリには GitHub の HTTPS リモート origin が必要です。'
+    invalid: '選択したリポジトリには GitHub の HTTPS リモート origin が必要です。',
+    allowPush: 'push を許可する', fetch: 'Fetch', pull: 'Pull（fast-forward のみ）', push: 'Push'
 };
 
-export function ConnectionSettings({settings, locale, readOrigin}: {
+export function ConnectionSettings({settings, locale, readOrigin, runOperation}: {
     settings: GitConnectionSettings; locale: string; readOrigin?: () => Promise<string | undefined>;
+    runOperation?: (operation: RemoteOperation) => Promise<void>;
 }) {
     const labels = locale.startsWith('ja') ? ja : en;
     const [, update] = useState(0);
     const [busy, setBusy] = useState(false);
+    const [allowPush, setAllowPush] = useState(false);
     const [error, setError] = useState<'error' | 'invalid' | null>(null);
     const active = useRef(true);
     useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
@@ -56,11 +63,11 @@ export function ConnectionSettings({settings, locale, readOrigin}: {
             if (active.current) {setBusy(false); update(value => value + 1);}
         }
     };
-    const {mode, state, proxyOrigin, authorization} = settings.getView();
+    const {mode, state, proxyOrigin, authorization, write} = settings.getView();
     const connect = () => run(async () => {
         const remote = await readOrigin?.();
         if (!remote) throw new Error('INVALID_REMOTE');
-        await settings.connect(remote);
+        await settings.connect(remote, allowPush);
     });
     return <details className="twgit-connection">
         <summary>{labels.title}</summary>
@@ -76,6 +83,9 @@ export function ConnectionSettings({settings, locale, readOrigin}: {
             {state.account && <p>{labels.account} · {state.account.login}</p>}
             {!readOrigin && <p>{labels.noRemote}</p>}
             {mode && <>
+                {runOperation && <label><input type="checkbox" checked={allowPush}
+                    disabled={busy || state.status === 'connecting' || state.status === 'connected'}
+                    onChange={event => setAllowPush(event.currentTarget.checked)}/> {labels.allowPush}</label>}
                 <button disabled={busy || !readOrigin || state.status === 'connecting' || state.status === 'connected'}
                     onClick={connect}>{labels.connect}</button>
                 {authorization && <p>{authorization.userCode && <code>{authorization.userCode} </code>}
@@ -83,6 +93,9 @@ export function ConnectionSettings({settings, locale, readOrigin}: {
                 {state.status !== 'disconnected' && <button disabled={busy}
                     onClick={() => void run(settings.refresh)}>{labels.check}</button>}
                 <button disabled={busy} onClick={() => void run(settings.disconnect)}>{labels.disconnect}</button>
+                {runOperation && state.status === 'connected' && (['fetch', 'pull', 'push'] as const).map(operation =>
+                    <button key={operation} disabled={busy || !readOrigin || (operation === 'push' && !write)}
+                        onClick={() => void run(() => runOperation(operation))}>{labels[operation]}</button>)}
             </>}
             {error && <p className="twgit-error" role="alert">{labels[error]}</p>}
         </>}

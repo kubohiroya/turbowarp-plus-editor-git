@@ -7,6 +7,7 @@ import {labelsFor} from './messages.js';
 import {GitPanelError} from './filesystem.js';
 import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
+import type {RemoteOperation} from './remote-operations.js';
 
 export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
 export type {Repository, Snapshot, FileChange, FileDiff} from './repository.js';
@@ -15,6 +16,7 @@ export interface GitHost {
     connectionSettings?: GitConnectionSettings;
     openProject(directory: FileSystemDirectoryHandle, confirmReplace: () => boolean): Promise<'opened' | 'cancelled'>;
     isProjectDirty(): boolean;
+    isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
 }
 interface Controller {open(locale: string): void; refresh(): Promise<void>}
@@ -28,6 +30,7 @@ interface State {
     diff: FileDiff | null;
     commit: string | null;
     error: string | null;
+    notice?: string;
     busy: boolean;
 }
 const initial: State = {repository: null, snapshot: null, project: null, browser: null,
@@ -45,6 +48,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     const epoch = useRef(0);
     const running = useRef(false);
     const refreshPending = useRef(false);
+    const remoteRequest = useRef<AbortController>();
     const alive = useRef(true);
     const opening = useRef(false);
     const dialog = useRef<HTMLDivElement>(null);
@@ -53,7 +57,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         if (running.current || !alive.current) return;
         running.current = true;
         const ticket = ++epoch.current;
-        setState(previous => ({...previous, busy: true, error: null}));
+        setState(previous => ({...previous, busy: true, error: null, notice: undefined}));
         try {
             const update = await operation();
             if (epoch.current === ticket) setState(previous => ({...previous, ...update, busy: false}));
@@ -91,7 +95,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 queueMicrotask(() => void controller.refresh());
             }
         });
-        return () => {alive.current = false; epoch.current++; unsubscribe?.();};
+        return () => {alive.current = false; epoch.current++; remoteRequest.current?.abort(); unsubscribe?.();};
     }, [host]);
     useEffect(() => {
         if (!visible) return;
@@ -132,10 +136,33 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         diff: await state.repository!.readDiff(state.snapshot!, selected)}));
     const selectCommit = (commit: string) => run(async () => ({commit,
         changes: await state.repository!.historyChanges(state.snapshot!, commit), selected: null, diff: null}));
+    const remoteOperation = async (operation: RemoteOperation) => {
+        const repository = current.current.repository;
+        const getSession = host.connectionSettings?.getSession;
+        if (!repository || !getSession) return;
+        if (operation === 'push' && !document.defaultView?.confirm(labels.confirmPush)) return;
+        await run(async () => {
+            const ticket = epoch.current;
+            const request = new AbortController();
+            remoteRequest.current = request;
+            try {
+                await repository.remoteOperation(operation, getSession, () => {
+                    if (epoch.current !== ticket) throw new GitPanelError('changed');
+                    if (operation === 'pull' && (host.isProjectDirty() || host.isProjectRunning?.()))
+                        throw new GitPanelError('pullUnsafe');
+                }, request.signal);
+            } finally {
+                remoteRequest.current = undefined;
+            }
+            const snapshot = await repository.read(current.current.project ?? '');
+            return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null,
+                notice: operation === 'pull' && current.current.project !== null ? labels.pulledProject : labels.remoteDone};
+        });
+    };
     const focusTrap = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {event.stopPropagation(); setVisible(false); return;}
         if (event.key !== 'Tab') return;
-        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')]
+        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')]
             .filter(item => item.getClientRects().length > 0);
         const first = items[0], last = items[items.length - 1];
         if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
@@ -163,12 +190,14 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 <span data-git-dirty="">{dirty ? labels.dirty : labels.saved}</span>
             </div>
             {host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
+                runOperation={host.connectionSettings.getSession ? remoteOperation : undefined}
                 readOrigin={state.repository && !state.busy ? async () => {
                     const ticket = epoch.current;
                     const remote = await state.repository!.readOrigin();
                     return epoch.current === ticket ? remote : undefined;
                 } : undefined}/>}
             {state.error && <p className="twgit-error" role="alert">{state.error}</p>}
+            {state.notice && <p className="twgit-context" role="status">{state.notice}</p>}
             {state.busy && <p role="status">{labels.loading}</p>}
             {!state.repository && <p>{labels.empty}</p>}
             {state.repository && <div className="twgit-content">

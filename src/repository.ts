@@ -1,6 +1,8 @@
 import * as git from 'isomorphic-git';
 import {createTwoFilesPatch} from 'diff';
 import {createReadOnlyFs, errorCode, GitPanelError, pathParts, readOptional, sameBytes} from './filesystem.js';
+import {runRemoteOperation} from './remote-operations.js';
+import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
 export type ChangeGroup = 'staged' | 'unstaged' | 'untracked' | 'commit';
@@ -57,6 +59,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     };
     const options = {fs, dir: '/', gitdir: '/.git'};
     let cache = {};
+    let pushNeedsFetch = false;
     const metadata = async (): Promise<Metadata> => {
         const head = await readOptional(fs, '/.git/HEAD');
         if (!head) throw new GitPanelError('invalid');
@@ -214,6 +217,18 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     };
     return {root, openProject, browse,
         readOrigin: () => serial(() => git.getConfig({...options, path: 'remote.origin.url'})),
+        remoteOperation: (operation: RemoteOperation, getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal) =>
+            serial(async () => {
+                if (operation === 'push' && pushNeedsFetch) throw new GitPanelError('pushUnknown');
+                try {
+                    await runRemoteOperation(root, operation, getSession, guard, signal);
+                    if (operation === 'fetch') pushNeedsFetch = false;
+                } catch (error) {
+                    if (operation === 'push' && error instanceof GitPanelError &&
+                        (error.code === 'pushUnknown' || error.code === 'pushRefresh')) pushNeedsFetch = true;
+                    throw error;
+                }
+            }),
         read: (scope?: string) => serial(() => read(scope)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid))

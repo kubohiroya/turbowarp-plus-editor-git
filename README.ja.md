@@ -31,4 +31,4 @@ await git.fetch({fs, dir, remote: remoteName, ...transport});
 
 `npm test` はローカル Git のテストと、IPv4 ループバック上の `git-http-backend` を使うヘッドレステストを実行します。一時リポジトリとテスト用の資格情報を使用します。 [プロキシ・認証・CORS の契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315)
 
-Editor のホストが接続設定を渡すと、ローカル Git パネルで、選択したリポジトリの既存の HTTPS リモート `origin` に対して GitHub 認証ができます。選択中の方式、接続状態、アカウントを表示します。パネルの作業ツリー操作は読み取り専用です。
+Editor のホストが接続設定を渡すと、ローカル Git パネルで、現在のブランチと既存の GitHub HTTPS リモート `origin` に対して fetch、fast-forward pull、push ができます。push には接続時の明示許可が必要です。fetch は Git のメタデータを更新します。pull は作品を停止し、作業ツリーがクリーンで通常の実行権限なしファイルだけを扱える場合に使えます。変更を一時領域に組み立て、ローカルの状態を再確認してから適用します。pull 後はパネルから作品を再読込できます。
