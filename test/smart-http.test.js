@@ -13,6 +13,32 @@ const body = (...sizes) => (async function* () {for (const size of sizes) yield 
 const discovery = {url: remote + readDiscovery};
 const receive = {url: remote + '/git-receive-pack', method: 'POST'};
 
+test('adds a fresh ID only to receive-pack POST and treats a duplicate as an unknown push result', async () => {
+    const origin = 'http://127.0.0.1:49000';
+    const sent = [];
+    const requestId = '00000000-0000-4000-8000-000000000001';
+    const transport = createGitSmartHttp({...adapterOptions({origin}), fetch: async (url, init) => {
+        sent.push({url, id: init.headers.get('Git-Push-Id')});
+        if (url.endsWith('/git-receive-pack')) return Response.json({code: 'PUSH_DUPLICATE', requestId}, {status: 409});
+        return new Response(new Uint8Array([0]), {headers: {'Content-Type': init.headers.get('Accept')}});
+    }});
+    for (const request of [{url: remote + writeDiscovery}, discovery,
+        {url: remote + '/git-upload-pack', method: 'POST', body: body(1)}]) {
+        const response = await transport.http.request(request);
+        for await (const _bytes of response.body) {}
+    }
+    for (let count = 0; count < 2; count++) {
+        await assert.rejects(transport.http.request({...receive, body: body(1)}), {
+            ...error('PUSH_OUTCOME_UNKNOWN'), statusCode: 409, requestId
+        });
+    }
+    assert.deepEqual(sent.slice(0, 3).map(request => request.id), [null, null, null]);
+    const ids = sent.slice(3).map(request => request.id);
+    assert.equal(ids.length, 2);
+    assert.notEqual(ids[0], ids[1]);
+    for (const id of ids) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
+});
+
 test('Smart HTTP fetch, fast-forward and push agree with Git CLI on real repositories', {timeout: 30000}, async t => {
     const fixture = await startFixture(t);
     const {seed, client, bare} = fixture;

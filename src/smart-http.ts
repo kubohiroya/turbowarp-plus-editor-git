@@ -105,7 +105,8 @@ async function proxyError(response: Response, writing: boolean) {
         try {
             const body = await boundedBody(responseBytes(response.body, 'INVALID_RESPONSE'), 4096);
             const parsed = JSON.parse(await body.text());
-            if (allowed?.includes(parsed?.code)) code = parsed.code;
+            if (writing && status === 409 && parsed?.code === 'PUSH_DUPLICATE') code = 'PUSH_OUTCOME_UNKNOWN';
+            else if (allowed?.includes(parsed?.code)) code = parsed.code;
             if (typeof parsed?.requestId === 'string' &&
                 /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(parsed.requestId)) {
                 requestId = parsed.requestId;
@@ -161,6 +162,7 @@ export function createGitSmartHttp(options: GitSmartHttpOptions) {
         const headers = new Headers({Authorization: `Bearer ${session.bearer}`, Accept: contentType});
         if (payload) headers.set('Content-Type', `application/x-${service}-request`);
         const writing = rpc && service === 'git-receive-pack';
+        if (writing) headers.set('Git-Push-Id', crypto.randomUUID());
 
         let response: Response;
         try {

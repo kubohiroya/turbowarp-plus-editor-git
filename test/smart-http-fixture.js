@@ -13,6 +13,7 @@ export const readDiscovery = '/info/refs?service=git-upload-pack';
 export const writeDiscovery = '/info/refs?service=git-receive-pack';
 const routePrefix = '/v1/git/fixture/work.git';
 const maxBody = 1024 * 1024;
+const pushIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 
 export function git(dir, ...args) {
     return execFileSync('git', args, {cwd: dir, encoding: 'utf8', env: gitEnv, stdio: ['ignore', 'pipe', 'pipe']}).trim();
@@ -50,6 +51,7 @@ export async function startFixture(t) {
     ]);
     const requests = [];
     const upstream = [];
+    const pushIds = new WeakMap();
     const fixture = {root, bare, seed, client, origins, sessions, requests, upstream, redirect: false, dropPush: false};
     const reply = (res, status, code) => {
         res.writeHead(status, {'Content-Type': 'application/json'});
@@ -71,9 +73,11 @@ export async function startFixture(t) {
             (effectiveMethod === 'GET' && path === '/info/refs?service=' + service) ||
             (effectiveMethod === 'POST' && path === '/' + service));
         if (!service) return reply(res, 400, 'BAD_REQUEST');
+        const push = effectiveMethod === 'POST' && service === 'git-receive-pack';
         const requestType = 'application/x-' + service + '-request';
         if (method === 'OPTIONS') {
             const allowed = effectiveMethod === 'GET' ? ['authorization'] : ['authorization', 'content-type'];
+            if (push) allowed.push('git-push-id');
             const asked = (headers['access-control-request-headers'] ?? '').toLowerCase().split(',').map(name => name.trim());
             if (asked.some(name => !allowed.includes(name))) return reply(res, 403, 'FORBIDDEN');
             res.writeHead(204, {'Access-Control-Allow-Methods': effectiveMethod, 'Access-Control-Allow-Headers': allowed.join(', ')});
@@ -104,6 +108,18 @@ export async function startFixture(t) {
             }
             if (size !== expected) return reply(res, 400, 'BAD_REQUEST');
             input = Buffer.concat(chunks);
+        }
+        const pushId = headers['git-push-id'];
+        if (push ? !pushIdPattern.test(pushId ?? '') || req.headersDistinct['git-push-id']?.length !== 1 :
+            pushId !== undefined) return reply(res, 400, 'BAD_REQUEST');
+        if (push) {
+            let claimed = pushIds.get(session);
+            if (!claimed) {
+                claimed = new Set();
+                pushIds.set(session, claimed);
+            }
+            if (claimed.has(pushId)) return reply(res, 409, 'PUSH_DUPLICATE');
+            claimed.add(pushId);
         }
 
         const [pathInfo, query = ''] = ('/fixture/work.git' + path).split('?');
