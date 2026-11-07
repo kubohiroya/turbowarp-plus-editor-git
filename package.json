@@ -1,0 +1,54 @@
+{
+  "name": "@kubohiroya/turbowarp-plus-editor-git",
+  "version": "0.1.0",
+  "description": "Read-only local Git panel for TurboWarp Plus Editor",
+  "type": "module",
+  "license": "MPL-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kubohiroya/turbowarp-plus-editor-git.git"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./repository": {
+      "types": "./dist/repository.d.ts",
+      "default": "./dist/repository.js"
+    },
+    "./style.css": "./dist/style.css"
+  },
+  "files": [
+    "dist",
+    "src",
+    "vite.config.ts",
+    "tsconfig.json",
+    "README.ja.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.js",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=16.14 <19",
+    "react-dom": ">=16.14 <19"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "16.14.70",
+    "@types/react-dom": "16.9.25",
+    "buffer": "6.0.3",
+    "diff": "9.0.0",
+    "isomorphic-git": "1.44.11",
+    "react": "16.14.0",
+    "react-diff-view": "3.3.3",
+    "react-dom": "16.14.0",
+    "typescript": "6.0.3",
+    "vite": "8.3.5"
+  }
+}
