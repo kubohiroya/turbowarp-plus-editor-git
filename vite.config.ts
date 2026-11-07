@@ -6,7 +6,11 @@ export default defineConfig({
         target: 'es2017',
         license: {fileName: 'THIRD_PARTY_NOTICES.md'},
         lib: {
-            entry: {index: 'src/browser.ts', repository: 'src/repository.ts'},
+            entry: {
+                index: 'src/browser.ts',
+                repository: 'src/repository.ts',
+                'smart-http': 'src/smart-http.ts'
+            },
             formats: ['es'],
             fileName: (_format, name) => `${name}.js`,
             cssFileName: 'style'
