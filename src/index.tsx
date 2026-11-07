@@ -5,11 +5,14 @@ import {openRepository} from './repository.js';
 import type {Repository, Snapshot, FileChange, FileDiff, ChangeGroup} from './repository.js';
 import {labelsFor} from './messages.js';
 import {GitPanelError} from './filesystem.js';
+import {ConnectionSettings} from './connection-settings.js';
+import type {GitConnectionSettings} from './connection-settings.js';
 
 export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
 export type {Repository, Snapshot, FileChange, FileDiff} from './repository.js';
 
 export interface GitHost {
+    connectionSettings?: GitConnectionSettings;
     openProject(directory: FileSystemDirectoryHandle, confirmReplace: () => boolean): Promise<'opened' | 'cancelled'>;
     isProjectDirty(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
@@ -107,6 +110,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             const repository = await openRepository(root);
             const snapshot = await repository.read();
             const browser = await repository.browse();
+            await host.connectionSettings?.disconnect();
             return {...initial, repository, snapshot, browser, changes: snapshot.changes};
         });
     };
@@ -131,7 +135,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     const focusTrap = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {event.stopPropagation(); setVisible(false); return;}
         if (event.key !== 'Tab') return;
-        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), summary, [tabindex="0"]')]
+        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')]
             .filter(item => item.getClientRects().length > 0);
         const first = items[0], last = items[items.length - 1];
         if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
@@ -158,6 +162,12 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 <code>{state.snapshot?.head?.slice(0, 12)}</code>
                 <span data-git-dirty="">{dirty ? labels.dirty : labels.saved}</span>
             </div>
+            {host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
+                readOrigin={state.repository && !state.busy ? async () => {
+                    const ticket = epoch.current;
+                    const remote = await state.repository!.readOrigin();
+                    return epoch.current === ticket ? remote : undefined;
+                } : undefined}/>}
             {state.error && <p className="twgit-error" role="alert">{state.error}</p>}
             {state.busy && <p role="status">{labels.loading}</p>}
             {!state.repository && <p>{labels.empty}</p>}
@@ -217,6 +227,7 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     render(<GitPanel document={document} host={host} controller={controller}/>, root);
     return {refresh: () => controller.refresh(), dispose() {
         if (controllers.get(vm) === controller) controllers.delete(vm);
+        void host.connectionSettings?.disconnect().catch(() => {});
         unmountComponentAtNode(root);
         root.remove();
     }};

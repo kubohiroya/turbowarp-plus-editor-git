@@ -4,6 +4,8 @@ export default defineConfig({
     resolve: {alias: {buffer: 'buffer/'}},
     build: {
         target: 'es2017',
+        // The Editor host minifies the final bundle. Preserve class bindings for webpack 4.
+        minify: false,
         license: {fileName: 'THIRD_PARTY_NOTICES.md'},
         lib: {
             entry: {
