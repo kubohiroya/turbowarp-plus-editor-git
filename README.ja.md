@@ -34,3 +34,61 @@ receive-pack の POST ごとに UUID v4 を発行し、`Git-Push-Id` に設定�
 `npm test` はローカル Git のテストと、IPv4 ループバック上の `git-http-backend` を使うヘッドレステストを実行します。一時リポジトリとテスト用の資格情報を使用します。 [プロキシ・認証・CORS の契約](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315)
 
 Editor のホストが接続設定を渡すと、ローカル Git パネルで、現在のブランチと既存の GitHub HTTPS リモート `origin` に対して fetch、fast-forward pull、push ができます。push には接続時の明示許可が必要です。fetch は Git のメタデータを更新します。pull は作品を停止し、作業ツリーがクリーンで通常の実行権限なしファイルだけを扱える場合に使えます。変更を一時領域に組み立て、ローカルの状態を再確認してから適用します。pull 後はパネルから作品を再読込できます。
+
+## 作品ソースのブロック差分
+
+`@kubohiroya/turbowarp-plus-editor-git/project-source-diff` の `createProjectSourceDiff` に、変更前後の `project.source.json` の文字列を渡します。戻り値を `project.diff` として保存できます。生成した unified diff には全行の文脈が入るので、ビューへ渡すときは `.diff` だけで変更前後を復元できます。既存のコンパクトな Git 差分を使う場合は、`beforeSource` に対応する変更前の JSON も渡します。
+
+```tsx
+import {
+    createProjectSourceDiff,
+    createScratchBlocksDiffRenderer,
+    ProjectSourceBlockDiff
+} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
+import '@kubohiroya/turbowarp-plus-editor-git/style.css';
+
+// These adapters use the host's existing Scratch Blocks and Scratch VM.
+const renderBlock = createScratchBlocksDiffRenderer({
+    getBlockly,
+    deserializeBlocks,
+    createBlockContainer: () => new VMBlocks()
+});
+
+const patch = createProjectSourceDiff(await beforeFile.text(), await afterFile.text());
+// Save a .diff by writing patch to a file or creating a Blob from it.
+const diffFile = new Blob([patch], {type: 'text/x-diff'});
+
+<ProjectSourceBlockDiff patch={patch} renderBlock={renderBlock} locale="ja" />;
+```
+
+`getBlockly` は読み込み済みの Scratch Blocks、`deserializeBlocks` と `VMBlocks` はホストの Scratch VM が提供するものを使います。表示用の VM ブロックコンテナーとワークスペースは差分ごとに新しく作ります。ホストに定義がない拡張ブロックやプレビュー非対応の mutation には描画不可と表示します。
+
+ブロックはステージまたはスプライト名とブロック ID で照合します。変更されたブロックとその入力を読み取り専用で並べ、追加・削除・入力値などの注釈を付けます。「元のスクリプト内で強調」を選ぶと、つながったスクリプトの中で対象を確認できます。オレンジの枠は変更された入力欄やフィールドを示します。画像・音声など、コード以外に変更があればその旨を表示します。切り戻す場合は、このコンポーネントの呼び出しを外します。
+
+### 編集画面のブロックと照合する
+
+`locateBlock` に `createScratchBlocksDiffLocator(resolveWorkspace)` を渡すと、各版のプレビューに「編集画面で強調」が出ます。`resolveWorkspace` は指定された `version`、対象のステージ・スプライト、ブロック ID に対応するワークスペースを返します。ホストは作品と版を照合し、必要なら対象を切り替えてブロックが表示されるまで待ちます。一致する編集画面がなければ `null` を返します。削除済みのブロックは変更前のスクリプトを展開して確認できます。
+
+ロケーターは一致したブロックを中央に移動し、差分ビューと同じ入力欄やフィールドを強調します。別の差分の選択・差分ファイルの切り替え・ビューの終了で強調を解除します。
+
+## PR 単位でレビューする
+
+同じエントリの `ProjectSourceReview` は、作品ファイルを複数含む変更セットをまとめてレビューするためのビューです。`title`・`description`・`verification` には PR 作者が記した目的と確認観点を渡します。`files` に作品ファイルの `{path, patch, beforeSource?}` や、関連ファイルの `{path, status, summary?}` を渡します。ブロックを描画する `renderBlock` は個別差分ビューと共通です。
+
+```tsx
+<ProjectSourceReview
+    title="ゲーム開始の合図をそろえる"
+    description="ステージからの合図を受けて、プレイヤーが動き出すようにします。"
+    verification={['開始時に合図が一度だけ送られること', '合図を受けるまでプレイヤーが待機すること']}
+    files={[
+        {path: 'game/project.source.json', patch},
+        {path: 'game/assets/start.svg', status: 'updated', summary: '開始画面の案内を更新'}
+    ]}
+    renderBlock={renderBlock}
+    locale="ja"
+/>
+```
+
+作品ファイルはステージ・スプライトごとに整理し、変更のあったスクリプトだけを比較項目にします。分割・結合したスクリプトも、両版に共通するブロック ID を使って一項目にまとめます。展開すると前後のスクリプトをブロックで表示し、編集箇所を枠で示します。変数、コスチュームなどの変更は別に示します。関連ファイルの要約はホストから渡した情報を表示します。
+
+確認済みの印は表示中の比較データに紐づくローカル状態です。PR 本文・ファイル差分の取得と GitHub へのレビュー送信は、呼び出し側が担当します。
