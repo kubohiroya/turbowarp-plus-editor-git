@@ -1,5 +1,6 @@
 export const messages = {
     en: {
+        pullRequests: 'Pull requests', localChanges: 'Local changes',
         title: 'Local Git', menu: 'Local Git…', close: 'Close', choose: 'Choose Repository…', refresh: 'Refresh',
         empty: 'Choose an existing Git repository to inspect its files and history.',
         repository: 'Repository', project: 'Project folder', none: 'No project selected', root: 'Repository root',
@@ -28,6 +29,7 @@ export const messages = {
         failed: 'Could not read the repository. Check folder access and refresh.'
     },
     ja: {
+        pullRequests: 'プルリクエスト', localChanges: 'ローカルの変更',
         title: 'ローカル Git', menu: 'ローカル Git…', close: '閉じる', choose: 'リポジトリを選択…', refresh: '再取得',
         empty: '既存の Git リポジトリを選び、ファイルの状態と履歴を確認できます。',
         repository: 'リポジトリ', project: '作品フォルダ', none: '作品は未選択', root: 'リポジトリルート',

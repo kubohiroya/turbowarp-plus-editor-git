@@ -11,7 +11,8 @@ export default defineConfig({
             entry: {
                 index: 'src/browser.ts',
                 repository: 'src/repository.ts',
-                'smart-http': 'src/smart-http.ts'
+                'smart-http': 'src/smart-http.ts',
+                'project-source-diff': 'src/project-source-diff.tsx'
             },
             formats: ['es'],
             fileName: (_format, name) => `${name}.js`,

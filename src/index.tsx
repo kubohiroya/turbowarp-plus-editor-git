@@ -8,12 +8,18 @@ import {GitPanelError} from './filesystem.js';
 import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
+import {PullRequestReviewPanel} from './pull-request-panel.js';
+import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+
+export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
+export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
 
 export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
 export type {Repository, Snapshot, FileChange, FileDiff} from './repository.js';
 
 export interface GitHost {
     connectionSettings?: GitConnectionSettings;
+    renderReviewBlock?: ProjectBlockRenderer;
     openProject(directory: FileSystemDirectoryHandle, confirmReplace: () => boolean): Promise<'opened' | 'cancelled'>;
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
@@ -40,6 +46,7 @@ type PickerWindow = Window & {showDirectoryPicker?: (options: {id: string; mode:
 
 function GitPanel({document, host, controller}: {document: Document; host: GitHost; controller: Controller}) {
     const [visible, setVisible] = useState(false);
+    const [review, setReview] = useState(false);
     const [locale, setLocale] = useState(document.documentElement.lang || 'en');
     const [dirty, setDirty] = useState(host.isProjectDirty());
     const [state, setState] = useState<State>(initial);
@@ -115,6 +122,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             const snapshot = await repository.read();
             const browser = await repository.browse();
             await host.connectionSettings?.disconnect();
+            setReview(false);
             return {...initial, repository, snapshot, browser, changes: snapshot.changes};
         });
     };
@@ -178,8 +186,10 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             <header>
                 <h2>{labels.title}</h2>
                 <button onClick={chooseRoot} disabled={state.busy}>{labels.choose}</button>
-                <button onClick={() => void controller.refresh()} disabled={!state.repository || state.busy}>{labels.refresh}</button>
-                {state.project !== null && <button disabled={state.busy} onClick={() => void openProject(state.project!)}>{labels.reload}</button>}
+                {!review && <button onClick={() => void controller.refresh()} disabled={!state.repository || state.busy}>{labels.refresh}</button>}
+                {!review && state.project !== null && <button disabled={state.busy} onClick={() => void openProject(state.project!)}>{labels.reload}</button>}
+                {state.repository && host.renderReviewBlock && <button type="button" disabled={state.busy}
+                    onClick={() => setReview(!review)}>{review ? labels.localChanges : labels.pullRequests}</button>}
                 <button onClick={() => setVisible(false)}>{labels.close}</button>
             </header>
             <div className="twgit-context">
@@ -189,7 +199,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 <code>{state.snapshot?.head?.slice(0, 12)}</code>
                 <span data-git-dirty="">{dirty ? labels.dirty : labels.saved}</span>
             </div>
-            {host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
+            {!review && host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
                 runOperation={host.connectionSettings.getSession ? remoteOperation : undefined}
                 readOrigin={state.repository && !state.busy ? async () => {
                     const ticket = epoch.current;
@@ -200,7 +210,9 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             {state.notice && <p className="twgit-context" role="status">{state.notice}</p>}
             {state.busy && <p role="status">{labels.loading}</p>}
             {!state.repository && <p>{labels.empty}</p>}
-            {state.repository && <div className="twgit-content">
+            {review && state.repository && host.renderReviewBlock &&
+                <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}/>}
+            {!review && state.repository && <div className="twgit-content">
                 <aside>
                     {state.browser && <details>
                         <summary>{labels.browse}</summary>
