@@ -1,10 +1,12 @@
-import React, {useMemo, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {BlockPreview, usePreviewSync} from './block-diff-preview.js';
 import {isRecord, parseProjectSource, readProjectSourceDiff} from './project-source-patch.js';
 import type {BlockSide} from './project-source-patch.js';
 import {compareProjectForReview} from './project-source-review-model.js';
 import type {ScriptReview, TargetReview} from './project-source-review-model.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ProjectBlockLocator} from './block-diff-location.js';
+import type {LocationStatus} from './block-diff-preview.js';
 import {currentCostume, useCostumeImage} from './project-assets.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 
@@ -15,7 +17,9 @@ export type ProjectSourceReviewFile = {
     summary?: string;
     previousPath?: string;
     unavailable?: boolean;
-} & ({patch: string; beforeSource?: string; loadAsset?: ProjectAssetLoader} | {status: 'added' | 'removed' | 'updated'});
+} & ({patch: string; beforeSource?: string; loadAsset?: ProjectAssetLoader;
+    /** Offers "Highlight in Editor" on this file's after version, which the caller has matched with the open project. */
+    locateBlock?: ProjectBlockLocator} | {status: 'added' | 'removed' | 'updated'});
 
 export interface ProjectSourceReviewProps {
     title: string;
@@ -37,7 +41,9 @@ const ja = {
     related: '関連ファイル', properties: 'コード以外の変更', invalid: 'この作品の差分を読み込めません。',
     flag: '緑の旗が押されたとき', broadcast: 'を受け取ったとき', key: 'キーが押されたとき',
     click: 'このスプライトが押されたとき', script: 'コード', noChanges: '作品に内容の変更はありません。',
-    comparison: '作品の変更', unreadable: '作品データとして読み込めないため、テキストの差分を表示します。'
+    comparison: '作品の変更', unreadable: '作品データとして読み込めないため、テキストの差分を表示します。',
+    locate: '編集画面で強調', locating: '編集画面でブロックを検索中…', located: '編集画面で強調しました。',
+    missingLocation: '編集画面に該当する版またはブロックがありません。'
 };
 const en: typeof ja = {
     review: 'Change review', fullDescription: 'Show full PR description', checks: 'Review checklist', files: 'Changed files', targets: 'Affected stages and sprites',
@@ -49,7 +55,9 @@ const en: typeof ja = {
     related: 'Related file', properties: 'Changes outside the code', invalid: 'This project diff could not be read.',
     flag: 'When green flag clicked', broadcast: 'received', key: 'When key pressed',
     click: 'When this sprite clicked', script: 'Code', noChanges: 'No changes to the project contents.',
-    comparison: 'Project changes', unreadable: 'This file could not be read as project data, so its text diff is shown.'
+    comparison: 'Project changes', unreadable: 'This file could not be read as project data, so its text diff is shown.',
+    locate: 'Highlight in Editor', locating: 'Finding the block in the Editor…', located: 'Highlighted in the Editor.',
+    missingLocation: 'This version or block is unavailable in the Editor.'
 };
 
 const properties = new Map<string, readonly [string, string]>([
@@ -74,9 +82,39 @@ function scriptTitle(side: BlockSide, labels: typeof ja) {
     return typeof block.opcode === 'string' ? block.opcode : labels.script;
 }
 
-function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset}: {
+type BlockLocation = {locate?(side: BlockSide): void; status(side: BlockSide): LocationStatus | undefined};
+const sideKey = (side: BlockSide) => JSON.stringify([side.target.isStage, side.target.name, side.id]);
+
+/** Highlights the after version of a script in the Editor, one request per comparison, and cancels it on unmount. */
+function useBlockLocation(comparison: Comparison, locateBlock?: ProjectBlockLocator): BlockLocation {
+    const request = useRef<AbortController>();
+    const [location, setLocation] = useState<{comparison: Comparison; key: string; locator: ProjectBlockLocator; status: LocationStatus}>();
+    useEffect(() => () => request.current?.abort(), [comparison, locateBlock]);
+    const locate = async (side: BlockSide) => {
+        if (!locateBlock) return;
+        request.current?.abort();
+        const controller = new AbortController();
+        request.current = controller;
+        const selected = {comparison, key: sideKey(side), locator: locateBlock};
+        setLocation({...selected, status: 'locating'});
+        let found = false;
+        try {
+            found = await locateBlock({target: side.target, id: side.id, version: 'after', parts: [], signal: controller.signal});
+        } catch {
+            // The host may replace the active project while resolving its workspace.
+        }
+        if (!controller.signal.aborted) setLocation({...selected, status: found ? 'located' : 'missingLocation'});
+    };
+    return {
+        locate: locateBlock && (side => void locate(side)),
+        status: side => location?.comparison === comparison && location.locator === locateBlock && location.key === sideKey(side) ?
+            location.status : undefined
+    };
+}
+
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location}: {
     script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
-    renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
+    renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; location?: BlockLocation;
 }) {
     const [open, setOpen] = useState(false);
     const {sync, toggle} = usePreviewSync(labels === ja ? 'ja' : 'en');
@@ -98,7 +136,9 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
                     {script[version].length ? script[version].map((side, index, sides) => <BlockPreview key={side.id} side={side}
                         title={sides.length > 1 ? `${labels[version]} ${index + 1}` : labels[version]}
                         marks={side.marks} renderBlock={renderBlock} withContext labels={labels}
-                        version={version} loadAsset={loadAsset} sync={sync}/>) :
+                        version={version} loadAsset={loadAsset} sync={sync}
+                        onLocate={version === 'after' && location?.locate ? () => location.locate!(side) : undefined}
+                        locationStatus={version === 'after' ? location?.status(side) : undefined}/>) :
                         <BlockPreview title={labels[version]} renderBlock={renderBlock} withContext labels={labels}/>}
                 </div>)}
             </div>
@@ -135,10 +175,12 @@ function TargetThumbnails({target, labels, loadAsset}: {target: TargetReview; la
 }
 
 /** Lists the changed stages and sprites of one project file, each with its code comparisons. */
-function ComparisonTargets({comparison, labels, renderBlock, loadAsset, review}: {
+function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBlock, review}: {
     comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
+    locateBlock?: ProjectBlockLocator;
     review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void};
 }) {
+    const location = useBlockLocation(comparison, locateBlock);
     return <>
         {comparison.properties.length > 0 && <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p>}
         {!comparison.targets.length && !comparison.properties.length && <p>{labels.noChanges}</p>}
@@ -149,7 +191,7 @@ function ComparisonTargets({comparison, labels, renderBlock, loadAsset, review}:
             {target.scripts.map(script => {
                 const key = JSON.stringify([review?.file, target.isStage, target.name, script.id]);
                 return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
-                    reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}/>;
+                    location={location} reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}/>;
             })}
         </section>)}
     </>;
@@ -168,12 +210,14 @@ export interface ProjectSourceComparisonProps {
     fallback?: React.ReactNode;
     /** Reads the images of both versions for thumbnails. Without it, stages and sprites are shown by name. */
     loadAsset?: ProjectAssetLoader;
+    /** Offers "Highlight in Editor" on the after version, which the caller has matched with the open project. */
+    locateBlock?: ProjectBlockLocator;
     /** Shows only the code of this stage or sprite, without the overview and the changes outside the code. */
     target?: {isStage: boolean; name: string};
 }
 
 /** Compares two versions of a project.source.json by stage, sprite and code, as the pull request review does. */
-export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, loadAsset, target}: ProjectSourceComparisonProps) {
+export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, loadAsset, locateBlock, target}: ProjectSourceComparisonProps) {
     const labels = locale.startsWith('ja') ? ja : en;
     const only = target && JSON.stringify([target.isStage, target.isStage || target.name]);
     const comparison = useMemo(() => {
@@ -196,7 +240,8 @@ export function ProjectSourceComparison({before, after, renderBlock, locale = 'e
                 <div><dt>{labels.scripts}</dt><dd>{countScripts(comparison)}</dd></div>
             </dl>
         </header>}
-        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}/>
+        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
+            locateBlock={locateBlock}/>
     </section>;
 }
 
@@ -251,6 +296,7 @@ export function ProjectSourceReview({title, description, verification, files, re
             {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
             {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
                 loadAsset={'loadAsset' in file ? file.loadAsset : undefined}
+                locateBlock={'locateBlock' in file ? file.locateBlock : undefined}
                 review={{file: file.path, keys: reviewed, set: setReviewed}}/>}
         </section>)}
     </section>;

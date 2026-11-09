@@ -1,5 +1,5 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {render, unmountComponentAtNode} from 'react-dom';
+import {createPortal, render, unmountComponentAtNode} from 'react-dom';
 import {FileDiffView} from './file-diff-view.js';
 import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
 import type {ChangedFile} from './project-change-model.js';
@@ -12,6 +12,11 @@ import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ScratchBlockLocationWorkspace} from './block-diff-location.js';
+export {createScratchBlocksDiffLocator} from './block-diff-location.js';
+export {createEditorBlockLocator} from './editor-block-locator.js';
+import {createEditorBlockLocator} from './editor-block-locator.js';
+import type {LocatorVM} from './editor-block-locator.js';
 
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
@@ -26,6 +31,22 @@ export interface GitHost {
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
+    /**
+     * Opens the panel as a tab of the host's layout, with the same shape as the layout package's DocumentPanelRequest.
+     * Returning `false` keeps the modal dialog.
+     */
+    openPanel?(request: GitPanelRequest): boolean;
+    /** Opens the code of one stage or sprite, so a diff can point at its block. Without it, no block is located. */
+    openTargetCode?(targetId: string): void | Promise<void>;
+    /** The Editor's code workspace as it is now. */
+    getWorkspace?(): ScratchBlockLocationWorkspace | null | Promise<ScratchBlockLocationWorkspace | null>;
+}
+export interface GitPanelRequest {
+    reference: {providerId: string; documentId: string};
+    filename: string;
+    title?: string;
+    transient?: boolean;
+    mount(element: HTMLElement, close: () => void): {requestClose(): void; dispose(): void};
 }
 interface Controller {open(locale: string): void; refresh(automatic?: boolean): Promise<void>}
 interface State {
@@ -51,8 +72,14 @@ type ObserverWindow = Window & {FileSystemObserver?: new (callback: () => void) 
 }};
 const watchInterval = 2000;
 
-function GitPanel({document, host, controller}: {document: Document; host: GitHost; controller: Controller}) {
+function GitPanel({vm, document, host, controller}: {vm: object; document: Document; host: GitHost; controller: Controller}) {
     const [visible, setVisible] = useState(false);
+    // A layout tab that holds the panel. The panel component stays mounted, so the repository survives closing the tab.
+    const [slot, setSlot] = useState<{element: HTMLElement; close(): void} | null>(null);
+    const shown = visible || slot !== null;
+    // Only a tab leaves the Editor visible, so only a tab offers to point at blocks in it.
+    const locator = useMemo(() => slot && host.openTargetCode && host.getWorkspace ? createEditorBlockLocator({
+        vm: vm as LocatorVM, openTargetCode: host.openTargetCode, getWorkspace: host.getWorkspace}) : undefined, [slot !== null, host, vm]);
     const [review, setReview] = useState(false);
     const [locale, setLocale] = useState(document.documentElement.lang || 'en');
     const [dirty, setDirty] = useState(host.isProjectDirty());
@@ -99,7 +126,21 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             }
         }
     };
-    controller.open = language => {setLocale(language); setVisible(true);};
+    controller.open = language => {
+        setLocale(language);
+        const opened = host.openPanel?.({reference: {providerId: 'turbowarp-plus-git', documentId: 'local-git'},
+            filename: 'Git', title: labelsFor(language).title, transient: true,
+            mount(element, close) {
+                setVisible(false);
+                setSlot({element, close});
+                return {requestClose: close, dispose() {setSlot(previous => previous?.element === element ? null : previous);}};
+            }});
+        if (!opened) setVisible(true);
+    };
+    const closePanel = () => {
+        if (slot) slot.close();
+        else setVisible(false);
+    };
     controller.refresh = async (automatic = false) => {
         if (!alive.current || !current.current.repository) return;
         if (running.current) {
@@ -128,7 +169,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     // While the panel is open, notice Git commands, agents and editors that change the repository outside the Editor.
     useEffect(() => {
         const repository = state.repository;
-        if (!visible || !repository) return;
+        if (!shown || !repository) return;
         const view = document.defaultView as ObserverWindow;
         let stopped = false;
         let checking = false;
@@ -177,13 +218,13 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             document.removeEventListener('visibilitychange', onFocus);
             observer?.disconnect();
         };
-    }, [visible, state.repository, locale]);
+    }, [shown, state.repository, locale]);
     useEffect(() => {
-        if (!visible) return;
+        if (!visible || slot) return;
         const previous = document.activeElement as HTMLElement | null;
         dialog.current?.focus();
         return () => {if (previous?.isConnected) previous.focus();};
-    }, [visible]);
+    }, [visible, slot]);
     const chooseRoot = async () => {
         const view = document.defaultView as PickerWindow;
         await run(async () => {
@@ -208,6 +249,8 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             const result = await host.openProject(directory, () => document.defaultView!.confirm(labels.replace));
             if (result === 'cancelled') return {};
         } finally {opening.current = false;}
+        // Loading the project brings its code to the front; keep the panel the person is working in in front of it.
+        if (slot) controller.open(locale);
         if (!alive.current) return {};
         setDirty(host.isProjectDirty());
         setState(previous => ({...previous, project: path, snapshot: null, changes: [], selected: null, diff: null, commit: null}));
@@ -256,7 +299,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         });
     };
     const focusTrap = (event: React.KeyboardEvent<HTMLDivElement>) => {
-        if (event.key === 'Escape') {event.stopPropagation(); setVisible(false); return;}
+        if (event.key === 'Escape') {event.stopPropagation(); closePanel(); return;}
         if (event.key !== 'Tab') return;
         const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')]
             .filter(item => item.getClientRects().length > 0);
@@ -268,13 +311,19 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     // One loader per selected change, so thumbnails read each asset once.
     const loadAsset = useMemo(() => state.repository && state.snapshot && state.selected ?
         state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
-    if (!visible) return null;
+    if (!shown) return null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
     const projectList = typeof projectChanges === 'object' ? projectChanges : null;
+    // The open project matches the working tree, so only the working-tree side of its project file can be located.
+    const projectFile = state.project === null ? null : [state.project, 'project.source.json'].filter(Boolean).join('/');
+    const fileLocator = (change: FileChange) => locator && change.path === projectFile &&
+        (change.group === 'unstaged' || change.group === 'untracked' ||
+            (change.group === 'staged' && !state.changes.some(item => item.path === change.path && item.group === 'unstaged'))) ?
+        locator : undefined;
+    const reviewLocator = (path: string, headSha: string) => locator && path === projectFile && state.snapshot?.head === headSha &&
+        !state.changes.length ? locator : undefined;
     const selection = projectList && !state.selected ? findElement(projectList.list, element) : null;
-    return <div className="twgit-backdrop">
-        <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
-            onKeyDown={focusTrap}>
+    const content = <>
             <header>
                 <h2>{labels.title}</h2>
                 <button onClick={chooseRoot} disabled={state.busy}>{labels.choose}</button>
@@ -282,7 +331,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 {!review && state.project !== null && <button disabled={state.busy} onClick={() => void openProject(state.project!)}>{labels.reload}</button>}
                 {state.repository && host.renderReviewBlock && <button type="button" disabled={state.busy}
                     onClick={() => setReview(!review)}>{review ? labels.localChanges : labels.pullRequests}</button>}
-                <button onClick={() => setVisible(false)}>{labels.close}</button>
+                <button onClick={closePanel}>{labels.close}</button>
             </header>
             <div className="twgit-context">
                 <span>{labels.repository} · {state.repository?.root.name || '—'}</span>
@@ -312,7 +361,8 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             {state.busy && <p role="status">{labels.loading}</p>}
             {!state.repository && <p>{labels.empty}</p>}
             {review && state.repository && host.renderReviewBlock &&
-                <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}/>}
+                <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}
+                    locateFor={reviewLocator}/>}
             {!review && state.repository && <div className="twgit-content">
                 <aside>
                     {state.browser && <details>
@@ -350,12 +400,20 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 </aside>
                 <main className="twgit-diff">
                     {selection && projectList ? <ProjectElementView changes={projectList} selection={selection} locale={locale}
+                        locateBlock={state.commit ? undefined : locator}
                         renderBlock={host.renderReviewBlock} onSelectFile={openFile}/> :
                         state.selected ? <FileDiffView change={state.selected} diff={state.diff} labels={labels} locale={locale}
+                            locateBlock={fileLocator(state.selected)}
                             renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> : <p>{labels.select}</p>}
                 </main>
             </div>}
-        </div>
+    </>;
+    // In a tab the Editor stays usable beside the panel, so there is no backdrop, focus trap or Escape to close.
+    if (slot) return createPortal(<div className="twgit-panel twgit-panel-tab" role="region" aria-label={labels.title}>{content}</div>,
+        slot.element);
+    return <div className="twgit-backdrop">
+        <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
+            onKeyDown={focusTrap}>{content}</div>
     </div>;
 }
 
@@ -376,7 +434,7 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     document.body.append(root);
     const controller: Controller = {open() {}, async refresh() {}};
     controllers.set(vm, controller);
-    render(<GitPanel document={document} host={host} controller={controller}/>, root);
+    render(<GitPanel vm={vm} document={document} host={host} controller={controller}/>, root);
     return {refresh: () => controller.refresh(), dispose() {
         if (controllers.get(vm) === controller) controllers.delete(vm);
         void host.connectionSettings?.disconnect().catch(() => {});

@@ -7,6 +7,7 @@ import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import {ProjectSourceComparison} from './project-source-review.js';
 import type {ChangeGroup, FileChange, Repository, Snapshot} from './repository.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ProjectBlockLocator} from './block-diff-location.js';
 
 const en = {
     title: 'Changes by project element', stage: 'Stage', code: (count: number) => `Code · ${count} ${count === 1 ? 'change' : 'changes'}`,
@@ -164,9 +165,9 @@ const show = (value: unknown) => {
 };
 
 /** The details of one selected row: its code, pictures or values in both versions, and the files behind it. */
-export function ProjectElementView({changes, selection, locale, renderBlock, onSelectFile}: {
+export function ProjectElementView({changes, selection, locale, renderBlock, onSelectFile, locateBlock}: {
     changes: ProjectChanges; selection: {element: ProjectElementChange; target: ProjectTargetChanges | null}; locale: string;
-    renderBlock?: ProjectBlockRenderer; onSelectFile(file: ChangedFile): void;
+    renderBlock?: ProjectBlockRenderer; onSelectFile(file: ChangedFile): void; locateBlock?: ProjectBlockLocator;
 }) {
     const labels = projectChangeLabels(locale);
     const {element, target} = selection;
@@ -189,7 +190,7 @@ export function ProjectElementView({changes, selection, locale, renderBlock, onS
         <h3>{target && <span>{target.isStage ? labels.stage : target.name} · </span>}{elementTitle(element, target, labels, locale)}</h3>
         {element.kind === 'code' && target && renderBlock && <ProjectSourceComparison before={changes.sources.before}
             after={changes.sources.after} renderBlock={renderBlock} locale={locale} loadAsset={changes.loadAsset}
-            target={{isStage: target.isStage, name: target.name}}/>}
+            target={{isStage: target.isStage, name: target.name}} locateBlock={locateBlock}/>}
         {element.kind === 'costumes' && <div className="twgit-element-pictures">
             {(['before', 'after'] as const).map(version => <Picture key={version} md5ext={element.md5ext?.[version]} version={version}
                 loadAsset={changes.loadAsset} labels={labels} title={element[version]?.name === undefined ? labels[version] : `${labels[version]} · ${String(element[version]!.name)}`}/>)}
