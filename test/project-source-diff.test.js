@@ -187,7 +187,7 @@ test('a review groups all edits to one script and includes related files and non
     assert.match(html, /Start the round together/);
     assert.match(html, /Check the start signal/);
     assert.match(html, /game\/assets\/start.svg/);
-    assert.match(html, /Changes outside the code · Broadcast messages/);
+    assert.match(html, /Changes outside the code · <span[^>]*>Broadcast messages/);
     assert.match(html, /Affected stages and sprites<\/dt><dd>2<\/dd>/);
     assert.match(html, /Code changes<\/dt><dd>1<\/dd>/);
     assert.match(html, /Reviewed<\/dt><dd>0 \/ 1<\/dd>/);
