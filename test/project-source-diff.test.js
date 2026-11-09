@@ -7,7 +7,8 @@ import {test} from 'node:test';
 import React from 'react';
 import ReactDOMServer from 'react-dom/server.js';
 import {createTwoFilesPatch} from 'diff';
-import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceComparison, ProjectSourceReview} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
+import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceComparison, ProjectSourceReview,
+    createPreviewSync, currentCostume} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
 
 const project = {
     targets: [
@@ -130,10 +131,11 @@ test('a review groups all edits to one script and includes related files and non
     assert.match(html, /game\/assets\/start.svg/);
     assert.match(html, /Changes outside the code · Broadcast messages/);
     assert.match(html, /Affected stages and sprites<\/dt><dd>2<\/dd>/);
-    assert.match(html, /Script comparisons<\/dt><dd>1<\/dd>/);
+    assert.match(html, /Code changes<\/dt><dd>1<\/dd>/);
+    assert.match(html, /Reviewed<\/dt><dd>0 \/ 1<\/dd>/);
     assert.equal((html.match(/class="twgit-review-script"/g) ?? []).length, 1);
     assert.match(html, /When green flag clicked/);
-    assert.doesNotMatch(html, /Rendering script/);
+    assert.doesNotMatch(html, /Rendering code/);
 });
 
 test('a script split remains one review item spanning both versions', () => {
@@ -148,6 +150,37 @@ test('a script split remains one review item spanning both versions', () => {
     assert.match(html, /1 → 2/);
 });
 
+test('linked previews share the zoom and height that fit both versions, and follow each other until unlinked', () => {
+    const view = (scale, height) => {
+        const calls = [];
+        let current = {scale, x: 0, y: 0};
+        const listeners = new Set();
+        return {calls, fit: {scale, height},
+            layout(fit) {calls.push(['layout', fit.scale, fit.height]); current = {scale: fit.scale, x: 16, y: 16};},
+            viewport: () => current,
+            setViewport(next) {calls.push(['viewport', next.scale, next.x, next.y]); current = next;},
+            onChange(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+            move(next) {current = next; for (const listener of listeners) listener();}};
+    };
+    const sync = createPreviewSync();
+    const before = view(0.675, 160), after = view(0.4, 300);
+    sync.add(before);
+    const leave = sync.add(after);
+    assert.deepEqual(before.calls.at(-1), ['layout', 0.4, 300]);
+    assert.deepEqual(after.calls.at(-1), ['layout', 0.4, 300]);
+    after.move({scale: 0.8, x: -40, y: -90});
+    assert.deepEqual(before.calls.at(-1), ['viewport', 0.8, -40, -90]);
+    assert.equal(after.calls.filter(([kind]) => kind === 'viewport').length, 0);
+    sync.setLinked(false);
+    before.move({scale: 1, x: 0, y: 0});
+    assert.deepEqual(after.calls.at(-1), ['layout', 0.4, 300]);
+    sync.setLinked(true);
+    assert.deepEqual(after.calls.at(-1), ['layout', 0.4, 300]);
+    leave();
+    before.move({scale: 0.5, x: 1, y: 2});
+    assert.equal(after.calls.filter(([kind]) => kind === 'viewport').length, 0);
+});
+
 const comparison = (before, after, extra = {}) => ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceComparison, {
     before, after, renderBlock: async () => {}, ...extra
 }));
@@ -160,7 +193,8 @@ test('a local comparison groups changed scripts by stage and sprite, as the revi
     const html = comparison(JSON.stringify(base, null, 2), JSON.stringify(head));
     assert.match(html, /aria-label="Project changes"/);
     assert.match(html, /Affected stages and sprites<\/dt><dd>1<\/dd>/);
-    assert.match(html, /Script comparisons<\/dt><dd>1<\/dd>/);
+    assert.match(html, /Code changes<\/dt><dd>1<\/dd>/);
+    assert.match(html, /<h5>Cat<small>Code changes · 1<\/small><\/h5>/);
     assert.equal((html.match(/class="twgit-review-script"/g) ?? []).length, 1);
     assert.match(html, /twgit-review-status">Changed<\/span><strong>When green flag clicked/);
     assert.doesNotMatch(html, /Reviewed/);
@@ -184,4 +218,55 @@ test('unreadable project data explains why and shows the fallback instead', () =
     assert.match(html, /<pre>raw text diff<\/pre>/);
     assert.doesNotMatch(html, /twgit-review-script/);
     assert.match(comparison('{}', JSON.stringify(project)), /role="alert">This project diff could not be read/);
+});
+
+// Visible text only: class names such as twgit-review-script are not part of the wording.
+const visibleText = html => html.replace(/<[^>]*>/g, ' ');
+
+test('the diff and review call blocks code, in Japanese and English', () => {
+    const base = structuredClone(project);
+    base.targets[1].blocks.move.parent = 'flag';
+    const head = structuredClone(base);
+    head.targets[1].blocks.move.inputs.STEPS[1][1] = '25';
+    const source = value => JSON.stringify(value, null, 2);
+    const patch = createProjectSourceDiff(source(base), source(head));
+    const reviewOf = locale => ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceReview, {
+        title: 'Move further', files: [{path: 'game/project.source.json', patch}], renderBlock: async () => {}, locale
+    }));
+    const ja = reviewOf('ja');
+    assert.match(ja, /<h5>Cat<small>コードの変更 · 1 か所<\/small><\/h5>/);
+    assert.match(ja, /コードの変更<\/dt><dd>1<\/dd>/);
+    assert.match(ja, /確認済み<\/dt><dd>0 \/ 1<\/dd>/);
+    assert.match(comparison(source(base), source(head), {locale: 'ja'}), /<h5>Cat<small>コードの変更 · 1 か所<\/small><\/h5>/);
+    for (const html of [ja, reviewOf('en'), comparison(source(base), source(head), {locale: 'ja'}), comparison(source(base), source(head)),
+        ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceBlockDiff, {patch, renderBlock: async () => {}, locale: 'ja'})),
+        view(patch)]) {
+        assert.doesNotMatch(visibleText(html), /スクリプト|script/i);
+    }
+    assert.match(view(patch), /Highlight in the surrounding code/);
+    assert.match(ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceBlockDiff, {patch, renderBlock: async () => {}, locale: 'ja'})),
+        /元のコード内で強調/);
+});
+
+test('stage and sprite headings show their names until a costume image is read', () => {
+    const withCostumes = structuredClone(project);
+    withCostumes.targets[0].costumes = [{name: 'backdrop1', assetId: 'a'.repeat(32), dataFormat: 'svg'}];
+    withCostumes.targets[1].costumes = [{name: 'costume1', md5ext: 'b'.repeat(32) + '.svg'}, {name: 'costume2', md5ext: 'c'.repeat(32) + '.png'}];
+    withCostumes.targets[1].blocks.move.parent = 'flag';
+    const head = structuredClone(withCostumes);
+    head.targets[1].blocks.move.inputs.STEPS[1][1] = '25';
+    head.targets[1].currentCostume = 1;
+    const requests = [];
+    const loadAsset = async request => {requests.push(request); return new Blob(['<svg/>']);};
+    // Server rendering runs no effects, so no asset is read and the heading is the name alone, as without a loader.
+    const html = comparison(JSON.stringify(withCostumes), JSON.stringify(head), {loadAsset});
+    assert.match(html, /<h5>Cat<small>Code changes · 1<\/small><\/h5>/);
+    assert.doesNotMatch(html, /<img|twgit-review-thumbnails/);
+    assert.deepEqual(requests, []);
+    assert.equal(html, comparison(JSON.stringify(withCostumes), JSON.stringify(head)));
+    // The thumbnails use the selected costume, and the stage's backdrop by its asset ID.
+    assert.equal(currentCostume(withCostumes.targets[0]).md5ext, 'a'.repeat(32) + '.svg');
+    assert.equal(currentCostume(withCostumes.targets[1]).md5ext, 'b'.repeat(32) + '.svg');
+    assert.equal(currentCostume(head.targets[1]).md5ext, 'c'.repeat(32) + '.png');
+    assert.equal(currentCostume({...head.targets[1], costumes: [{name: 'x', md5ext: '../x.svg'}], currentCostume: 0}), null);
 });

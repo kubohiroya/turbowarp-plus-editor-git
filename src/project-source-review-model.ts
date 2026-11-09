@@ -11,6 +11,9 @@ export interface ScriptReview {
 export interface TargetReview {
     name: string;
     isStage: boolean;
+    /** The stage or sprite in each version, absent where it does not exist. */
+    before?: ProjectTarget;
+    after?: ProjectTarget;
     scripts: ScriptReview[];
     properties: string[];
 }
@@ -106,7 +109,7 @@ export function compareProjectForReview(before: ProjectSource, after: ProjectSou
         const properties = changedProperties({...a}, {...b}, 'blocks');
         if (scripts.length || properties.length) {
             const {name, isStage} = (b ?? a)!;
-            targets.push({name, isStage, scripts, properties});
+            targets.push({name, isStage, scripts, properties, before: a, after: b});
         }
     }
     return {targets, properties: changedProperties(before, after, 'targets')};

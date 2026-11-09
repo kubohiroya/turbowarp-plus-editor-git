@@ -1,4 +1,4 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {render, unmountComponentAtNode} from 'react-dom';
 import {FileDiffView} from './file-diff-view.js';
 import {openRepository} from './repository.js';
@@ -249,6 +249,9 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             event.preventDefault(); last?.focus();
         } else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first?.focus();}
     };
+    // One loader per selected change, so thumbnails read each asset once.
+    const loadAsset = useMemo(() => state.repository && state.snapshot && state.selected ?
+        state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
     if (!visible) return null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
     return <div className="twgit-backdrop">
@@ -314,7 +317,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 </aside>
                 <main className="twgit-diff">
                     {state.selected ? <FileDiffView change={state.selected} diff={state.diff} labels={labels} locale={locale}
-                        renderBlock={host.renderReviewBlock}/> : <p>{labels.select}</p>}
+                        renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> : <p>{labels.select}</p>}
                 </main>
             </div>}
             <footer>{labels.permissions}</footer>
