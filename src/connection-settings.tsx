@@ -28,7 +28,7 @@ const en = {
     unavailable: 'No GitHub connection is configured.', changed: 'Switching disconnects the current session.',
     error: 'GitHub connection failed. Retry using the selected connection.',
     invalid: 'The selected repository needs a GitHub HTTPS origin.',
-    allowPush: 'Authorize push', fetch: 'Fetch', pull: 'Pull (fast-forward only)', push: 'Push'
+    allowPush: 'Allow sending to GitHub (push)', fetch: 'Check GitHub (fetch)', pull: 'Get from GitHub (pull)', push: 'Send to GitHub (push)'
 };
 const ja: typeof en = {
     title: 'GitHub 接続', mode: '接続方式', select: '接続方式を選択',
@@ -39,7 +39,7 @@ const ja: typeof en = {
     unavailable: 'GitHub 接続先が設定されていません。', changed: '方式を切り替えると現在のセッションを切断します。',
     error: 'GitHub 接続に失敗しました。選択中の方式で再試行してください。',
     invalid: '選択したリポジトリには GitHub の HTTPS リモート origin が必要です。',
-    allowPush: 'push を許可する', fetch: 'Fetch', pull: 'Pull（fast-forward のみ）', push: 'Push'
+    allowPush: 'GitHub に送ることを許可する（push）', fetch: 'GitHub と確かめる（fetch）', pull: 'GitHub から取り込む（pull）', push: 'GitHub に送る（push）'
 };
 
 export function ConnectionSettings({settings, locale, readOrigin, runOperation}: {
@@ -69,8 +69,15 @@ export function ConnectionSettings({settings, locale, readOrigin, runOperation}:
         if (!remote) throw new Error('INVALID_REMOTE');
         await settings.connect(remote, allowPush);
     });
-    return <details className="twgit-connection">
+    const connected = !!mode && state.status === 'connected';
+    // Sync sits beside the GitHub status; the settings open over the list instead of pushing it down.
+    return <>
+        {runOperation && connected && <span className="twgit-sync">{(['fetch', 'pull', 'push'] as const).map(operation =>
+            <button key={operation} disabled={busy || !readOrigin || (operation === 'push' && !write)}
+                onClick={() => void run(() => runOperation(operation))}>{labels[operation]}</button>)}</span>}
+    <details className="twgit-connection">
         <summary>{labels.title}</summary>
+        <div className="twgit-connection-body">
         {!settings.modes.length ? <p>{labels.unavailable}</p> : <>
             <label>{labels.mode} <select value={mode ?? ''} disabled={busy}
                 onChange={event => {const choice = event.currentTarget.value as Mode; void run(() => settings.select(choice));}}>
@@ -93,11 +100,10 @@ export function ConnectionSettings({settings, locale, readOrigin, runOperation}:
                 {state.status !== 'disconnected' && <button disabled={busy}
                     onClick={() => void run(settings.refresh)}>{labels.check}</button>}
                 <button disabled={busy} onClick={() => void run(settings.disconnect)}>{labels.disconnect}</button>
-                {runOperation && state.status === 'connected' && (['fetch', 'pull', 'push'] as const).map(operation =>
-                    <button key={operation} disabled={busy || !readOrigin || (operation === 'push' && !write)}
-                        onClick={() => void run(() => runOperation(operation))}>{labels[operation]}</button>)}
             </>}
-            {error && <p className="twgit-error" role="alert">{labels[error]}</p>}
         </>}
-    </details>;
+        </div>
+    </details>
+        {error && <p className="twgit-error" role="alert">{labels[error]}</p>}
+    </>;
 }

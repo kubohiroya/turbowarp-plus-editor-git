@@ -15,7 +15,7 @@ const en = {
     files: 'Files and Git groups', before: 'Before', after: 'After', absent: 'Not in this version',
     loading: 'Reading the project changes…', unreadable: 'The project data could not be read, so the changes are listed by file.',
     fileList: 'List by file', property: 'Item', format: 'Format', rate: 'Sample rate', samples: 'Samples', file: 'File name',
-    noImage: 'No image', groups: {staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', commit: 'Commit'} as Record<ChangeGroup, string>
+    noImage: 'No image', groups: {staged: 'in the next record', unstaged: 'not yet recorded', untracked: 'new file', commit: 'in this record'} as Record<ChangeGroup, string>
 };
 const ja: typeof en = {
     title: '作品の要素ごとの変更', stage: 'ステージ', code: count => `コード · ${count} か所`,
@@ -24,7 +24,7 @@ const ja: typeof en = {
     files: 'ファイルと Git の区分', before: '変更前', after: '変更後', absent: 'この版にはありません',
     loading: '作品の変更を読み込み中…', unreadable: '作品データを読み込めないため、ファイル単位で一覧にします。',
     fileList: 'ファイル単位の一覧', property: '項目', format: '形式', rate: 'サンプリング周波数', samples: 'サンプル数', file: 'ファイル名',
-    noImage: '画像なし', groups: {staged: 'ステージ済み', unstaged: '未ステージ', untracked: '未追跡', commit: 'コミット'}
+    noImage: '画像なし', groups: {staged: '次の記録に入る', unstaged: 'まだ記録していない', untracked: '新しいファイル', commit: 'この記録'}
 };
 type Labels = typeof en;
 export const projectChangeLabels = (locale: string): Labels => locale.startsWith('ja') ? ja : en;

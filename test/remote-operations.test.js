@@ -36,6 +36,7 @@ test('panel operations preserve worktrees on rejected pulls and never retry an u
     }));
     const operate = (action, guard = () => {}) => repository.remoteOperation(action, session, guard);
     const initial = git(client, 'rev-parse', 'HEAD');
+    assert.equal((await repository.read()).upstream.state, 'same');
     const beforeFetch = await capture();
     await writeFile(join(seed, 'project.txt'), 'incoming\n');
     const incoming = commit(seed, 'incoming');
@@ -44,6 +45,7 @@ test('panel operations preserve worktrees on rejected pulls and never retry an u
     assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/main'), incoming);
     assert.equal(git(client, 'rev-parse', 'HEAD'), initial);
     assert.deepEqual(await capture(), beforeFetch);
+    assert.deepEqual((await repository.read()).upstream, {state: 'behind', ahead: 0, behind: 1});
 
     await writeFile(source, 'local edit\n');
     const dirty = await capture();
