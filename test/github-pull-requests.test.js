@@ -71,3 +71,99 @@ test('a PR updated during the file list read cannot compare mixed revisions', as
     await assert.rejects(client.load(42, signal), {code: 'changed'});
     assert.equal(reads, 2);
 });
+
+test('project assets come from raw.githubusercontent.com at the merge base and head, capped and read-only', async () => {
+    const raw = [];
+    let api = 0;
+    const svg = 'd'.repeat(32) + '.svg';
+    const client = createGitHubPullRequests('owner/game', async (url, options) => {
+        const parsed = new URL(url);
+        if (parsed.origin === 'https://raw.githubusercontent.com') {
+            assert.equal(options.credentials, 'omit');
+            assert.equal(options.redirect, 'error');
+            assert.equal(options.headers, undefined);
+            assert.ok(options.signal instanceof AbortSignal);
+            raw.push(parsed.pathname);
+            switch (parsed.pathname) {
+            case '/owner/game/' + mergeBase + '/old/sb3-source.json': return new Response('Not Found', {status: 404});
+            case '/owner/game/' + mergeBase + '/old/assets/' + svg: return new Response('<svg>before</svg>');
+            case '/contributor/game/' + head + '/new%20location/sb3-source.json':
+                return Response.json({formatVersion: 1, assetsDirectory: 'media files'});
+            case '/contributor/game/' + head + '/new%20location/media%20files/' + svg: return new Response('<svg>after</svg>');
+            case '/contributor/game/' + head + '/new%20location/media%20files/' + 'e'.repeat(32) + '.png':
+                return new Response('x', {headers: {'Content-Length': String(10 * 1024 * 1024 + 1)}});
+            case '/contributor/game/' + head + '/new%20location/media%20files/' + 'f'.repeat(32) + '.png':
+                return new Response(new ReadableStream({pull(controller) {controller.enqueue(new Uint8Array(1024 * 1024));}}));
+            default: return new Response('Not Found', {status: 404});
+            }
+        }
+        api++;
+        switch (parsed.pathname) {
+        case '/repos/owner/game/pulls/42': return Response.json({...pr, changed_files: 2});
+        case '/repos/owner/game/pulls/42/files': return Response.json([
+            {filename: 'new location/project.source.json', previous_filename: 'old/project.source.json', status: 'renamed'},
+            {filename: 'project.source.json', status: 'added'}
+        ]);
+        case '/repos/owner/game/compare/' + base + '...' + head: return Response.json({merge_base_commit: {sha: mergeBase}});
+        case '/repos/owner/game/contents/old/project.source.json': return new Response(source(10));
+        case '/repos/contributor/game/contents/new%20location/project.source.json': return new Response(source(25));
+        case '/repos/contributor/game/contents/project.source.json': return new Response(source(5));
+        default: throw new Error('Unexpected endpoint: ' + url);
+        }
+    });
+    const review = await client.load(42, signal);
+    const apiRequests = api;
+    const [renamed, added] = review.files;
+    const read = async (loadAsset, version, md5ext = svg, own = new AbortController().signal) => {
+        const blob = await loadAsset({version, md5ext, signal: own});
+        return blob && blob.text();
+    };
+    assert.equal(await read(renamed.loadAsset, 'before'), '<svg>before</svg>');
+    assert.equal(await read(renamed.loadAsset, 'after'), '<svg>after</svg>');
+    assert.equal(await read(renamed.loadAsset, 'after', 'missing.svg'), null);
+    // Oversized assets are refused by their declared length or while streaming.
+    assert.equal(await read(renamed.loadAsset, 'after', 'e'.repeat(32) + '.png'), null);
+    assert.equal(await read(renamed.loadAsset, 'after', 'f'.repeat(32) + '.png'), null);
+    // Each version reads its sb3-source.json once; a missing one means `assets`.
+    assert.deepEqual(raw.filter(path => path.endsWith('/sb3-source.json')), [
+        '/owner/game/' + mergeBase + '/old/sb3-source.json', '/contributor/game/' + head + '/new%20location/sb3-source.json'
+    ]);
+    const count = raw.length;
+    for (const name of ['../secret.svg', 'a/b.svg', '%2e%2e.svg', '']) assert.equal(await read(renamed.loadAsset, 'after', name), null);
+    // An added file has no earlier version, and a cancelled read sends nothing.
+    assert.equal(await read(added.loadAsset, 'before'), null);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    assert.equal(await read(renamed.loadAsset, 'after', svg, cancelled.signal), null);
+    assert.equal(raw.length, count);
+    // An assets directory outside the project folder is never requested.
+    raw.length = 0;
+    const repository = createGitHubPullRequests('owner/game', async url => {
+        const parsed = new URL(url);
+        if (parsed.origin === 'https://raw.githubusercontent.com') {
+            raw.push(parsed.pathname);
+            return parsed.pathname.endsWith('/sb3-source.json') ? Response.json({assetsDirectory: '../outside'}) : new Response('<svg/>');
+        }
+        if (parsed.pathname.endsWith('/files')) return Response.json([{filename: 'project.source.json', status: 'added'}]);
+        if (parsed.pathname.endsWith('/pulls/42')) return Response.json({...pr, changed_files: 1});
+        return new Response(source(1));
+    });
+    const outside = (await repository.load(42, signal)).files[0];
+    assert.equal(await read(outside.loadAsset, 'after'), null);
+    assert.deepEqual(raw, ['/contributor/game/' + head + '/sb3-source.json']);
+    // Closing the pull request cancels its pending asset reads, and thumbnails never use the API.
+    const closing = new AbortController();
+    const closed = createGitHubPullRequests('owner/game', async (url, options) => {
+        const parsed = new URL(url);
+        if (parsed.origin === 'https://raw.githubusercontent.com') {
+            return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)));
+        }
+        if (parsed.pathname.endsWith('/files')) return Response.json([{filename: 'project.source.json', status: 'added'}]);
+        if (parsed.pathname.endsWith('/pulls/42')) return Response.json({...pr, changed_files: 1});
+        return new Response(source(1));
+    });
+    const pending = read((await closed.load(42, closing.signal)).files[0].loadAsset, 'after');
+    closing.abort();
+    assert.equal(await pending, null);
+    assert.equal(api, apiRequests);
+});

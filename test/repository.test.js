@@ -152,3 +152,70 @@ test('rejects stale snapshots, active Git locks, and paths outside the granted r
     const adapter = createReadOnlyFs(handle);
     await assert.rejects(adapter.promises.writeFile('/notes.txt', 'changed'), {code: 'EROFS'});
 });
+
+test('asset loaders read each version of a project file without writing Git metadata', async t => {
+    const {root, git, write, handle} = await fixture(t);
+    const source = 'projects/demo/project.source.json';
+    const costume = 'projects/demo/assets/costume.svg';
+    const stage = steps => JSON.stringify({targets: [{name: 'Stage', isStage: true, blocks: {}, steps}]}) + '\n';
+    await fs.mkdir(path.join(root, 'projects/demo/assets'));
+    await write(costume, '<svg>parent</svg>');
+    git('add', '.'); git('commit', '-qm', 'add costume');
+    await write(costume, '<svg>head</svg>');
+    await write(source, stage(1));
+    git('add', '.'); git('commit', '-qm', 'change costume');
+    await write(costume, '<svg>index</svg>');
+    await write(source, stage(2));
+    git('add', '.');
+    await write(costume, '<svg>work</svg>');
+    await write(source, stage(3));
+    await fs.mkdir(path.join(root, 'projects/new/media'), {recursive: true});
+    await write('projects/new/project.source.json', stage(4));
+    await write('projects/new/sb3-source.json', JSON.stringify({formatVersion: 1, assetsDirectory: 'media'}));
+    await write('projects/new/media/backdrop.png', new Uint8Array([137, 80, 78, 71]));
+    git('status', '--porcelain');
+    const bytes = await gitBytes(root);
+    const repo = await openRepository(handle);
+    const snapshot = await repo.read();
+    const change = (group, path = source) => snapshot.changes.find(item => item.path === path && item.group === group);
+    const read = async (loader, version, md5ext = 'costume.svg', signal = new AbortController().signal) => {
+        const blob = await loader({version, md5ext, signal});
+        return blob && new TextDecoder().decode(await blob.arrayBuffer());
+    };
+    const staged = repo.assetLoader(snapshot, change('staged'));
+    assert.equal(await read(staged, 'before'), '<svg>head</svg>');
+    assert.equal(await read(staged, 'after'), '<svg>index</svg>');
+    const unstaged = repo.assetLoader(snapshot, change('unstaged'));
+    assert.equal(await read(unstaged, 'before'), '<svg>index</svg>');
+    assert.equal(await read(unstaged, 'after'), '<svg>work</svg>');
+    const untracked = repo.assetLoader(snapshot, change('untracked', 'projects/new/project.source.json'));
+    assert.equal(await read(untracked, 'before', 'backdrop.png'), null);
+    assert.deepEqual([...new Uint8Array(await (await untracked({version: 'after', md5ext: 'backdrop.png',
+        signal: new AbortController().signal})).arrayBuffer())], [137, 80, 78, 71]);
+    const commit = (await repo.historyChanges(snapshot, snapshot.head)).find(item => item.path === source);
+    assert.equal(commit.commit, snapshot.head);
+    const history = repo.assetLoader(snapshot, commit);
+    assert.equal(await read(history, 'before'), '<svg>parent</svg>');
+    assert.equal(await read(history, 'after'), '<svg>head</svg>');
+
+    // Missing files, names outside the assets directory, cancelled reads and oversized files resolve null.
+    assert.equal(await read(unstaged, 'after', 'missing.svg'), null);
+    for (const name of ['../project.source.json', 'assets/costume.svg', '.svg', 'costume', '..']) {
+        assert.equal(await read(unstaged, 'after', name), null);
+    }
+    const cancelled = new AbortController();
+    cancelled.abort();
+    assert.equal(await read(unstaged, 'after', 'costume.svg', cancelled.signal), null);
+    await write('projects/demo/assets/large.png', new Uint8Array(10 * 1024 * 1024 + 1));
+    assert.equal(await read(unstaged, 'after', 'large.png'), null);
+    for (const assetsDirectory of ['../demo/assets', '/assets', '.git', 'assets/', 7]) {
+        await write('projects/demo/sb3-source.json', JSON.stringify({assetsDirectory}));
+        assert.equal(await read(unstaged, 'after'), null, String(assetsDirectory));
+    }
+    // The working tree's sb3-source.json does not change where the index version reads its assets.
+    assert.equal(await read(unstaged, 'before'), '<svg>index</svg>');
+    await write('projects/demo/sb3-source.json', '{"assetsDirectory": ');
+    assert.equal(await read(unstaged, 'after'), '<svg>work</svg>');
+    assert.deepEqual(await gitBytes(root), bytes);
+    assert.match((await repo.readDiff(snapshot, change('unstaged'))).text.after, /"steps":3/);
+});

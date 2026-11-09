@@ -1,5 +1,7 @@
 import {createProjectSourceDiff, isRecord} from './project-source-patch.js';
 import type {ProjectSourceReviewFile} from './project-source-review.js';
+import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from './project-asset-paths.js';
+import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 
 type ErrorCode = 'unavailable' | 'rateLimit' | 'failed' | 'changed' | 'tooManyFiles';
 export class PullRequestError extends Error {
@@ -24,24 +26,29 @@ const invalidResponse = () => new PullRequestError('failed');
 const emptyProject = '{"targets":[]}\n';
 const sourceLimit = 1024 * 1024;
 
-async function readText(response: Response, limit: number) {
+async function readBody(response: Response, limit: number, chunk: (value: Uint8Array) => void) {
     if (Number(response.headers.get('Content-Length')) > limit || !response.body) throw invalidResponse();
     const reader = response.body.getReader();
-    const decoder = new TextDecoder('utf-8', {fatal: true});
-    const chunks: string[] = [];
     let length = 0;
     try {
         for (;;) {
             const {done, value} = await reader.read();
-            if (done) return chunks.join('') + decoder.decode();
+            if (done) return;
             length += value.byteLength;
             if (length > limit) throw invalidResponse();
-            chunks.push(decoder.decode(value, {stream: true}));
+            chunk(value);
         }
     } catch (error) {
         void reader.cancel().catch(() => {});
         throw error;
     }
+}
+
+async function readText(response: Response, limit: number) {
+    const decoder = new TextDecoder('utf-8', {fatal: true});
+    const chunks: string[] = [];
+    await readBody(response, limit, value => chunks.push(decoder.decode(value, {stream: true})));
+    return chunks.join('') + decoder.decode();
 }
 
 function readSummary(value: unknown) {
@@ -78,6 +85,62 @@ function contentPath(path: string) {
     const parts = path.split('/');
     if (parts.some(part => !part || part === '.' || part === '..')) throw invalidResponse();
     return parts.map(encodeURIComponent).join('/');
+}
+
+/** One version of a project file on GitHub: the repository and commit, and the project file's path. */
+interface ProjectLocation {repository: string; sha: string; path: string}
+
+/**
+ * Reads the assets of both versions of a project file from raw.githubusercontent.com, which does not count against the
+ * API rate limit. Each version's sb3-source.json names its assets directory. Every read is capped, honors both its own
+ * signal and the pull request's, and resolves `null` on any failure.
+ */
+function rawAssetLoader(versions: Record<ProjectVersion, ProjectLocation | null>, send: typeof fetch, review: AbortSignal): ProjectAssetLoader {
+    const directories = new Map<ProjectVersion, Promise<string[] | null>>();
+    const get = (url: string, signal: AbortSignal) => send(url, {credentials: 'omit', redirect: 'error', signal});
+    const folderUrl = ({repository, sha, path}: ProjectLocation) => 'https://raw.githubusercontent.com/' +
+        repository.split('/').map(encodeURIComponent).join('/') + '/' + sha + '/' +
+        contentPath(path).split('/').slice(0, -1).map(part => part + '/').join('');
+    const readDirectory = async (folder: string, signal: AbortSignal) => {
+        let settings: string | null = null;
+        try {
+            const response = await get(folder + 'sb3-source.json', signal);
+            if (response.ok) settings = await readText(response, folderSettingsLimit);
+            else void response.body?.cancel().catch(() => {});
+        } catch (error) {
+            // A missing or unreadable file falls back to `assets`; a cancelled read is retried by the next request.
+            if (signal.aborted) throw error;
+        }
+        return assetsDirectoryParts(settings);
+    };
+    return async ({version, md5ext, signal: own}) => {
+        const location = versions[version];
+        if (!location || !isAssetName(md5ext)) return null;
+        try {
+            const signal = AbortSignal.any([own, review]);
+            if (signal.aborted) return null;
+            const folder = folderUrl(location);
+            let directory = directories.get(version);
+            if (!directory) {
+                directory = readDirectory(folder, signal);
+                directories.set(version, directory);
+                const pending = directory;
+                pending.catch(() => {if (directories.get(version) === pending) directories.delete(version);});
+            }
+            const parts = await directory;
+            if (!parts || signal.aborted) return null;
+            const response = await get(folder + parts.map(encodeURIComponent).join('/') + '/' + md5ext, signal);
+            if (!response.ok) {
+                void response.body?.cancel().catch(() => {});
+                return null;
+            }
+            const chunks: Uint8Array<ArrayBuffer>[] = [];
+            await readBody(response, assetLimit, value => chunks.push(value as Uint8Array<ArrayBuffer>));
+            return signal.aborted ? null : new Blob(chunks);
+        } catch {
+            return null;
+        }
+    };
 }
 
 export function createGitHubPullRequests(repository: string, send: typeof fetch = fetch) {
@@ -148,7 +211,11 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
                         status === 'added' ? emptyProject : source(repository, file.previous ?? file.path, base!, signal),
                         status === 'removed' ? emptyProject : source(pr.head.repository ?? repository, file.path, pr.head.sha, signal)
                     ]);
-                    files.push({path: file.path, previousPath: file.previous, patch: createProjectSourceDiff(before, after)});
+                    const loadAsset = rawAssetLoader({
+                        before: status === 'added' ? null : {repository, sha: base!, path: file.previous ?? file.path},
+                        after: status === 'removed' ? null : {repository: pr.head.repository ?? repository, sha: pr.head.sha, path: file.path}
+                    }, send, signal);
+                    files.push({path: file.path, previousPath: file.previous, patch: createProjectSourceDiff(before, after), loadAsset});
                 } catch (error) {
                     if (signal.aborted) throw error;
                     files.push({...related, unavailable: true});
