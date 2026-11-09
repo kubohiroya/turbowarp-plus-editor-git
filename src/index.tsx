@@ -12,6 +12,9 @@ import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ScratchBlockLocationWorkspace} from './block-diff-location.js';
+export {createScratchBlocksDiffLocator} from './block-diff-location.js';
+export {createEditorBlockLocator} from './editor-block-locator.js';
 
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
@@ -26,6 +29,22 @@ export interface GitHost {
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
+    /**
+     * Opens the panel as a tab of the host's layout, with the same shape as the layout package's DocumentPanelRequest.
+     * Returning `false` keeps the modal dialog.
+     */
+    openPanel?(request: GitPanelRequest): boolean;
+    /** Opens the code of one stage or sprite, so a diff can point at its block. Without it, no block is located. */
+    openTargetCode?(targetId: string): void | Promise<void>;
+    /** The Editor's code workspace as it is now. */
+    getWorkspace?(): ScratchBlockLocationWorkspace | null | Promise<ScratchBlockLocationWorkspace | null>;
+}
+export interface GitPanelRequest {
+    reference: {providerId: string; documentId: string};
+    filename: string;
+    title?: string;
+    transient?: boolean;
+    mount(element: HTMLElement, close: () => void): {requestClose(): void; dispose(): void};
 }
 interface Controller {open(locale: string): void; refresh(automatic?: boolean): Promise<void>}
 interface State {

@@ -5,6 +5,7 @@ import type {BlockSide} from './project-source-patch.js';
 import {compareProjectForReview} from './project-source-review-model.js';
 import type {ScriptReview, TargetReview} from './project-source-review-model.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ProjectBlockLocator} from './block-diff-location.js';
 import {currentCostume, useCostumeImage} from './project-assets.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 
@@ -15,7 +16,9 @@ export type ProjectSourceReviewFile = {
     summary?: string;
     previousPath?: string;
     unavailable?: boolean;
-} & ({patch: string; beforeSource?: string; loadAsset?: ProjectAssetLoader} | {status: 'added' | 'removed' | 'updated'});
+} & ({patch: string; beforeSource?: string; loadAsset?: ProjectAssetLoader;
+    /** Offers "Highlight in Editor" on this file's after version, which the caller has matched with the open project. */
+    locateBlock?: ProjectBlockLocator} | {status: 'added' | 'removed' | 'updated'});
 
 export interface ProjectSourceReviewProps {
     title: string;
@@ -168,6 +171,8 @@ export interface ProjectSourceComparisonProps {
     fallback?: React.ReactNode;
     /** Reads the images of both versions for thumbnails. Without it, stages and sprites are shown by name. */
     loadAsset?: ProjectAssetLoader;
+    /** Offers "Highlight in Editor" on the after version, which the caller has matched with the open project. */
+    locateBlock?: ProjectBlockLocator;
     /** Shows only the code of this stage or sprite, without the overview and the changes outside the code. */
     target?: {isStage: boolean; name: string};
 }
