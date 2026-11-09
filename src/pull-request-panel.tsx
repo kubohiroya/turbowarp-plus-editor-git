@@ -111,7 +111,7 @@ function PullRequests({name, labels, locale, renderBlock, locateFor}: {
                     <a href={pr.url} target="_blank" rel="noreferrer">{labels.onGitHub}</a>
                 </p>
                 <ProjectSourceReview title={pr.title} description={pr.description} files={locateFor ? pr.files.map(file => 'patch' in file ? {...file, locateBlock: locateFor(file.path, pr.head.sha)} : file) : pr.files}
-                    renderBlock={renderBlock} locale={locale}/>
+                    renderBlock={renderBlock} locale={locale} rememberAs={`${name}#${pr.number}`}/>
             </>}
         </main>
     </div>;

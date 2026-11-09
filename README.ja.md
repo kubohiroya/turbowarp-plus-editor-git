@@ -101,7 +101,7 @@ const diffFile = new Blob([patch], {type: 'text/x-diff'});
 
 `loadAsset` は `({version, md5ext, signal}) => Promise<Blob | null>` の形で、`version`（`before`／`after`）の作品フォルダの素材を読みます。渡すと、ステージ・スプライトの見出しにその版の現在のコスチューム（ステージは背景）のサムネイルを添えます。変更前後でコスチュームが違えば「変更前 → 変更後」と並べます。関数がないとき、または画像を読めないときは名前だけを示します。`createGitHubPullRequests` が返す作品ファイルには、変更前（マージベース）と変更後（head）の素材を raw.githubusercontent.com から読む `loadAsset` が付きます。この読み込みは GitHub API の利用上限を消費せず、1 ファイル 10 MiB までです。
 
-確認済みの印は表示中の比較データに紐づくローカル状態です。PR 本文・ファイル差分の取得と GitHub へのレビュー送信は、呼び出し側が担当します。
+確認済みの印は、`rememberAs`（`owner/repo#42` など）を渡すと、ブラウザーのストレージにコードの内容と組で保存します。パネルを閉じても Editor を再読み込みしても残り、PR の head が変わると、内容が変わったコードの印だけが外れます。作品ファイルと Git には書きません。`rememberAs` がないときは、表示中のレビューだけの状態です。ローカル Git パネルの PR 一覧は、リポジトリ名と PR 番号を渡します。PR 本文・ファイル差分の取得と GitHub へのレビュー送信は、呼び出し側が担当します。
 
 ### 2 つの版を直接比べる
 

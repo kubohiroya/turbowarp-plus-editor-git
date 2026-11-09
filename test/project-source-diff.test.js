@@ -196,6 +196,29 @@ test('a review groups all edits to one script and includes related files and non
     assert.doesNotMatch(html, /Rendering code/);
 });
 
+test('stored reviewed marks count only while their script is unchanged, and unusable storage is ignored', t => {
+    const head = structuredClone(project);
+    head.targets[1].blocks.move.inputs.STEPS[1][1] = '25';
+    const files = [{path: 'game/project.source.json', patch: createProjectSourceDiff(JSON.stringify(project), JSON.stringify(head))}];
+    const render = () => ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceReview, {
+        title: 'Move further', files, renderBlock: async () => {}, rememberAs: 'owner/game#42'
+    }));
+    const stored = new Map();
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    t.after(() => original ? Object.defineProperty(globalThis, 'localStorage', original) : delete globalThis.localStorage);
+    Object.defineProperty(globalThis, 'localStorage', {configurable: true, value: {
+        getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key)
+    }});
+    // A mark taken for another version of the script does not count.
+    stored.set('turbowarp-plus-git:reviewed:owner/game#42',
+        JSON.stringify({[JSON.stringify(['game/project.source.json', false, 'Cat', 'flag'])]: 'stale'}));
+    assert.match(render(), /Reviewed<\/dt><dd>0 \/ 1<\/dd>/);
+    stored.set('turbowarp-plus-git:reviewed:owner/game#42', 'not json');
+    assert.match(render(), /Reviewed<\/dt><dd>0 \/ 1<\/dd>/);
+    Object.defineProperty(globalThis, 'localStorage', {configurable: true, get() {throw new DOMException('denied', 'SecurityError');}});
+    assert.match(render(), /Reviewed<\/dt><dd>0 \/ 1<\/dd>/);
+});
+
 test('a script split remains one review item spanning both versions', () => {
     const base = structuredClone(project);
     base.targets[1].blocks.move.parent = 'flag';
