@@ -152,3 +152,30 @@ test('rejects stale snapshots, active Git locks, and paths outside the granted r
     const adapter = createReadOnlyFs(handle);
     await assert.rejects(adapter.promises.writeFile('/notes.txt', 'changed'), {code: 'EROFS'});
 });
+
+test('probes Git metadata and the scoped work tree, and reports active Git locks', async t => {
+    const {root, git, write, handle} = await fixture(t);
+    const repository = await openRepository(handle);
+    const snapshot = await repository.read('projects/demo');
+    assert.equal(await repository.probe('projects/demo'), snapshot.probe);
+
+    await write('notes.txt', 'outside the selected project\n');
+    assert.equal(await repository.probe('projects/demo'), snapshot.probe, 'edits outside the scope are ignored');
+
+    await write('projects/demo/project.source.json', '{"targets":[{"changed":true}]}\n');
+    const edited = await repository.probe('projects/demo');
+    assert.notEqual(edited, snapshot.probe, 'a work-tree edit in the scope changes the probe');
+
+    git('add', 'projects/demo');
+    const staged = await repository.probe('projects/demo');
+    assert.notEqual(staged, edited, 'staging changes the index part of the probe');
+
+    git('commit', '-qm', 'external commit');
+    assert.notEqual(await repository.probe('projects/demo'), staged, 'a commit changes the branch ref');
+
+    await fs.writeFile(path.join(root, '.git/index.lock'), '');
+    assert.equal(await repository.probe('projects/demo'), 'locked');
+    await fs.rm(path.join(root, '.git/index.lock'));
+    const fresh = await repository.read('projects/demo');
+    assert.equal(await repository.probe('projects/demo'), fresh.probe);
+});
