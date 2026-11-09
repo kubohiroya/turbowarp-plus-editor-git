@@ -115,6 +115,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         } catch (error) {
             if (epoch.current !== ticket) return;
             const code = error instanceof GitPanelError ? error.code : 'failed';
+            // A background read that met another tool still writing tries again on the next check, without an alert.
+            if (automatic && code === 'changed') {
+                handled.current = null;
+                setState(previous => ({...previous, busy: false}));
+                return;
+            }
             const message = labels[code as keyof typeof labels] || labels.failed;
             setState(previous => ({...previous, error: automatic && previous.error ? previous.error : message, busy: false, diff: null}));
         } finally {
