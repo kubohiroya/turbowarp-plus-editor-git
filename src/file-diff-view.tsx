@@ -5,6 +5,7 @@ import type {FileChange, FileDiff} from './repository.js';
 import type {labelsFor} from './messages.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ProjectAssetLoader} from './project-assets.js';
+import type {ProjectBlockLocator} from './block-diff-location.js';
 
 const en = {view: 'Show changes as', blocks: 'Blocks', text: 'Text'};
 const ja: typeof en = {view: '変更の表示', blocks: 'ブロック', text: 'テキスト'};
@@ -15,9 +16,9 @@ export const isProjectSource = (path: string) => path.split('/').pop() === 'proj
 /**
  * Shows one changed file. Project sources are compared as blocks by default, with their text diff one switch away.
  */
-export function FileDiffView({change, diff, labels, locale, renderBlock, loadAsset}: {
+export function FileDiffView({change, diff, labels, locale, renderBlock, loadAsset, locateBlock}: {
     change: FileChange; diff: FileDiff | null; labels: ReturnType<typeof labelsFor>; locale: string;
-    renderBlock?: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
+    renderBlock?: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; locateBlock?: ProjectBlockLocator;
 }) {
     const [view, setView] = useState<'blocks' | 'text'>('blocks');
     const names = locale.startsWith('ja') ? ja : en;
@@ -40,7 +41,7 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, loadAss
             {(['blocks', 'text'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode}
                 data-git-view={mode} onClick={() => setView(mode)}>{names[mode]}</button>)}
         </div>}
-        {sources && view === 'blocks' ? <ProjectSourceComparison renderBlock={renderBlock!} locale={locale} fallback={text} loadAsset={loadAsset}
+        {sources && view === 'blocks' ? <ProjectSourceComparison renderBlock={renderBlock!} locale={locale} fallback={text} loadAsset={loadAsset} locateBlock={locateBlock}
             before={change.before === null ? null : sources.before} after={change.after === null ? null : sources.after}/> : text}
     </>;
 }

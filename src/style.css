@@ -55,3 +55,5 @@
 .twgit-element-files { margin-top: 12px; }
 .twgit-panel .twgit-element span.twgit-element-name { width: auto; font-family: inherit; }
 .twgit-git-details > .twgit-connection-body { left: auto; right: 0; }
+/* In a layout tab the panel fills the tab and leaves the Editor beside it. */
+.twgit-panel.twgit-panel-tab { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; }

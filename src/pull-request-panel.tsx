@@ -4,6 +4,7 @@ import type {GitHubPullRequests} from './github-pull-requests.js';
 import {ProjectSourceReview} from './project-source-review.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {Repository} from './repository.js';
+import type {ProjectBlockLocator} from './block-diff-location.js';
 
 const en = {
     title: 'Pull requests', number: 'Pull request number', openNumber: 'Open pull request',
@@ -37,8 +38,9 @@ type Result<T> = {data: T; error?: never} | {data?: never; error: string};
 type Listing = Awaited<ReturnType<GitHubPullRequests['list']>>;
 type Pull = Awaited<ReturnType<GitHubPullRequests['load']>>;
 
-function PullRequests({name, labels, locale, renderBlock}: {
+function PullRequests({name, labels, locale, renderBlock, locateFor}: {
     name: string; labels: typeof en; locale: string; renderBlock: ProjectBlockRenderer;
+    locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
 }) {
     const client = useMemo(() => createGitHubPullRequests(name), [name]);
     const [page, setPage] = useState(1);
@@ -108,14 +110,17 @@ function PullRequests({name, labels, locale, renderBlock}: {
                     <code title={pr.head.sha}>{pr.head.ref} → {pr.base.ref}</code>
                     <a href={pr.url} target="_blank" rel="noreferrer">{labels.onGitHub}</a>
                 </p>
-                <ProjectSourceReview title={pr.title} description={pr.description} files={pr.files} renderBlock={renderBlock} locale={locale}/>
+                <ProjectSourceReview title={pr.title} description={pr.description} files={locateFor ? pr.files.map(file => 'patch' in file ? {...file, locateBlock: locateFor(file.path, pr.head.sha)} : file) : pr.files}
+                    renderBlock={renderBlock} locale={locale}/>
             </>}
         </main>
     </div>;
 }
 
-export function PullRequestReviewPanel({repository, locale, renderBlock}: {
+export function PullRequestReviewPanel({repository, locale, renderBlock, locateFor}: {
     repository: Repository; locale: string; renderBlock: ProjectBlockRenderer;
+    /** Returns a locator for a project file whose PR head matches the open project, or `undefined`. */
+    locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
 }) {
     const labels = locale.startsWith('ja') ? ja : en;
     const [origin, setOrigin] = useState<{repository: Repository; name: string | null; failed?: boolean}>();
@@ -130,5 +135,5 @@ export function PullRequestReviewPanel({repository, locale, renderBlock}: {
     }, [repository]);
     if (origin?.repository !== repository) return <p role="status" className="twgit-context">{labels.loading}</p>;
     if (!origin.name) return <p className="twgit-context" role="status">{origin.failed ? labels.failed : labels.noOrigin}</p>;
-    return <PullRequests key={origin.name} name={origin.name} labels={labels} locale={locale} renderBlock={renderBlock}/>;
+    return <PullRequests key={origin.name} name={origin.name} labels={labels} locale={locale} renderBlock={renderBlock} locateFor={locateFor}/>;
 }
