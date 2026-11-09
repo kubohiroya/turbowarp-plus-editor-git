@@ -106,3 +106,17 @@
     border: 1px solid var(--twgit-review-line, color-mix(in srgb, CanvasText 18%, Canvas));
     border-radius: 4px;
 }
+
+/* The legend matches the outlines drawn on the previews. */
+.twgit-review-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0; font-size: .9em; }
+.twgit-review-legend span::before { content: ''; display: inline-block; width: 12px; height: 10px; margin-inline-end: 5px;
+    vertical-align: -1px; border: 2.5px solid var(--twgit-change); border-radius: 3px; }
+.twgit-review-legend [data-legend="added"] { --twgit-change: #25875d; }
+.twgit-review-legend [data-legend="removed"] { --twgit-change: #c54a53; }
+.twgit-review-legend [data-legend="updated"] { --twgit-change: #635bce; }
+.twgit-review-legend [data-legend="part"] { --twgit-change: #b4510a; }
+.twgit-review-legend [data-legend="part"]::before { border-radius: 0; }
+.twgit-review-summary { color: color-mix(in srgb, CanvasText 72%, Canvas); }
+.twgit-review-target-status { font-weight: 600; }
+.twgit-review-asset { display: flex; align-items: center; gap: 8px; }
+.twgit-review-asset img { width: 32px; height: 32px; object-fit: contain; }
