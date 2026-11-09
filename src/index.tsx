@@ -93,6 +93,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const alive = useRef(true);
     const opening = useRef(false);
     const dialog = useRef<HTMLDivElement>(null);
+    // A closed panel reads nothing; a refresh asked while it is closed waits until it opens again.
+    const shownRef = useRef(false);
+    const deferred = useRef(false);
     const reviewing = useRef(review);
     reviewing.current = review;
     // The last fingerprint acted on, so a failing read or an open diff is not retried on every check.
@@ -149,6 +152,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     controller.refresh = async (automatic = false) => {
         if (!alive.current || !current.current.repository) return;
+        if (!shownRef.current) {
+            deferred.current = true;
+            return;
+        }
         if (running.current) {
             if (!automatic) refreshPending.current = true;
             return;
@@ -180,6 +187,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         });
         return () => {alive.current = false; epoch.current++; remoteRequest.current?.abort(); unsubscribe?.();};
     }, [host]);
+    useEffect(() => {
+        shownRef.current = shown;
+        if (shown && deferred.current) {
+            deferred.current = false;
+            void controller.refresh();
+        }
+    }, [shown]);
     // While the panel is open, notice Git commands, agents and editors that change the repository outside the Editor.
     useEffect(() => {
         const repository = state.repository;
