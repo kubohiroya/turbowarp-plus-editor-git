@@ -54,3 +54,4 @@
 .twgit-element-values td { font-family: ui-monospace, monospace; }
 .twgit-element-files { margin-top: 12px; }
 .twgit-panel .twgit-element span.twgit-element-name { width: auto; font-family: inherit; }
+.twgit-git-details > .twgit-connection-body { left: auto; right: 0; }
