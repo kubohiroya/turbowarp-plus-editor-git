@@ -45,6 +45,17 @@ export interface Snapshot {
     metadata: Metadata;
     /** Size and time fingerprint taken before the read. Compare it with `probe(scope)` to see later changes. */
     probe: string;
+    /**
+     * How the current branch stands against `refs/remotes/origin/<branch>` as of the last fetch, from local refs only.
+     * `unknown` when there is no current branch or no tracking ref yet.
+     */
+    upstream: UpstreamRelation;
+}
+export interface UpstreamRelation {
+    state: 'same' | 'ahead' | 'behind' | 'diverged' | 'unknown';
+    /** Commits on the local branch that the tracking branch lacks, and the reverse. Zero when unknown. */
+    ahead: number;
+    behind: number;
 }
 export interface FileDiff {
     binary: boolean;
@@ -210,7 +221,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before, probe: fingerprint};
+        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before, probe: fingerprint,
+            upstream: {state: 'unknown', ahead: 0, behind: 0}};
     };
     const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
         fs.clearReads();
