@@ -16,6 +16,8 @@ Node.js 26 で `npm ci` と `npm test` を実行します。Vite でライブラ
 
 ## Smart HTTP アダプター
 
+`test/smart-http-fixture.js` は、`git-http-backend` を IPv4 のループバックで動かす検証用のフィクスチャです。Node.js の標準モジュールだけを使い、利用側のブラウザーテストが同じ版を使えるよう配布物に含めます。
+
 `@kubohiroya/turbowarp-plus-editor-git/smart-http` の `createGitSmartHttp` に、Git 設定から選んだ GitHub の HTTPS リモート、信頼済みの接続先（`mode` と `proxyOrigin`）、現在のプロキシセッションか `null` を返す関数を渡します。auth パッケージの `GitAuthProvider` を使えます。Git パッケージは必要なセッションの型だけを構造的に参照するため、読み取り専用パネルとアダプターは auth パッケージと独立してインストールできます。
 
 ```ts
