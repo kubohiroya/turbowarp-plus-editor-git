@@ -18,7 +18,7 @@ The panel structure and local Git approach were informed by [duff](https://githu
 
 `test/smart-http-fixture.js` runs `git-http-backend` on the IPv4 loopback for tests. It uses only Node.js built-in modules and ships in the package so browser tests of a host use the fixture of the same version.
 
-Import `createGitSmartHttp` from `@kubohiroya/turbowarp-plus-editor-git/smart-http`. Pass the selected GitHub HTTPS remote from Git config, a trusted connection (`mode` and `proxyOrigin`), and a function that returns the current proxy session or `null`. A `GitAuthProvider` from the auth package satisfies this contract. The Git package uses the session fields structurally, so the read-only panel and the adapter can be installed independently of the auth package.
+Import `createGitSmartHttp` from `@kubohiroya/turbowarp-plus-editor-git/smart-http`. Pass the selected GitHub HTTPS remote from Git config, a trusted connection (`mode` and `proxyOrigin`), and a function that returns the current proxy session or `null`. A `GitAuthProvider` from the auth package satisfies this contract. The Git package takes these types from the auth package, which is an optional peer: only TypeScript users need it installed, and the read-only panel and the adapter run without it.
 
 ```ts
 const transport = createGitSmartHttp({
