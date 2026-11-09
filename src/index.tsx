@@ -128,6 +128,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             setState(previous => ({...previous, error: automatic && previous.error ? previous.error : message, busy: false, diff: null}));
         } finally {
             running.current = false;
+            // A result dropped by a newer load still ends the busy state, unless a refresh follows at once.
+            if (epoch.current !== ticket && !refreshPending.current && alive.current) {
+                setState(previous => ({...previous, busy: false}));
+            }
             if (automatic) {background.current = null; settle();}
             if (refreshPending.current) {
                 refreshPending.current = false;
@@ -180,8 +184,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             setDirty(host.isProjectDirty());
             if (event === 'loaded' && !opening.current) {
                 epoch.current++;
+                // An operation still running stays busy; its end, or the refresh queued after it, clears the flag.
                 setState(previous => ({...previous, project: null, snapshot: null, changes: [],
-                    selected: null, diff: null, commit: null, busy: false}));
+                    selected: null, diff: null, commit: null, busy: running.current}));
                 queueMicrotask(() => void controller.refresh());
             }
         });
