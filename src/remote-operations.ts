@@ -41,17 +41,31 @@ export async function runRemoteOperation(root: FileSystemDirectoryHandle, operat
         const transport = createGitSmartHttp({remote, connection: session.connection,
             getSession: () => getSession(remote, write), signal});
         let receivedPushResponse = false;
+        let pushResponseFailed = false;
         const http = {async request(request: Parameters<typeof transport.http.request>[0]) {
             const response = await transport.http.request(request);
-            if (write && request.method === 'POST') receivedPushResponse = true;
-            return response;
+            if (!write || request.method !== 'POST' || !response.body) return response;
+            receivedPushResponse = true;
+            const body = response.body;
+            // isomorphic-git stops at the report-status and drops later read errors, so record them here.
+            return {...response, body: (async function* () {
+                try {
+                    yield* body;
+                } catch (error) {
+                    pushResponseFailed = true;
+                    throw error;
+                }
+            })()};
         }};
         const args = {...options, ...transport, http, remote: 'origin', ref,
             remoteRef: trackingRef || `refs/heads/${ref}`};
         try {
             if (operation === 'fetch') await git.fetch({...args, tags: false});
             else if (operation === 'pull') await git.fastForward(args);
-            else await git.push({...args, force: false, signal});
+            else {
+                await git.push({...args, force: false, signal});
+                if (pushResponseFailed) throw new GitPanelError('pushUnknown');
+            }
         } catch (error) {
             if (error instanceof GitSmartHttpError) {
                 if (error.code === 'PUSH_OUTCOME_UNKNOWN') throw new GitPanelError('pushUnknown');

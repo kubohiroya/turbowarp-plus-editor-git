@@ -105,3 +105,32 @@ test('panel operations preserve worktrees on rejected pulls and never retry an u
     assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/main'), uncertain);
     assert.deepEqual(await capture(), beforeDiverged);
 });
+
+test('a push response that fails after its report-status leaves the outcome unknown', async t => {
+    const fixture = await startFixture(t);
+    const {client, bare} = fixture;
+    const fetch = globalThis.fetch;
+    let truncate = false;
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+        const headers = new Headers(init.headers);
+        headers.set('Origin', 'https://editor.example.invalid');
+        const response = await fetch(url, {...init, headers});
+        if (!truncate || init.method !== 'POST') return response;
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const body = new ReadableStream({
+            start(controller) {controller.enqueue(bytes);},
+            pull(controller) {controller.error(new TypeError('network error'));}
+        });
+        return new Response(body, {status: response.status, headers: response.headers});
+    });
+    const session = async () => ({connection: {mode: 'desktop', proxyOrigin: fixture.origin},
+        bearer: 'fixture-write', expiresAt: Date.now() + 60000});
+    const repository = await openRepository(directoryHandle(client));
+    const tracking = git(client, 'rev-parse', 'refs/remotes/origin/main');
+    await writeFile(join(client, 'project.txt'), 'truncated response\n');
+    const pushed = commit(client, 'truncated response');
+    truncate = true;
+    await assert.rejects(repository.remoteOperation('push', session, () => {}), {code: 'pushUnknown'});
+    assert.equal(git(bare, 'rev-parse', 'main'), pushed);
+    assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/main'), tracking);
+});
