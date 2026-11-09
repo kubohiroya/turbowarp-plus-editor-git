@@ -9,7 +9,7 @@ import type {ChangeGroup, FileChange, Repository, Snapshot} from './repository.j
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 
 const en = {
-    title: 'Project changes', stage: 'Stage', code: (count: number) => `Code · ${count} ${count === 1 ? 'change' : 'changes'}`,
+    title: 'Changes by project element', stage: 'Stage', code: (count: number) => `Code · ${count} ${count === 1 ? 'change' : 'changes'}`,
     costumes: 'Costume', backdrops: 'Backdrop', sounds: 'Sound', data: 'Variables and messages', settings: 'Other settings',
     project: 'Whole project', other: 'Files outside the project', added: 'Added', removed: 'Removed', updated: 'Changed',
     files: 'Files and Git groups', before: 'Before', after: 'After', absent: 'Not in this version',
@@ -18,7 +18,7 @@ const en = {
     noImage: 'No image', groups: {staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', commit: 'Commit'} as Record<ChangeGroup, string>
 };
 const ja: typeof en = {
-    title: '作品の変更', stage: 'ステージ', code: count => `コード · ${count} か所`,
+    title: '作品の要素ごとの変更', stage: 'ステージ', code: count => `コード · ${count} か所`,
     costumes: 'コスチューム', backdrops: '背景', sounds: '音', data: '変数・リスト・メッセージ', settings: 'そのほかの設定',
     project: '作品全体', other: '作品に属さないファイル', added: '追加', removed: '削除', updated: '変更',
     files: 'ファイルと Git の区分', before: '変更前', after: '変更後', absent: 'この版にはありません',
@@ -66,7 +66,9 @@ export function useProjectChanges(repository: Repository | null, snapshot: Snaps
         return () => {current = false;};
     }, [repository, snapshot, project, commit, changes]);
     if (!active) return undefined;
-    return result?.changes === changes ? result.value : 'loading';
+    // Keep the last list while a refresh reads again, so the panel does not fall back to files and back.
+    if (result?.changes === changes || (result && typeof result.value === 'object')) return result!.value;
+    return 'loading';
 }
 
 function TargetHeading({target, labels, loadAsset}: {target: ProjectTargetChanges; labels: Labels; loadAsset: ProjectAssetLoader}) {
@@ -106,9 +108,10 @@ function ElementRow({element, target, labels, locale, loadAsset, selected, busy,
 }
 
 /** The change list arranged by the project's stage, sprites and elements, with files outside the project after them. */
-export function ProjectChangeListView({changes, selected, locale, busy, onSelect, onSelectFile, fileList}: {
+export function ProjectChangeListView({changes, selected, locale, busy, onSelect, onSelectFile, fileList, fileListOpen, setFileListOpen}: {
     changes: ProjectChanges; selected: string | null; locale: string; busy: boolean;
     onSelect(key: string): void; onSelectFile(file: ChangedFile): void; fileList: React.ReactNode;
+    fileListOpen: boolean; setFileListOpen(open: boolean): void;
 }) {
     const labels = projectChangeLabels(locale);
     const {list, loadAsset} = changes;
@@ -128,7 +131,9 @@ export function ProjectChangeListView({changes, selected, locale, busy, onSelect
             <ul>{list.other.map(file => <li key={file.group + ':' + file.path}><button className="twgit-file" data-git-other={file.group}
                 disabled={busy} onClick={() => onSelectFile(file)}>{file.path} <small>{labels.groups[file.group]}</small></button></li>)}</ul>
         </section>}
-        <details className="twgit-file-list"><summary>{labels.fileList}</summary>{fileList}</details>
+        <details className="twgit-file-list" open={fileListOpen}
+            onToggle={event => setFileListOpen((event.currentTarget as HTMLDetailsElement).open)}>
+            <summary>{labels.fileList}</summary>{fileList}</details>
     </section>;
 }
 
@@ -187,7 +192,7 @@ export function ProjectElementView({changes, selection, locale, renderBlock, onS
             target={{isStage: target.isStage, name: target.name}}/>}
         {element.kind === 'costumes' && <div className="twgit-element-pictures">
             {(['before', 'after'] as const).map(version => <Picture key={version} md5ext={element.md5ext?.[version]} version={version}
-                loadAsset={changes.loadAsset} labels={labels} title={`${labels[version]} · ${String(element[version]?.name ?? '')}`}/>)}
+                loadAsset={changes.loadAsset} labels={labels} title={element[version]?.name === undefined ? labels[version] : `${labels[version]} · ${String(element[version]!.name)}`}/>)}
         </div>}
         {element.kind !== 'code' && element.kind !== 'costumes' && <table className="twgit-element-values">
             <thead><tr><th>{labels.property}</th><th>{labels.before}</th><th>{labels.after}</th></tr></thead>

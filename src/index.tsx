@@ -218,6 +218,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         diff: await state.repository!.readDiff(state.snapshot!, selected)}));
     // A selected stage or sprite element replaces the file diff; picking a file goes back to it.
     const [element, setElement] = useState<string | null>(null);
+    const [fileListOpen, setFileListOpen] = useState(false);
     const projectChanges = useProjectChanges(state.repository, state.snapshot, state.project, state.commit, state.changes);
     const openFile = (file: ChangedFile | FileChange) => {
         const change = state.changes.find(item => item.path === file.path && item.group === file.group);
@@ -327,7 +328,8 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                             </li>)}</ul>
                         </section>);
                         return projectList ? <ProjectChangeListView changes={projectList} selected={selection ? element : null}
-                            locale={locale} busy={state.busy} onSelect={openElement} onSelectFile={openFile} fileList={fileList}/> : fileList;
+                            locale={locale} busy={state.busy} onSelect={openElement} onSelectFile={openFile} fileList={fileList}
+                            fileListOpen={fileListOpen} setFileListOpen={setFileListOpen}/> : fileList;
                     })()}
                     {!state.changes.length && <p>{labels.clean}</p>}
                     <details><summary>{labels.branches}</summary><ul>{state.snapshot?.branches.map(branch => <li key={branch}>{branch}</li>)}</ul></details>
