@@ -10,7 +10,7 @@ While the panel is open, it checks the repository every two seconds, when the wi
 
 A Chromium-based browser with File System Access support is required. The first version supports ordinary `.git` directories and content changes. Linked worktrees, submodules, and symbolic links are outside this scope. The browser cannot detect working-tree executable-bit changes. Recorded index and tree modes remain visible. Binary assets show sizes, and text diff generation is bounded.
 
-Use Node.js 26, run `npm ci`, then `npm test`. Vite builds the library and stylesheet, and TypeScript emits declarations. `npm pack` prepares the artifact used by the Editor build. The Editor enables the panel by default. Start it with `twPlusLocalGit=0` in its URL to disable the integration.
+Use Node.js 26, run `npm ci`, then `npm test`. Vite builds the library and stylesheet, and TypeScript emits declarations. `npm pack` prepares the artifact used by the Editor build. `npm run test:browser` runs the comparison dialog's block drawing in Chromium on the minimal editor runtime (`@kubohiroya/turbowarp-plus-editor-test-runtime`), with the Editor's pinned VM and Scratch Blocks and without building the Editor. The Editor enables the panel by default. Start it with `twPlusLocalGit=0` in its URL to disable the integration.
 
 The panel structure and local Git approach were informed by [duff](https://github.com/chigichan24/duff). The implementation uses [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git) and [react-diff-view](https://github.com/otakustay/react-diff-view). Bundled licenses are listed in the build's third-party notices.
 
