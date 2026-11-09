@@ -1,13 +1,12 @@
 import React, {useEffect, useRef, useState} from 'react';
+import type {GitAuthState, GitConnectionMode as Mode} from '@kubohiroya/turbowarp-plus-editor-auth';
 import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
 
-type Mode = 'desktop' | 'cloudflare';
-type Status = 'disconnected' | 'connecting' | 'connected' | 'reauth-required';
 export interface GitConnectionSettings {
     modes: readonly Mode[];
     getView(): {
         mode: Mode | null;
-        state: {status: Status; account?: {login: string}; expiresAt?: number};
+        state: GitAuthState;
         proxyOrigin?: string;
         write?: boolean;
         authorization?: {url: string; userCode?: string};
@@ -87,7 +86,7 @@ export function ConnectionSettings({settings, locale, readOrigin, runOperation}:
             <p>{labels.changed}</p>
             <p data-git-connection-state="" role="status">{labels[state.status]}</p>
             {proxyOrigin && <p>{labels.proxy} · <code>{proxyOrigin}</code></p>}
-            {state.account && <p>{labels.account} · {state.account.login}</p>}
+            {state.status === 'connected' && <p>{labels.account} · {state.account.login}</p>}
             {!readOrigin && <p>{labels.noRemote}</p>}
             {mode && <>
                 {runOperation && <label><input type="checkbox" checked={allowPush}

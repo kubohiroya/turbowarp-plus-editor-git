@@ -1,14 +1,12 @@
+import type {GitProxyConnection, GitProxySession} from '@kubohiroya/turbowarp-plus-editor-auth';
 import type {HttpClient} from 'isomorphic-git';
 
 export const MAX_GIT_REQUEST_BYTES = 32 * 1024 * 1024;
 
-type Connection = Readonly<{mode: 'desktop' | 'cloudflare'; proxyOrigin: string}>;
-type Session = Readonly<{connection: Connection; bearer: string; expiresAt: number}>;
-
 export interface GitSmartHttpOptions {
     readonly remote: string;
-    readonly connection: Connection;
-    readonly getSession: () => Promise<Session | null>;
+    readonly connection: GitProxyConnection;
+    readonly getSession: () => Promise<GitProxySession | null>;
     readonly maxRequestBytes?: number;
     readonly signal?: AbortSignal;
     readonly fetch?: typeof fetch;
@@ -54,7 +52,7 @@ function remoteUrl(remote: string) {
     return `https://github.com/${match[1]}/${match[2]}.git`;
 }
 
-function checkConnection({mode, proxyOrigin}: Connection) {
+function checkConnection({mode, proxyOrigin}: GitProxyConnection) {
     const url = URL.parse(proxyOrigin);
     if (!url || url.origin !== proxyOrigin ||
         (mode === 'desktop' ? !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(proxyOrigin) :
@@ -142,7 +140,7 @@ export function createGitSmartHttp(options: GitSmartHttpOptions) {
         checkAbort(abort);
         const payload = body ? await boundedBody(body, maxRequestBytes, abort) : undefined;
         checkAbort(abort);
-        let session: Session | null;
+        let session: GitProxySession | null;
         try {
             session = await getSession();
         } catch {
