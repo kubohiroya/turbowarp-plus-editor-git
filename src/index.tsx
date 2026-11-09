@@ -155,8 +155,16 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         }
         await run(async () => {
             const {repository, project} = current.current;
-            const snapshot = await repository!.read(project ?? '');
-            return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
+            // A save or a Git command may still be finishing its writes; read again briefly before reporting a change.
+            for (let attempt = 1; ; attempt++) {
+                try {
+                    const snapshot = await repository!.read(project ?? '');
+                    return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
+                } catch (error) {
+                    if (!(error instanceof GitPanelError && error.code === 'changed') || attempt >= 5) throw error;
+                    await new Promise(resolve => setTimeout(resolve, 200 * attempt));
+                }
+            }
         }, automatic);
     };
     useEffect(() => {
