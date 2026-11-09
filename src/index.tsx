@@ -25,7 +25,7 @@ export interface GitHost {
     isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
 }
-interface Controller {open(locale: string): void; refresh(): Promise<void>}
+interface Controller {open(locale: string): void; refresh(automatic?: boolean): Promise<void>}
 interface State {
     repository: Repository | null;
     snapshot: Snapshot | null;
@@ -69,8 +69,13 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     // The last fingerprint acted on, so a failing read or an open diff is not retried on every check.
     const handled = useRef<string | null>(null);
     const labels = labelsFor(locale);
-    const run = async (operation: () => Promise<Partial<State>>) => {
+    // A background refresh never drops a user's operation: the operation waits for that refresh instead.
+    const background = useRef<Promise<void> | null>(null);
+    const run = async (operation: () => Promise<Partial<State>>, automatic = false) => {
+        if (running.current && !automatic && background.current) await background.current;
         if (running.current || !alive.current) return;
+        let settle = () => {};
+        if (automatic) background.current = new Promise(resolve => {settle = resolve;});
         running.current = true;
         const ticket = ++epoch.current;
         setState(previous => ({...previous, busy: true, error: null, notice: undefined}));
@@ -84,6 +89,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             setState(previous => ({...previous, error: message, busy: false, diff: null}));
         } finally {
             running.current = false;
+            if (automatic) {background.current = null; settle();}
             if (refreshPending.current) {
                 refreshPending.current = false;
                 queueMicrotask(() => void controller.refresh());
@@ -91,14 +97,17 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         }
     };
     controller.open = language => {setLocale(language); setVisible(true);};
-    controller.refresh = async () => {
+    controller.refresh = async (automatic = false) => {
         if (!alive.current || !current.current.repository) return;
-        if (running.current) {refreshPending.current = true; return;}
+        if (running.current) {
+            if (!automatic) refreshPending.current = true;
+            return;
+        }
         await run(async () => {
             const {repository, project} = current.current;
             const snapshot = await repository!.read(project ?? '');
             return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
-        });
+        }, automatic);
     };
     useEffect(() => {
         alive.current = true;
@@ -134,7 +143,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                 // Keep an open diff, commit or review in place and ask for a refresh instead.
                 if (selected || commit || reviewing.current) {
                     setState(previous => previous.snapshot === snapshot ? {...previous, notice: labelsFor(locale).outdated} : previous);
-                } else await controller.refresh();
+                } else await controller.refresh(true);
             } catch {
                 // Entries can disappear while another tool writes. The next check reads them again.
             } finally {
