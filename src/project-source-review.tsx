@@ -30,6 +30,11 @@ export interface ProjectSourceReviewProps {
     files: readonly ProjectSourceReviewFile[];
     renderBlock: ProjectBlockRenderer;
     locale?: string;
+    /**
+     * Where the reviewed marks are kept between reviews, such as `owner/repo#42`. Marks are stored in the browser with
+     * the content of each script, so a mark stays until that script changes. Without it, marks last while the review is open.
+     */
+    rememberAs?: string;
 }
 
 // Like the Editor's Code tab, a connected group of blocks is called code, and each item is named by its hat block.
@@ -208,7 +213,7 @@ function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBl
                 {(target.status === 'added' ? labels.targetAdded : labels.targetRemoved)(target.name, target.isStage)}</p>}
             {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
             {target.scripts.map(script => {
-                const key = JSON.stringify([review?.file, target.isStage, target.name, script.id]);
+                const key = reviewKey(review?.file, target, script);
                 return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
                     location={location} reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}/>;
             })}
@@ -310,7 +315,49 @@ export function ProjectSourceComparison({before, after, renderBlock, locale = 'e
     </section>;
 }
 
-export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en'}: ProjectSourceReviewProps) {
+const reviewKey = (file: string | undefined, target: TargetReview, script: ScriptReview) =>
+    JSON.stringify([file, target.isStage, target.name, script.id]);
+// A short fingerprint of what a script shows, so a stored mark is dropped once the script changes.
+const fingerprint = (value: unknown) => {
+    let hash = 0x811c9dc5;
+    for (const char of JSON.stringify(value)) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193);
+    return (hash >>> 0).toString(36);
+};
+// A side carries its whole stage or sprite; only the blocks of its own script decide whether a mark still holds.
+const scriptBlocks = ({target, id}: ScriptReview['before'][number]) => {
+    const blocks = target.blocks as Record<string, {parent?: unknown} | undefined>;
+    const rootOf = (start: string) => {
+        let current = start;
+        for (let guard = 0; guard < 10000; guard++) {
+            const parent = blocks[current]?.parent;
+            if (typeof parent !== 'string' || !blocks[parent]) return current;
+            current = parent;
+        }
+        return current;
+    };
+    return Object.keys(blocks).filter(key => rootOf(key) === id).sort().map(key => [key, blocks[key]]);
+};
+const scriptPrint = (script: ScriptReview) => fingerprint([script.kind, script.before.map(scriptBlocks), script.after.map(scriptBlocks)]);
+const storageKey = (name: string) => `turbowarp-plus-git:reviewed:${name}`;
+// Browser storage can be missing or refuse access; the marks then last while the review is open.
+const readMarks = (name: string): Record<string, string> => {
+    try {
+        const value = JSON.parse(globalThis.localStorage?.getItem(storageKey(name)) ?? '{}');
+        return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch {
+        return {};
+    }
+};
+const writeMarks = (name: string, marks: Record<string, string>) => {
+    try {
+        if (Object.keys(marks).length) globalThis.localStorage?.setItem(storageKey(name), JSON.stringify(marks));
+        else globalThis.localStorage?.removeItem(storageKey(name));
+    } catch {
+        // Not kept; the marks still work for this review.
+    }
+};
+
+export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en', rememberAs}: ProjectSourceReviewProps) {
     const labels = locale.startsWith('ja') ? ja : en;
     const entries = useMemo(() => files.map(file => {
         if (!('patch' in file)) return {file};
@@ -321,13 +368,28 @@ export function ProjectSourceReview({title, description, verification, files, re
             return {file, invalid: true};
         }
     }), [files]);
-    const [checked, setChecked] = useState<{entries: typeof entries; keys: Set<string>}>();
-    const reviewed = checked?.entries === entries ? checked.keys : new Set<string>();
+    // Each script of this review by its mark key, with what it shows now.
+    const scriptPrints = useMemo(() => {
+        const prints = new Map<string, string>();
+        for (const {file, comparison} of entries) {
+            for (const target of comparison?.targets ?? []) {
+                for (const script of target.scripts) prints.set(reviewKey(file.path, target, script), scriptPrint(script));
+            }
+        }
+        return prints;
+    }, [entries]);
+    const [checked, setChecked] = useState<{entries: typeof entries; marks: Record<string, string>}>();
+    const marks = checked?.entries === entries ? checked.marks : rememberAs ? readMarks(rememberAs) : {};
+    const reviewed = new Set([...scriptPrints].filter(([key, print]) => marks[key] === print).map(([key]) => key));
     const setReviewed = (key: string, value: boolean) => setChecked(previous => {
-        const keys = new Set(previous?.entries === entries ? previous.keys : []);
-        if (value) keys.add(key);
-        else keys.delete(key);
-        return {entries, keys};
+        const current = previous?.entries === entries ? previous.marks : rememberAs ? readMarks(rememberAs) : {};
+        // Keep only marks that still match a script of this review.
+        const next: Record<string, string> = {};
+        for (const [name, print] of scriptPrints) if (current[name] === print) next[name] = print;
+        if (value) next[key] = scriptPrints.get(key)!;
+        else delete next[key];
+        if (rememberAs) writeMarks(rememberAs, next);
+        return {entries, marks: next};
     });
     const targets = entries.reduce((total, entry) => total + (entry.comparison?.targets.length ?? 0), 0);
     const scripts = entries.reduce((total, entry) => total + (entry.comparison ? countScripts(entry.comparison) : 0), 0);
