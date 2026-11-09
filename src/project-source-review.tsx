@@ -1,10 +1,12 @@
 import React, {useMemo, useState} from 'react';
 import {BlockPreview} from './block-diff-preview.js';
-import {isRecord, readProjectSourceDiff} from './project-source-patch.js';
+import {isRecord, parseProjectSource, readProjectSourceDiff} from './project-source-patch.js';
 import type {BlockSide} from './project-source-patch.js';
 import {compareProjectForReview} from './project-source-review-model.js';
 import type {ScriptReview} from './project-source-review-model.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+
+type Comparison = ReturnType<typeof compareProjectForReview>;
 
 export type ProjectSourceReviewFile = {
     path: string;
@@ -30,7 +32,8 @@ const ja = {
     unavailable: 'このスクリプトを描画できません。',
     related: '関連ファイル', properties: 'コード以外の変更', invalid: 'この作品の差分を読み込めません。',
     flag: '緑の旗が押されたとき', broadcast: 'を受け取ったとき', key: 'キーが押されたとき',
-    click: 'このスプライトが押されたとき', script: 'スクリプト', noChanges: '作品に内容の変更はありません。'
+    click: 'このスプライトが押されたとき', script: 'スクリプト', noChanges: '作品に内容の変更はありません。',
+    comparison: '作品の変更', unreadable: '作品データとして読み込めないため、テキストの差分を表示します。'
 };
 const en: typeof ja = {
     review: 'Change review', fullDescription: 'Show full PR description', checks: 'Review checklist', files: 'Changed files', targets: 'Affected stages and sprites',
@@ -40,7 +43,8 @@ const en: typeof ja = {
     unavailable: 'This script could not be rendered.',
     related: 'Related file', properties: 'Changes outside the code', invalid: 'This project diff could not be read.',
     flag: 'When green flag clicked', broadcast: 'received', key: 'When key pressed',
-    click: 'When this sprite clicked', script: 'Script', noChanges: 'No changes to the project contents.'
+    click: 'When this sprite clicked', script: 'Script', noChanges: 'No changes to the project contents.',
+    comparison: 'Project changes', unreadable: 'This file could not be read as project data, so its text diff is shown.'
 };
 
 const properties = new Map<string, readonly [string, string]>([
@@ -65,8 +69,8 @@ function scriptTitle(side: BlockSide, labels: typeof ja) {
     return typeof block.opcode === 'string' ? block.opcode : labels.script;
 }
 
-function ScriptComparison({script, labels, reviewed, setReviewed, renderBlock}: {
-    script: ScriptReview; labels: typeof ja; reviewed: boolean; setReviewed(value: boolean): void;
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock}: {
+    script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
     renderBlock: ProjectBlockRenderer;
 }) {
     const [open, setOpen] = useState(false);
@@ -91,10 +95,70 @@ function ScriptComparison({script, labels, reviewed, setReviewed, renderBlock}: 
                         <BlockPreview title={labels[version]} renderBlock={renderBlock} withContext labels={labels}/>}
                 </div>)}
             </div>
-            <label className="twgit-review-checked"><input type="checkbox" checked={reviewed}
-                onChange={event => setReviewed(event.currentTarget.checked)}/> {labels.reviewed}</label>
+            {setReviewed && <label className="twgit-review-checked"><input type="checkbox" checked={reviewed}
+                onChange={event => setReviewed(event.currentTarget.checked)}/> {labels.reviewed}</label>}
         </>}
     </details>;
+}
+
+function propertyNames(keys: readonly string[], labels: typeof ja) {
+    return keys.map(key => properties.get(key)?.[labels === ja ? 0 : 1] ?? key).join(' · ');
+}
+
+/** Lists the changed stages and sprites of one project file, each with its script comparisons. */
+function ComparisonTargets({comparison, labels, renderBlock, review}: {
+    comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer;
+    review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void};
+}) {
+    return <>
+        {comparison.properties.length > 0 && <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p>}
+        {!comparison.targets.length && !comparison.properties.length && <p>{labels.noChanges}</p>}
+        {comparison.targets.map(target => <section className="twgit-review-target" key={JSON.stringify([target.isStage, target.name])}>
+            <h5>{target.name}{target.scripts.length > 0 && <small>{labels.scripts} · {target.scripts.length}</small>}</h5>
+            {target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
+            {target.scripts.map(script => {
+                const key = JSON.stringify([review?.file, target.isStage, target.name, script.id]);
+                return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock}
+                    reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}/>;
+            })}
+        </section>)}
+    </>;
+}
+
+const countScripts = (comparison: Comparison) => comparison.targets.reduce((count, target) => count + target.scripts.length, 0);
+
+export interface ProjectSourceComparisonProps {
+    /** The earlier project.source.json, or `null` when the file did not exist yet. */
+    before: string | null;
+    /** The later project.source.json, or `null` when the file was removed. */
+    after: string | null;
+    renderBlock: ProjectBlockRenderer;
+    locale?: string;
+    /** Shown after an explanation when either version cannot be read as a project. Without it, only an error is shown. */
+    fallback?: React.ReactNode;
+}
+
+/** Compares two versions of a project.source.json by stage, sprite and script, as the pull request review does. */
+export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback}: ProjectSourceComparisonProps) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    const comparison = useMemo(() => {
+        try {
+            return compareProjectForReview(parseProjectSource(before), parseProjectSource(after));
+        } catch {
+            return null;
+        }
+    }, [before, after]);
+    if (!comparison) return fallback === undefined ? <p role="alert">{labels.invalid}</p> :
+        <><p role="alert" className="twgit-review-unreadable">{labels.unreadable}</p>{fallback}</>;
+    return <section className="twgit-block-diff twgit-review twgit-review-comparison" aria-label={labels.comparison}>
+        <header className="twgit-review-overview">
+            <dl>
+                <div><dt>{labels.targets}</dt><dd>{comparison.targets.length}</dd></div>
+                <div><dt>{labels.scripts}</dt><dd>{countScripts(comparison)}</dd></div>
+            </dl>
+        </header>
+        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}/>
+    </section>;
 }
 
 export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en'}: ProjectSourceReviewProps) {
@@ -110,13 +174,17 @@ export function ProjectSourceReview({title, description, verification, files, re
     }), [files]);
     const [checked, setChecked] = useState<{entries: typeof entries; keys: Set<string>}>();
     const reviewed = checked?.entries === entries ? checked.keys : new Set<string>();
+    const setReviewed = (key: string, value: boolean) => setChecked(previous => {
+        const keys = new Set(previous?.entries === entries ? previous.keys : []);
+        if (value) keys.add(key);
+        else keys.delete(key);
+        return {entries, keys};
+    });
     const targets = entries.reduce((total, entry) => total + (entry.comparison?.targets.length ?? 0), 0);
-    const scripts = entries.reduce((total, entry) =>
-        total + (entry.comparison?.targets.reduce((count, target) => count + target.scripts.length, 0) ?? 0), 0);
+    const scripts = entries.reduce((total, entry) => total + (entry.comparison ? countScripts(entry.comparison) : 0), 0);
     const body = description?.trim();
     const longBody = !!body && body.length > 420;
     const excerpt = longBody ? body.slice(0, 250).trimEnd() + '…' : body;
-    const propertyNames = (keys: readonly string[]) => keys.map(key => properties.get(key)?.[labels === ja ? 0 : 1] ?? key).join(' · ');
     return <section className="twgit-block-diff twgit-review" aria-label={labels.review}>
         <header className="twgit-review-overview">
             <p>{labels.review}</p>
@@ -142,24 +210,8 @@ export function ProjectSourceReview({title, description, verification, files, re
             <header><h4>{file.previousPath ? file.previousPath + ' → ' + file.path : file.path}</h4>{file.summary && <p>{file.summary}</p>}</header>
             {'status' in file && <p>{labels.related} · {labels[file.status]}</p>}
             {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
-            {comparison && <>
-                {comparison.properties.length > 0 && <p>{labels.properties} · {propertyNames(comparison.properties)}</p>}
-                {!comparison.targets.length && !comparison.properties.length && <p>{labels.noChanges}</p>}
-                {comparison.targets.map(target => <section className="twgit-review-target" key={JSON.stringify([target.isStage, target.name])}>
-                    <h5>{target.name}{target.scripts.length > 0 && <small>{labels.scripts} · {target.scripts.length}</small>}</h5>
-                    {target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties)}</p>}
-                    {target.scripts.map(script => {
-                        const key = JSON.stringify([file.path, target.isStage, target.name, script.id]);
-                        return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} reviewed={reviewed.has(key)}
-                            setReviewed={value => setChecked(previous => {
-                                const keys = new Set(previous?.entries === entries ? previous.keys : []);
-                                if (value) keys.add(key);
-                                else keys.delete(key);
-                                return {entries, keys};
-                            })}/>;
-                    })}
-                </section>)}
-            </>}
+            {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
+                review={{file: file.path, keys: reviewed, set: setReviewed}}/>}
         </section>)}
     </section>;
 }

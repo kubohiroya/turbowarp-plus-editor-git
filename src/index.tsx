@@ -1,6 +1,6 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {render, unmountComponentAtNode} from 'react-dom';
-import {Diff, Hunk, parseDiff} from 'react-diff-view';
+import {FileDiffView} from './file-diff-view.js';
 import {openRepository} from './repository.js';
 import type {Repository, Snapshot, FileChange, FileDiff, ChangeGroup} from './repository.js';
 import {labelsFor} from './messages.js';
@@ -178,7 +178,6 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         } else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first?.focus();}
     };
     if (!visible) return null;
-    const parsed = state.diff?.patch ? parseDiff(state.diff.patch)[0] : null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
     return <div className="twgit-backdrop">
         <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
@@ -242,16 +241,8 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                     </li>)}</ol>
                 </aside>
                 <main className="twgit-diff">
-                    {state.selected ? <>
-                        <h3>{state.selected.path}</h3>
-                        <p>{labels.mode} · {state.selected.oldMode?.toString(8) || '—'} → {state.selected.newMode?.toString(8) || '—'}</p>
-                        {state.diff && <p>{state.diff.beforeSize} → {state.diff.afterSize} {labels.bytes}</p>}
-                        {state.diff?.binary && <p>{labels.binary}</p>}
-                        {state.diff?.tooLarge && <p>{labels.large}</p>}
-                        {parsed && <Diff viewType="unified" diffType={parsed.type} hunks={parsed.hunks}>
-                            {hunks => hunks.map(hunk => <Hunk key={hunk.content} hunk={hunk}/>)}</Diff>}
-                        {state.diff && !state.diff.binary && !state.diff.tooLarge && !parsed?.hunks.length && <p>{labels.unchanged}</p>}
-                    </> : <p>{labels.select}</p>}
+                    {state.selected ? <FileDiffView change={state.selected} diff={state.diff} labels={labels} locale={locale}
+                        renderBlock={host.renderReviewBlock}/> : <p>{labels.select}</p>}
                 </main>
             </div>}
             <footer>{labels.permissions}</footer>

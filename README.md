@@ -4,7 +4,7 @@
 
 Local Git adds a read-only panel to the TurboWarp Plus Editor File menu. Select the repository root once, then browse to an sb3-toolchain v1 project folder inside it. Project editing and saving are supplied by the Editor's project-folder integration.
 
-The panel separates staged, unstaged, and untracked changes. It shows the current branch, HEAD, local branches, and the latest 50 commits. Select a file to inspect its text diff or binary size. Select a commit to compare its files with its first parent. The selected project limits the file list and diffs to that folder.
+The panel separates staged, unstaged, and untracked changes. It shows the current branch, HEAD, local branches, and the latest 50 commits. Select a file to inspect its text diff or binary size. When the host supplies a block renderer, project data (`project.source.json`) is compared as blocks by stage, sprite and script, and **Text** switches to the line diff. Select a commit to compare its files with its first parent. The selected project limits the file list and diffs to that folder.
 
 After an external Git operation, use **Refresh**. **Reload Project** opens the selected project again using the Editor's unsaved-edit confirmation. Git inspection uses a read-only adapter and isomorphic-git with index refresh disabled. If the repository changes during a read, refresh after the other operation completes.
 

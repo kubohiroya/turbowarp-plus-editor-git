@@ -21,6 +21,11 @@ function readProject(source: string): ProjectSource {
     return {...parsed, targets: parsed.targets.map(target => ({...target, blocks: target.blocks ?? {}}))};
 }
 
+/** Reads one version of a project.source.json. `null` stands for a version in which the file does not exist. */
+export function parseProjectSource(source: string | null): ProjectSource {
+    return source === null ? {targets: []} : readProject(source);
+}
+
 /** Keep the original lines and include enough context to render both sides from the patch alone. */
 export function createProjectSourceDiff(before: string, after: string): string {
     readProject(before);

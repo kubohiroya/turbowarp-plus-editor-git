@@ -35,6 +35,11 @@ export interface Snapshot {
 export interface FileDiff {
     binary: boolean;
     patch: string;
+    /**
+     * Both versions as text, for views that read the content instead of the patch. A missing version is empty.
+     * Absent for binary content and above the text limit, except for project.source.json up to 16 MiB.
+     */
+    text?: {before: string; after: string};
     beforeSize: number;
     afterSize: number;
     tooLarge: boolean;
@@ -167,10 +172,13 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         } else if (change.worktree && await readOptional(fs, '/' + change.path)) throw new GitPanelError('changed');
         await assertSnapshot(snapshot);
         await fs.checkReads();
-        const tooLarge = Math.max(before.byteLength, after.byteLength) > textLimit;
+        const size = Math.max(before.byteLength, after.byteLength);
+        const tooLarge = size > textLimit;
         const binary = before.includes(0) || after.includes(0);
         const base = {beforeSize: before.byteLength, afterSize: after.byteLength, binary, tooLarge};
-        if (binary || tooLarge) return {...base, patch: ''};
+        // Project sources are compared as blocks, which stays usable well past the text diff limit.
+        const sourceLimit = change.path.split('/').pop() === 'project.source.json' ? 16 * 1024 * 1024 : textLimit;
+        if (binary || size > sourceLimit) return {...base, patch: ''};
         const decoder = new TextDecoder('utf-8', {fatal: true});
         let oldText: string, newText: string;
         try {oldText = decoder.decode(before); newText = decoder.decode(after);} catch {
@@ -179,11 +187,13 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         if (change.worktree && await git.getConfig({...options, path: 'core.autocrlf'}) === 'true') {
             newText = newText.replace(/\r\n/g, '\n');
         }
+        const text = {before: oldText, after: newText};
+        if (tooLarge) return {...base, patch: '', text};
         // The path is rendered separately, so newline characters cannot alter patch headers.
         const patch = createTwoFilesPatch(change.before ? 'a/file' : '/dev/null', change.after ? 'b/file' : '/dev/null',
             oldText, newText, undefined, undefined, {context: 3, timeout: 1000});
-        return patch === undefined ? {...base, tooLarge: true, patch: ''} :
-            {...base, patch: 'diff --git a/file b/file\n' + patch.replace(/^=+\n/, '')};
+        return patch === undefined ? {...base, tooLarge: true, patch: '', text} :
+            {...base, patch: 'diff --git a/file b/file\n' + patch.replace(/^=+\n/, ''), text};
     };
     const directoryAt = async (path: string) => {
         let directory = root;

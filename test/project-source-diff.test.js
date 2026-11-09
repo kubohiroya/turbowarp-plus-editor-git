@@ -7,7 +7,7 @@ import {test} from 'node:test';
 import React from 'react';
 import ReactDOMServer from 'react-dom/server.js';
 import {createTwoFilesPatch} from 'diff';
-import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceReview} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
+import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceComparison, ProjectSourceReview} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
 
 const project = {
     targets: [
@@ -146,4 +146,42 @@ test('a script split remains one review item spanning both versions', () => {
     assert.equal((html.match(/class="twgit-review-script"/g) ?? []).length, 1);
     assert.match(html, /Reorganized/);
     assert.match(html, /1 → 2/);
+});
+
+const comparison = (before, after, extra = {}) => ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceComparison, {
+    before, after, renderBlock: async () => {}, ...extra
+}));
+
+test('a local comparison groups changed scripts by stage and sprite, as the review does', () => {
+    const base = structuredClone(project);
+    base.targets[1].blocks.move.parent = 'flag';
+    const head = structuredClone(base);
+    head.targets[1].blocks.move.inputs.STEPS[1][1] = '25';
+    const html = comparison(JSON.stringify(base, null, 2), JSON.stringify(head));
+    assert.match(html, /aria-label="Project changes"/);
+    assert.match(html, /Affected stages and sprites<\/dt><dd>1<\/dd>/);
+    assert.match(html, /Script comparisons<\/dt><dd>1<\/dd>/);
+    assert.equal((html.match(/class="twgit-review-script"/g) ?? []).length, 1);
+    assert.match(html, /twgit-review-status">Changed<\/span><strong>When green flag clicked/);
+    assert.doesNotMatch(html, /Reviewed/);
+    assert.match(comparison(JSON.stringify(base), JSON.stringify(head), {locale: 'ja'}), /影響するステージ・スプライト/);
+});
+
+test('a project file added or removed as a whole lists every script on one side', () => {
+    const source = JSON.stringify(project);
+    const added = comparison(null, source);
+    assert.equal((added.match(/twgit-review-status">Added</g) ?? []).length, 3);
+    assert.doesNotMatch(added, /Removed/);
+    const removed = comparison(source, null);
+    assert.equal((removed.match(/twgit-review-status">Removed</g) ?? []).length, 3);
+    assert.match(comparison(null, null), /No changes to the project contents/);
+});
+
+test('unreadable project data explains why and shows the fallback instead', () => {
+    const fallback = React.createElement('pre', null, 'raw text diff');
+    const html = comparison('{"targets": [', JSON.stringify(project), {fallback});
+    assert.match(html, /role="alert"[^>]*>This file could not be read as project data/);
+    assert.match(html, /<pre>raw text diff<\/pre>/);
+    assert.doesNotMatch(html, /twgit-review-script/);
+    assert.match(comparison('{}', JSON.stringify(project)), /role="alert">This project diff could not be read/);
 });

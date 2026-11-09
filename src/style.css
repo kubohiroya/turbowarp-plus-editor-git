@@ -24,3 +24,6 @@
 .twgit-panel > footer { font-size: 11px; padding: 8px 16px; border-top: 1px solid GrayText; }
 .twgit-error { margin: 6px 16px; color: #a11919; padding: 8px; background: #fff0f0; }
 @media (max-width: 700px) { .twgit-content { grid-template-columns: minmax(180px, 42%) minmax(0, 1fr); } .twgit-panel > header { flex-wrap: wrap; } }
+.twgit-view-switch { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 10px; }
+.twgit-review-unreadable { margin: 6px 0; padding: 8px; background: color-mix(in srgb, #d9822b 16%, Canvas); }
+.twgit-review-comparison .twgit-review-overview dl { margin: 4px 0 8px; }
