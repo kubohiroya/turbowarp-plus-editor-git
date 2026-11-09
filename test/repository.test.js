@@ -277,3 +277,52 @@ test('project comparisons read the last commit against the working tree, or a co
     assert.equal(await read({kind: 'commit', commit}, 'after'), '<svg>committed</svg>');
     assert.deepEqual(await gitBytes(root), bytes);
 });
+
+test('reports how the branch stands against its tracking branch from local refs, packed or loose', async t => {
+    const {root, git, write, handle} = await fixture(t);
+    const bare = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-remote-'));
+    t.after(() => fs.rm(bare, {recursive: true, force: true}));
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    const repo = await openRepository(handle);
+    const relation = async () => (await repo.read()).upstream;
+    assert.deepEqual(await relation(), {state: 'unknown', ahead: 0, behind: 0}, 'no origin yet');
+
+    git('remote', 'add', 'origin', bare);
+    git('push', '-q', 'origin', 'main');
+    git('fetch', '-q', 'origin');
+    assert.deepEqual(await relation(), {state: 'same', ahead: 0, behind: 0});
+    const base = git('rev-parse', 'HEAD');
+
+    await write('notes.txt', 'one\n'); git('commit', '-qam', 'one');
+    await write('notes.txt', 'two\n'); git('commit', '-qam', 'two');
+    let bytes = await gitBytes(root);
+    assert.deepEqual(await relation(), {state: 'ahead', ahead: 2, behind: 0});
+    assert.deepEqual(await gitBytes(root), bytes, 'reading the relation never writes Git metadata');
+
+    // The tracking branch moves ahead instead: the local branch is behind.
+    git('push', '-q', 'origin', 'main');
+    git('fetch', '-q', 'origin');
+    git('reset', '-q', '--hard', base);
+    assert.deepEqual(await relation(), {state: 'behind', ahead: 0, behind: 2});
+
+    await write('notes.txt', 'local\n'); git('commit', '-qam', 'local');
+    assert.deepEqual(await relation(), {state: 'diverged', ahead: 1, behind: 2});
+
+    git('pack-refs', '--all');
+    await assert.rejects(fs.access(path.join(root, '.git/refs/remotes/origin/main')), 'the tracking ref is packed');
+    bytes = await gitBytes(root);
+    const packed = await repo.read();
+    assert.deepEqual(packed.upstream, {state: 'diverged', ahead: 1, behind: 2});
+    assert.deepEqual(await gitBytes(root), bytes);
+
+    // A fetch moves the tracking ref, so the probe notices it and a stale snapshot reads as changed.
+    git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+    assert.notEqual(await repo.probe(), packed.probe);
+    await assert.rejects(repo.historyChanges(packed, packed.head), {code: 'changed'});
+    assert.deepEqual(await relation(), {state: 'same', ahead: 0, behind: 0});
+
+    git('checkout', '-q', '--detach');
+    assert.deepEqual(await relation(), {state: 'unknown', ahead: 0, behind: 0}, 'detached HEAD');
+    git('checkout', '-q', '--orphan', 'unborn');
+    assert.deepEqual(await relation(), {state: 'unknown', ahead: 0, behind: 0}, 'unborn branch');
+});

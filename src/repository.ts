@@ -53,7 +53,11 @@ export interface Snapshot {
 }
 export interface UpstreamRelation {
     state: 'same' | 'ahead' | 'behind' | 'diverged' | 'unknown';
-    /** Commits on the local branch that the tracking branch lacks, and the reverse. Zero when unknown. */
+    /**
+     * Commits on the local branch that the tracking branch lacks, and the reverse. Zero when unknown. Counting reads at
+     * most `upstreamWalkLimit` (1000) commits; past that, a side that has commits of its own reports exactly that limit,
+     * meaning "this many or more". The state itself comes from the merge base and stays exact.
+     */
     ahead: number;
     behind: number;
 }
@@ -74,6 +78,9 @@ const textLimit = 1024 * 1024;
 const inScope = (path: string, scope: string) => !scope || path === scope || path.startsWith(scope + '/');
 // Above this many work-tree files, probes only watch Git metadata. Edits then need a manual refresh.
 const probeLimit = 5000;
+/** Most commits read to count how far a branch is ahead of or behind its tracking branch. */
+export const upstreamWalkLimit = 1000;
+const trackingRef = (branchRef: string) => 'refs/remotes/origin/' + branchRef.slice('refs/heads/'.length);
 const sameMetadata = (a: Metadata, b: Metadata) => a.size === b.size && [...a].every(([path, bytes]) => sameBytes(bytes, b.get(path) ?? null));
 
 export async function openRepository(root: FileSystemDirectoryHandle) {
@@ -100,7 +107,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         if (text.startsWith('ref: refs/heads/')) {
             const ref = text.slice(5);
             pathParts(ref);
-            paths.push('/.git/' + ref);
+            paths.push('/.git/' + ref, '/.git/' + trackingRef(ref));
         } else if (!/^[0-9a-f]{40}$/.test(text)) throw new GitPanelError('invalid');
         const result: Metadata = new Map();
         for (const path of paths) {
@@ -135,7 +142,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const paths = ['.git/HEAD', '.git/index', '.git/packed-refs', '.git/shallow', '.git/config'];
         if (head.startsWith('ref: refs/heads/')) {
             try {pathParts(head.slice(5));} catch {return 'locked';}
-            paths.push('.git/' + head.slice(5));
+            paths.push('.git/' + head.slice(5), '.git/' + trackingRef(head.slice(5)));
         }
         const lines: string[] = [];
         for (const path of paths) {
@@ -180,6 +187,60 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }) as {path: string; oid: string; mode: number}[];
         return new Map(result.map(({path, oid, mode}) => [path, {oid, mode}]));
     };
+    /**
+     * Compares `refs/heads/<branch>` with `refs/remotes/origin/<branch>` from local refs only. Counts by painting
+     * commits from both tips in committer-time order until every queued commit is reachable from both, like
+     * `git rev-list --left-right --count`, reading at most `upstreamWalkLimit` commits.
+     */
+    const upstreamRelation = async (branch: string | undefined, head: string | null): Promise<UpstreamRelation> => {
+        const unknown: UpstreamRelation = {state: 'unknown', ahead: 0, behind: 0};
+        if (!branch || !head) return unknown;
+        pathParts(trackingRef('refs/heads/' + branch));
+        try {
+            const remote = await git.resolveRef({...options, ref: trackingRef('refs/heads/' + branch)});
+            if (remote === head) return {state: 'same', ahead: 0, behind: 0};
+            const bases = await git.findMergeBase({...options, cache, oids: [head, remote]}) as string[];
+            const hasAhead = !bases.includes(head), hasBehind = !bases.includes(remote);
+            const local = 1, tracking = 2, both = 3;
+            const flags = new Map<string, number>([[head, local], [remote, tracking]]);
+            const time = async (oid: string) => (await git.readCommit({...options, cache, oid})).commit;
+            const queue: {oid: string; time: number; parents: string[]}[] = [];
+            const enqueue = async (oid: string) => {
+                const commit = await time(oid);
+                queue.push({oid, time: commit.committer.timestamp, parents: commit.parent});
+            };
+            await enqueue(head); await enqueue(remote);
+            let read = 2;
+            let complete = true;
+            while (queue.some(item => flags.get(item.oid) !== both)) {
+                if (read >= upstreamWalkLimit) {complete = false; break;}
+                queue.sort((a, b) => b.time - a.time);
+                const item = queue.shift()!;
+                const flag = flags.get(item.oid)!;
+                for (const parent of item.parents) {
+                    const previous = flags.get(parent) ?? 0;
+                    if ((previous | flag) === previous) continue;
+                    flags.set(parent, previous | flag);
+                    if (!queue.some(entry => entry.oid === parent)) {await enqueue(parent); read++;}
+                }
+            }
+            let ahead = 0, behind = 0;
+            for (const flag of flags.values()) {
+                if (flag === local) ahead++;
+                else if (flag === tracking) behind++;
+            }
+            if (!complete) {
+                ahead = hasAhead ? upstreamWalkLimit : 0;
+                behind = hasBehind ? upstreamWalkLimit : 0;
+            }
+            return {state: hasAhead && hasBehind ? 'diverged' : hasAhead ? 'ahead' : hasBehind ? 'behind' : 'same',
+                ahead: hasAhead ? Math.max(ahead, 1) : 0, behind: hasBehind ? Math.max(behind, 1) : 0};
+        } catch (error) {
+            // No tracking ref yet, or history missing from a shallow clone.
+            if (errorCode(error) === 'NotFoundError') return unknown;
+            throw error;
+        }
+    };
     const assertSnapshot = async (snapshot: Snapshot) => {
         if (!sameMetadata(snapshot.metadata, await metadata())) throw new GitPanelError('changed');
     };
@@ -200,6 +261,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const commits = head ? (await git.log({...options, cache, ref: head, depth: 50})).map(({oid, commit}) => ({
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
+        const upstream = await upstreamRelation(branch || undefined, head);
         const matrix = await git.statusMatrix({...options, cache, refresh: false, filepaths: [scope || '.']});
         const staged = await entries(null, scope);
         const committed = await entries(head || emptyTree, scope);
@@ -221,8 +283,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before, probe: fingerprint,
-            upstream: {state: 'unknown', ahead: 0, behind: 0}};
+        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before, probe: fingerprint, upstream};
     };
     const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
         fs.clearReads();
