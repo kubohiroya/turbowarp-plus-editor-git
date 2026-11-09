@@ -249,6 +249,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             const result = await host.openProject(directory, () => document.defaultView!.confirm(labels.replace));
             if (result === 'cancelled') return {};
         } finally {opening.current = false;}
+        // Loading the project brings its code to the front; keep the panel the person is working in in front of it.
+        if (slot) controller.open(locale);
         if (!alive.current) return {};
         setDirty(host.isProjectDirty());
         setState(previous => ({...previous, project: path, snapshot: null, changes: [], selected: null, diff: null, commit: null}));
