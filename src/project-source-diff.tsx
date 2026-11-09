@@ -9,6 +9,8 @@ import './project-source-diff.css';
 
 export {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
 export {ProjectSourceComparison, ProjectSourceReview} from './project-source-review.js';
+export {ProjectComparisonDialog, openProjectComparison} from './project-comparison.js';
+export type {ProjectComparisonAction, ProjectComparisonDialogProps, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
 export type {ProjectSourceComparisonProps, ProjectSourceReviewFile, ProjectSourceReviewProps} from './project-source-review.js';
 
 export {createScratchBlocksDiffLocator} from './block-diff-location.js';
