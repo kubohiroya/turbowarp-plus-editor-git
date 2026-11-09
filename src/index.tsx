@@ -189,7 +189,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         let checking = false;
         const check = async () => {
             const {snapshot} = current.current;
-            if (stopped || checking || running.current || document.visibilityState === 'hidden' ||
+            // A tab behind another one has no boxes; it reads again when it is shown.
+            const hidden = !dialog.current || !dialog.current.getClientRects().length;
+            if (stopped || checking || running.current || document.visibilityState === 'hidden' || hidden ||
                 !snapshot || current.current.repository !== repository) return;
             checking = true;
             try {
@@ -423,7 +425,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             </div>}
     </>;
     // In a tab the Editor stays usable beside the panel, so there is no backdrop, focus trap or Escape to close.
-    if (slot) return createPortal(<div className="twgit-panel twgit-panel-tab" role="region" aria-label={labels.title}>{content}</div>,
+    if (slot) return createPortal(<div className="twgit-panel twgit-panel-tab" ref={dialog} role="region" aria-label={labels.title}>{content}</div>,
         slot.element);
     return <div className="twgit-backdrop">
         <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
