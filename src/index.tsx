@@ -287,17 +287,26 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
             <div className="twgit-context">
                 <span>{labels.repository} · {state.repository?.root.name || '—'}</span>
                 <span>{labels.project} · {state.project === null ? labels.none : state.project || labels.root}</span>
-                <strong>{state.snapshot?.branch || (state.snapshot?.head ? labels.detached : labels.unborn)}</strong>
-                <code>{state.snapshot?.head?.slice(0, 12)}</code>
                 <span data-git-dirty="">{dirty ? labels.dirty : labels.saved}</span>
+                {state.snapshot && <span data-git-upstream={state.snapshot.upstream.state} title={labels.checkedAt}>{upstreamText(state.snapshot, labels)}</span>}
+                {!review && host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
+                    runOperation={host.connectionSettings.getSession ? remoteOperation : undefined}
+                    readOrigin={state.repository && !state.busy ? async () => {
+                        const ticket = epoch.current;
+                        const remote = await state.repository!.readOrigin();
+                        return epoch.current === ticket ? remote : undefined;
+                    } : undefined}/>}
+                {state.snapshot && <details className="twgit-git-details">
+                    <summary>{labels.details}</summary>
+                    <div className="twgit-connection-body">
+                        <p>{labels.branch} · <strong>{state.snapshot.branch || (state.snapshot.head ? labels.detached : labels.unborn)}</strong></p>
+                        <p>{labels.head} · <code>{state.snapshot.head?.slice(0, 12) ?? '—'}</code></p>
+                        <p>{labels.branches} · {state.snapshot.branches.join(', ') || '—'}</p>
+                        <p>{labels.groups} · {labels.gitStaged} = {labels.staged} / {labels.gitUnstaged} = {labels.unstaged} / {labels.gitUntracked} = {labels.untracked}</p>
+                        <p>{labels.permissions}</p>
+                    </div>
+                </details>}
             </div>
-            {!review && host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
-                runOperation={host.connectionSettings.getSession ? remoteOperation : undefined}
-                readOrigin={state.repository && !state.busy ? async () => {
-                    const ticket = epoch.current;
-                    const remote = await state.repository!.readOrigin();
-                    return epoch.current === ticket ? remote : undefined;
-                } : undefined}/>}
             {state.error && <p className="twgit-error" role="alert">{state.error}</p>}
             {state.notice && <p className="twgit-context" role="status">{state.notice}</p>}
             {state.busy && <p role="status">{labels.loading}</p>}
@@ -323,7 +332,7 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                             <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}>
                                 <button className="twgit-file" data-git-group={group} disabled={state.busy}
                                     aria-pressed={state.selected === change} onClick={() => openFile(change)}>
-                                    <span>{!change.after ? 'D' : !change.before ? 'A' : 'M'}</span> {change.path}
+                                    <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small> {change.path}
                                 </button>
                             </li>)}</ul>
                         </section>);
@@ -332,12 +341,11 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                             fileListOpen={fileListOpen} setFileListOpen={setFileListOpen}/> : fileList;
                     })()}
                     {!state.changes.length && <p>{labels.clean}</p>}
-                    <details><summary>{labels.branches}</summary><ul>{state.snapshot?.branches.map(branch => <li key={branch}>{branch}</li>)}</ul></details>
                     <h3>{labels.history}</h3>
                     <ol className="twgit-history">{state.snapshot?.commits.map(commit => <li key={commit.oid}>
                         <button disabled={state.busy} aria-pressed={state.commit === commit.oid} title={commit.oid}
                             onClick={() => void selectCommit(commit.oid)}>{commit.message.split('\n')[0]}</button>
-                        <small><code>{commit.oid.slice(0, 8)}</code> · {commit.author} · {new Date(commit.timestamp * 1000).toLocaleString(locale)}</small>
+                        <small>{commit.author} · {new Date(commit.timestamp * 1000).toLocaleString(locale)}</small>
                     </li>)}</ol>
                 </aside>
                 <main className="twgit-diff">
@@ -347,9 +355,19 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                             renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> : <p>{labels.select}</p>}
                 </main>
             </div>}
-            <footer>{labels.permissions}</footer>
         </div>
     </div>;
+}
+
+/** The GitHub relation in plain words, with the number of records where it helps. */
+function upstreamText({upstream}: Snapshot, labels: ReturnType<typeof labelsFor>) {
+    switch (upstream.state) {
+    case 'same': return labels.upstreamSame;
+    case 'ahead': return `${labels.upstreamAhead} · ${upstream.ahead} ${labels.records}`;
+    case 'behind': return `${labels.upstreamBehind} · ${upstream.behind} ${labels.records}`;
+    case 'diverged': return `${labels.upstreamDiverged} · +${upstream.ahead} / −${upstream.behind}`;
+    default: return labels.upstreamUnknown;
+    }
 }
 
 export function mountGitPanel({vm, document, host}: {vm: object; document: Document; host: GitHost}) {

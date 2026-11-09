@@ -23,8 +23,10 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, loadAss
     const names = locale.startsWith('ja') ? ja : en;
     const parsed = diff?.patch ? parseDiff(diff.patch)[0] : null;
     const text = <>
-        <p>{labels.mode} · {change.oldMode?.toString(8) || '—'} → {change.newMode?.toString(8) || '—'}</p>
-        {diff && <p>{diff.beforeSize} → {diff.afterSize} {labels.bytes}</p>}
+        <details className="twgit-file-details"><summary>{labels.details}</summary>
+            <p>{labels.mode} · {change.oldMode?.toString(8) || '—'} → {change.newMode?.toString(8) || '—'}</p>
+            {diff && <p>{diff.beforeSize} → {diff.afterSize} {labels.bytes}</p>}
+        </details>
         {diff?.binary && <p>{labels.binary}</p>}
         {diff?.tooLarge && <p>{labels.large}</p>}
         {parsed && <Diff viewType="unified" diffType={parsed.type} hunks={parsed.hunks}>

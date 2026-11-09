@@ -8,14 +8,24 @@
 .twgit-panel button:focus-visible, .twgit-panel summary:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
 .twgit-panel button[aria-pressed="true"] { color: HighlightText; background: Highlight; }
 .twgit-context { display: flex; gap: 8px 20px; flex-wrap: wrap; padding: 8px 16px; }
-.twgit-connection { margin: 0 16px 8px; max-height: 45%; overflow: auto; }
+.twgit-context { align-items: center; }
+.twgit-connection, .twgit-git-details { position: relative; }
+.twgit-connection > summary, .twgit-git-details > summary { cursor: pointer; }
+/* Settings and Git details open over the list, so the list and the diff stay where they are. */
+.twgit-connection-body { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; width: min(440px, 80vw); max-height: 60vh;
+    overflow: auto; padding: 10px 12px; background: Canvas; color: CanvasText; border: 1px solid GrayText; border-radius: 6px;
+    box-shadow: 0 8px 24px #0004; }
+.twgit-connection-body > p { margin: 4px 0; overflow-wrap: anywhere; }
+.twgit-sync { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.twgit-change-kind { display: inline-block; min-width: 2.6em; font-size: 11px; opacity: .8; }
+.twgit-file-details { font-size: 12px; margin-bottom: 6px; }
+.twgit-file-details > p { margin: 2px 0; }
 .twgit-content { display: grid; grid-template-columns: minmax(230px, 30%) minmax(0, 1fr); flex: 1; min-height: 0; }
 .twgit-panel aside { padding: 0 14px 14px; overflow: auto; border-right: 1px solid GrayText; }
 .twgit-panel aside ul { list-style: none; padding: 0; margin: 4px 0; }
 .twgit-panel aside li { overflow-wrap: anywhere; }
 .twgit-panel summary { cursor: pointer; }
 .twgit-panel .twgit-file { width: 100%; border: 0; margin: 1px 0; }
-.twgit-file span { display: inline-block; width: 1.4em; font-family: monospace; }
 .twgit-diff { padding: 0 16px 16px; min-width: 0; overflow: auto; }
 .twgit-diff .diff { font-size: 12px; }
 .twgit-history { list-style: none; margin: 0; padding: 0; }
