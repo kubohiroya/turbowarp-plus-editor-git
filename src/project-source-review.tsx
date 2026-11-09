@@ -5,6 +5,7 @@ import type {BlockSide} from './project-source-patch.js';
 import {compareProjectForReview} from './project-source-review-model.js';
 import type {ScriptReview} from './project-source-review-model.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ProjectAssetLoader} from './project-assets.js';
 
 type Comparison = ReturnType<typeof compareProjectForReview>;
 
@@ -13,7 +14,7 @@ export type ProjectSourceReviewFile = {
     summary?: string;
     previousPath?: string;
     unavailable?: boolean;
-} & ({patch: string; beforeSource?: string} | {status: 'added' | 'removed' | 'updated'});
+} & ({patch: string; beforeSource?: string; loadAsset?: ProjectAssetLoader} | {status: 'added' | 'removed' | 'updated'});
 
 export interface ProjectSourceReviewProps {
     title: string;
@@ -69,9 +70,9 @@ function scriptTitle(side: BlockSide, labels: typeof ja) {
     return typeof block.opcode === 'string' ? block.opcode : labels.script;
 }
 
-function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock}: {
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset}: {
     script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
-    renderBlock: ProjectBlockRenderer;
+    renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
 }) {
     const [open, setOpen] = useState(false);
     const status = !script.before.length ? 'added' : !script.after.length ? 'removed' :
@@ -106,8 +107,8 @@ function propertyNames(keys: readonly string[], labels: typeof ja) {
 }
 
 /** Lists the changed stages and sprites of one project file, each with its script comparisons. */
-function ComparisonTargets({comparison, labels, renderBlock, review}: {
-    comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer;
+function ComparisonTargets({comparison, labels, renderBlock, loadAsset, review}: {
+    comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
     review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void};
 }) {
     return <>
@@ -118,7 +119,7 @@ function ComparisonTargets({comparison, labels, renderBlock, review}: {
             {target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
             {target.scripts.map(script => {
                 const key = JSON.stringify([review?.file, target.isStage, target.name, script.id]);
-                return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock}
+                return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
                     reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}/>;
             })}
         </section>)}
@@ -136,10 +137,12 @@ export interface ProjectSourceComparisonProps {
     locale?: string;
     /** Shown after an explanation when either version cannot be read as a project. Without it, only an error is shown. */
     fallback?: React.ReactNode;
+    /** Reads the images of both versions for thumbnails. Without it, stages and sprites are shown by name. */
+    loadAsset?: ProjectAssetLoader;
 }
 
 /** Compares two versions of a project.source.json by stage, sprite and script, as the pull request review does. */
-export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback}: ProjectSourceComparisonProps) {
+export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, loadAsset}: ProjectSourceComparisonProps) {
     const labels = locale.startsWith('ja') ? ja : en;
     const comparison = useMemo(() => {
         try {
@@ -157,7 +160,7 @@ export function ProjectSourceComparison({before, after, renderBlock, locale = 'e
                 <div><dt>{labels.scripts}</dt><dd>{countScripts(comparison)}</dd></div>
             </dl>
         </header>
-        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}/>
+        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}/>
     </section>;
 }
 
@@ -211,6 +214,7 @@ export function ProjectSourceReview({title, description, verification, files, re
             {'status' in file && <p>{labels.related} · {labels[file.status]}</p>}
             {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
             {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
+                loadAsset={'loadAsset' in file ? file.loadAsset : undefined}
                 review={{file: file.path, keys: reviewed, set: setReviewed}}/>}
         </section>)}
     </section>;

@@ -15,6 +15,8 @@ export {createScratchBlocksDiffLocator} from './block-diff-location.js';
 export type {ProjectBlockLocation, ProjectBlockLocator, ScratchBlockLocationWorkspace} from './block-diff-location.js';
 export type {BlockPart} from './project-source-patch.js';
 export {createProjectSourceDiff} from './project-source-patch.js';
+export {currentCostume} from './project-assets.js';
+export type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ProjectBlockRenderer, ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
 
