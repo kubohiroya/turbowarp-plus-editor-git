@@ -9,6 +9,7 @@ import ReactDOMServer from 'react-dom/server.js';
 import {createTwoFilesPatch} from 'diff';
 import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceComparison, ProjectSourceReview,
     createPreviewSync, currentCostume} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
+import {createEditorBlockLocator} from '../dist/index.js';
 
 const project = {
     targets: [
@@ -106,6 +107,63 @@ test('the locator centers a matching block and releases its markers when the req
     assert.deepEqual(centered, ['move']);
 });
 
+test('the Editor locator opens the matching sprite, waits for its block and outlines it until cancelled', async () => {
+    const root = {classList: new Set()};
+    root.classList.remove = name => root.classList.delete(name);
+    const blocks = new Map();
+    const centered = [], opened = [];
+    const workspace = {getBlockById: id => blocks.get(id) ?? null, centerOnBlock: id => centered.push(id)};
+    const sprite = (id, name, isOriginal) => ({id, isStage: false, isOriginal, getName: () => name});
+    const vm = {
+        runtime: {targets: [{id: 'stage', isStage: true, getName: () => 'Stage'}, sprite('clone', 'Cat', false), sprite('cat', 'Cat')]},
+        editingTarget: {id: 'stage'}
+    };
+    let reads = 0, appearAfter = 0;
+    const locate = createEditorBlockLocator({
+        vm,
+        openTargetCode: id => {opened.push(id); vm.editingTarget = {id};},
+        // Like the Editor, the sprite's blocks appear some frames after its code is opened.
+        getWorkspace: () => {
+            if (++reads >= appearAfter) blocks.set('move', {type: 'motion_movesteps', getSvgRoot: () => root});
+            return workspace;
+        }
+    });
+    const location = {target: updated.targets[1], id: 'move', version: 'after', parts: []};
+
+    const first = new AbortController();
+    assert.equal(await locate({...location, signal: first.signal}), true);
+    assert.deepEqual(opened, ['cat']);
+    assert.deepEqual(centered, ['move']);
+    assert.ok(root.classList.has('twgit-changed-block'));
+    first.abort();
+    assert.equal(root.classList.size, 0);
+
+    blocks.clear();
+    reads = 0;
+    appearAfter = 4;
+    assert.equal(await locate({...location, signal: new AbortController().signal}), true);
+    assert.equal(reads, 4);
+    assert.deepEqual(centered, ['move', 'move']);
+
+    assert.equal(await locate({...location, target: {...updated.targets[1], name: 'Dog'}, signal: new AbortController().signal}), false);
+    assert.deepEqual(opened, ['cat', 'cat']);
+
+    // Cancelled while the Editor is still opening the code: no outline is left.
+    root.classList.clear();
+    blocks.clear();
+    reads = 0;
+    appearAfter = Infinity;
+    const waiting = new AbortController();
+    const pending = locate({...location, signal: waiting.signal});
+    setTimeout(() => {
+        blocks.set('move', {type: 'motion_movesteps', getSvgRoot: () => root});
+        waiting.abort();
+    }, 40);
+    assert.equal(await pending, false);
+    assert.equal(root.classList.size, 0);
+    assert.deepEqual(centered, ['move', 'move']);
+});
+
 const review = (base, head) => ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceReview, {
     title: 'Start the round together',
     description: 'Use one start signal for the stage and sprites.',
@@ -199,6 +257,13 @@ test('a local comparison groups changed scripts by stage and sprite, as the revi
     assert.match(html, /twgit-review-status">Changed<\/span><strong>When green flag clicked/);
     assert.doesNotMatch(html, /Reviewed/);
     assert.match(comparison(JSON.stringify(base), JSON.stringify(head), {locale: 'ja'}), /影響するステージ・スプライト/);
+});
+
+test('a comparison offers no "Highlight in Editor" without a locator', () => {
+    const head = structuredClone(project);
+    head.targets[1].blocks.move.inputs.STEPS[1][1] = '25';
+    assert.doesNotMatch(comparison(JSON.stringify(project), JSON.stringify(head)), /Highlight in Editor/);
+    assert.doesNotMatch(comparison(JSON.stringify(project), JSON.stringify(head), {locale: 'ja'}), /編集画面で強調/);
 });
 
 test('a project file added or removed as a whole lists every script on one side', () => {
