@@ -1,5 +1,5 @@
 import React, {useMemo, useState} from 'react';
-import {BlockPreview} from './block-diff-preview.js';
+import {BlockPreview, usePreviewSync} from './block-diff-preview.js';
 import {isRecord, parseProjectSource, readProjectSourceDiff} from './project-source-patch.js';
 import type {BlockSide} from './project-source-patch.js';
 import {compareProjectForReview} from './project-source-review-model.js';
@@ -75,6 +75,7 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
     renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
 }) {
     const [open, setOpen] = useState(false);
+    const {sync, toggle} = usePreviewSync(labels === ja ? 'ja' : 'en');
     const status = !script.before.length ? 'added' : !script.after.length ? 'removed' :
         script.before.length !== 1 || script.after.length !== 1 ? 'reorganized' : 'updated';
     const beforeTitle = script.before[0] && scriptTitle(script.before[0], labels);
@@ -92,10 +93,12 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
                 {(['before', 'after'] as const).map(version => <div key={version}>
                     {script[version].length ? script[version].map((side, index, sides) => <BlockPreview key={side.id} side={side}
                         title={sides.length > 1 ? `${labels[version]} ${index + 1}` : labels[version]}
-                        marks={side.marks} renderBlock={renderBlock} withContext labels={labels}/>) :
+                        marks={side.marks} renderBlock={renderBlock} withContext labels={labels}
+                        version={version} loadAsset={loadAsset} sync={sync}/>) :
                         <BlockPreview title={labels[version]} renderBlock={renderBlock} withContext labels={labels}/>}
                 </div>)}
             </div>
+            {toggle}
             {setReviewed && <label className="twgit-review-checked"><input type="checkbox" checked={reviewed}
                 onChange={event => setReviewed(event.currentTarget.checked)}/> {labels.reviewed}</label>}
         </>}

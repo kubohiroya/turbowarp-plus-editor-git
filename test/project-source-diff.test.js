@@ -7,7 +7,8 @@ import {test} from 'node:test';
 import React from 'react';
 import ReactDOMServer from 'react-dom/server.js';
 import {createTwoFilesPatch} from 'diff';
-import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceComparison, ProjectSourceReview} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
+import {createProjectSourceDiff, ProjectSourceBlockDiff, createScratchBlocksDiffLocator, ProjectSourceComparison, ProjectSourceReview,
+    createPreviewSync} from '@kubohiroya/turbowarp-plus-editor-git/project-source-diff';
 
 const project = {
     targets: [
@@ -146,6 +147,37 @@ test('a script split remains one review item spanning both versions', () => {
     assert.equal((html.match(/class="twgit-review-script"/g) ?? []).length, 1);
     assert.match(html, /Reorganized/);
     assert.match(html, /1 → 2/);
+});
+
+test('linked previews share the zoom and height that fit both versions, and follow each other until unlinked', () => {
+    const view = (scale, height) => {
+        const calls = [];
+        let current = {scale, x: 0, y: 0};
+        const listeners = new Set();
+        return {calls, fit: {scale, height},
+            layout(fit) {calls.push(['layout', fit.scale, fit.height]); current = {scale: fit.scale, x: 16, y: 16};},
+            viewport: () => current,
+            setViewport(next) {calls.push(['viewport', next.scale, next.x, next.y]); current = next;},
+            onChange(listener) {listeners.add(listener); return () => listeners.delete(listener);},
+            move(next) {current = next; for (const listener of listeners) listener();}};
+    };
+    const sync = createPreviewSync();
+    const before = view(0.675, 160), after = view(0.4, 300);
+    sync.add(before);
+    const leave = sync.add(after);
+    assert.deepEqual(before.calls.at(-1), ['layout', 0.4, 300]);
+    assert.deepEqual(after.calls.at(-1), ['layout', 0.4, 300]);
+    after.move({scale: 0.8, x: -40, y: -90});
+    assert.deepEqual(before.calls.at(-1), ['viewport', 0.8, -40, -90]);
+    assert.equal(after.calls.filter(([kind]) => kind === 'viewport').length, 0);
+    sync.setLinked(false);
+    before.move({scale: 1, x: 0, y: 0});
+    assert.deepEqual(after.calls.at(-1), ['layout', 0.4, 300]);
+    sync.setLinked(true);
+    assert.deepEqual(after.calls.at(-1), ['layout', 0.4, 300]);
+    leave();
+    before.move({scale: 0.5, x: 1, y: 2});
+    assert.equal(after.calls.filter(([kind]) => kind === 'viewport').length, 0);
 });
 
 const comparison = (before, after, extra = {}) => ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceComparison, {

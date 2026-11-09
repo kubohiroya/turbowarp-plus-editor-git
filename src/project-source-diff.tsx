@@ -3,7 +3,7 @@ import {compareProjectBlocks, readProjectSourceDiff} from './project-source-patc
 import type {BlockChange} from './project-source-patch.js';
 import type {ProjectBlockLocator} from './block-diff-location.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
-import {BlockPreview} from './block-diff-preview.js';
+import {BlockPreview, usePreviewSync} from './block-diff-preview.js';
 import type {LocationStatus} from './block-diff-preview.js';
 import './project-source-diff.css';
 
@@ -18,7 +18,10 @@ export {createProjectSourceDiff} from './project-source-patch.js';
 export {currentCostume} from './project-assets.js';
 export type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
-export type {ProjectBlockRenderer, ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
+export type {BlockPreviewView, BlockPreviewViewport, ProjectBlockRenderer, ProjectBlockRendering, ScratchBlockDiffRendererOptions,
+    ScratchBlocksPort} from './scratch-block-diff-renderer.js';
+export {createPreviewSync} from './block-diff-preview.js';
+export type {PreviewSync} from './block-diff-preview.js';
 
 const en = {
     title: 'Block changes', before: 'Before', after: 'After', added: 'Added', removed: 'Removed', updated: 'Changed',
@@ -68,6 +71,7 @@ function ChangeCard({change, renderBlock, labels, onLocate, location}: {
     onLocate?: (version: Version) => void; location?: {version: Version; status: LocationStatus};
 }) {
     const [withContext, setWithContext] = useState(false);
+    const {sync, toggle} = usePreviewSync(labels === en ? 'en' : 'ja');
     const notes = [...new Set(change.fields.map(field => labels[propertyLabels.get(field) ?? 'properties']))];
     const name = (change.after ?? change.before)!.target.name;
     return <article className={`twgit-block-diff-card twgit-block-diff-${change.kind}`}>
@@ -79,9 +83,10 @@ function ChangeCard({change, renderBlock, labels, onLocate, location}: {
         <div className="twgit-block-diff-sides">
             {(['before', 'after'] as const).map(version => <BlockPreview key={version} side={change[version]} title={labels[version]}
                 renderBlock={renderBlock} withContext={withContext} labels={labels} parts={change.parts}
-                onLocate={onLocate && (() => onLocate(version))}
+                onLocate={onLocate && (() => onLocate(version))} version={version} sync={sync}
                 locationStatus={location?.version === version ? location.status : undefined}/>)}
         </div>
+        {toggle}
         <label><input type="checkbox" checked={withContext} onChange={event => setWithContext(event.currentTarget.checked)}/> {labels.context}</label>
     </article>;
 }

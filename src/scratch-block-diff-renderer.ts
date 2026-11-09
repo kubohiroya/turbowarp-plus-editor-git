@@ -6,12 +6,25 @@ import type {DiffSvgBlock} from './block-diff-location.js';
 interface BlockWorkspace {
     dispose(): void;
     markFocused(): void;
-    getBlocksBoundingBox(): {width: number; height: number};
+    getBlocksBoundingBox(): {x?: number; y?: number; width: number; height: number};
     getBlockById(id: string): DiffSvgBlock | null;
-    options?: {pathToMedia?: string};
+    options?: {pathToMedia?: string; zoomOptions?: {startScale?: number}};
+    scale?: number;
+    scrollX?: number;
+    scrollY?: number;
+    translate?(x: number, y: number): void;
+    getMetrics?(): {absoluteLeft?: number; absoluteTop?: number} | null;
+    scrollbar?: {resize(): void} | null;
+}
+interface InjectOptions {
+    readOnly: true;
+    sounds: false;
+    media?: string;
+    scrollbars?: boolean;
+    zoom?: {controls: boolean; wheel: boolean; startScale: number; maxScale: number; minScale: number; scaleSpeed: number};
 }
 export interface ScratchBlocksPort {
-    inject(container: HTMLElement, options: {readOnly: true; sounds: false; media?: string}): BlockWorkspace;
+    inject(container: HTMLElement, options: InjectOptions): BlockWorkspace;
     svgResize(workspace: BlockWorkspace): void;
     getMainWorkspace(): BlockWorkspace | null;
     mainWorkspace: BlockWorkspace | null;
@@ -30,6 +43,12 @@ export interface ScratchBlockDiffRendererOptions {
         createBlock(block: {id: string}, deferProjectChanged: true): void;
         blockToXML(id: string): string | undefined;
     };
+    /**
+     * Adds the host's workspace navigation to each preview, as in its own code area: for example the costume
+     * thumbnail, a minimap and a row of zoom buttons in the lower right. `watermark` holds the costume thumbnail when
+     * the version has one; the host positions it. Without this option, previews keep Scratch Blocks' zoom buttons.
+     */
+    attachNavigation?(workspace: unknown, blockly: ScratchBlocksPort, watermark?: HTMLElement): {dispose(): void} | null | undefined;
 }
 export interface ScriptBlockMark {
     id: string;
@@ -37,9 +56,25 @@ export interface ScriptBlockMark {
     parts: readonly BlockPart[];
 }
 
+/** Position and zoom of one preview, in Scratch Blocks workspace terms. */
+export interface BlockPreviewViewport {scale: number; x: number; y: number}
+/** Lets several previews of one comparison share their zoom, scroll position and height. */
+export interface BlockPreviewView {
+    /** The zoom and frame height at which this preview shows all of its blocks. */
+    readonly fit: {scale: number; height: number};
+    /** Applies a zoom and frame height, scrolling to the start of the blocks. */
+    layout(fit: {scale: number; height: number}): void;
+    viewport(): BlockPreviewViewport;
+    setViewport(viewport: BlockPreviewViewport): void;
+    /** Calls `listener` after the user scrolls or zooms this preview. */
+    onChange(listener: () => void): () => void;
+}
+export type ProjectBlockRendering = (() => void) | {dispose(): void; view?: BlockPreviewView} | undefined;
 export type ProjectBlockRenderer = (args: BlockSide & {
     container: HTMLElement; withContext: boolean; parts?: readonly BlockPart[]; marks?: readonly ScriptBlockMark[]; signal: AbortSignal;
-}) => Promise<(() => void) | undefined>;
+    /** The costume thumbnail element of this version, placed in the preview's lower right by the host navigation. */
+    watermark?: HTMLElement;
+}) => Promise<ProjectBlockRendering>;
 
 function scriptRoot({target, id}: BlockSide): string {
     const visited = new Set<string>();
@@ -136,9 +171,81 @@ function placeholderDefinition(element: Element, opcode: string, type: string, b
     return definition;
 }
 
+// Scratch Blocks' scale for the code area, which keeps the blocks the size people edit them at.
+const defaultScale = 0.675;
+const padding = 16;
+const minHeight = 160;
+const maxHeight = 420;
+
+/**
+ * Sizes a preview frame to its blocks and reports scrolling and zooming, so both versions can move together.
+ * The frame keeps a gutter on the right for the zoom buttons, and for the minimap and thumbnail when present.
+ */
+function createView(workspace: BlockWorkspace, blockly: ScratchBlocksPort, surface: HTMLElement, frame: HTMLElement,
+    startScale: number, navigation: boolean) {
+    const bounds = workspace.getBlocksBoundingBox();
+    const left = bounds.x ?? 0, top = bounds.y ?? 0;
+    const gutter = navigation ? 150 : 56;
+    const width = frame.clientWidth || 400;
+    const scale = Math.max(0.25, Math.min(startScale, (width - padding - gutter) / Math.max(1, bounds.width),
+        (maxHeight - 2 * padding) / Math.max(1, bounds.height)));
+    const fit = {scale, height: Math.min(maxHeight, Math.max(minHeight, Math.ceil(bounds.height * scale + 2 * padding)))};
+    const listeners = new Set<() => void>();
+    const translate = workspace.translate?.bind(workspace);
+    let quiet = false;
+    // Scrolling, dragging and every zoom end in translate, which moves the canvas.
+    if (translate) workspace.translate = (x, y) => {
+        translate(x, y);
+        if (!quiet) for (const listener of listeners) listener();
+    };
+    const setViewport = ({scale, x, y}: BlockPreviewViewport) => {
+        if (!translate) return;
+        quiet = true;
+        try {
+            // setScale would also close menus in the Editor's own workspace.
+            workspace.scale = scale;
+            workspace.scrollX = x;
+            workspace.scrollY = y;
+            const metrics = workspace.getMetrics?.();
+            translate(x + (metrics?.absoluteLeft ?? 0), y + (metrics?.absoluteTop ?? 0));
+            workspace.scrollbar?.resize();
+        } finally {
+            quiet = false;
+        }
+    };
+    const layout = ({scale, height}: {scale: number; height: number}) => {
+        // The frame takes the height, so people can still drag its resize handle afterwards.
+        frame.style.height = height + 'px';
+        blockly.svgResize(workspace);
+        setViewport({scale, x: padding - left * scale, y: padding - top * scale});
+    };
+    layout(fit);
+    // Keep the drawing area matched to the frame when the panel or the frame is resized.
+    const resize = new (surface.ownerDocument.defaultView ?? globalThis).ResizeObserver(() => blockly.svgResize(workspace));
+    resize.observe(surface);
+    // A plain wheel scrolls the review; Ctrl and trackpad pinches still zoom the preview.
+    const wheel = (event: WheelEvent) => {if (!event.ctrlKey) event.stopPropagation();};
+    surface.addEventListener('wheel', wheel, {capture: true});
+    const api: BlockPreviewView = {
+        fit, layout, setViewport,
+        viewport: () => ({scale: workspace.scale ?? fit.scale, x: workspace.scrollX ?? 0, y: workspace.scrollY ?? 0}),
+        onChange(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        }
+    };
+    return {api, dispose() {
+        frame.style.removeProperty('height');
+        listeners.clear();
+        resize.disconnect();
+        surface.removeEventListener('wheel', wheel, {capture: true});
+        if (translate) workspace.translate = translate;
+    }};
+}
+
 /** Use the host's Scratch VM serializer and Scratch Blocks definitions in an isolated workspace. */
 export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendererOptions): ProjectBlockRenderer {
-    return async ({container, target, id, withContext, parts = [], marks, signal}) => {
+    return async ({container, target, id, withContext, parts = [], marks, signal, watermark}) => {
         const blockly = await options.getBlockly();
         if (signal.aborted) return;
         const root = withContext ? scriptRoot({target, id}) : id;
@@ -157,11 +264,16 @@ export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendere
         surface.className = 'twgit-block-diff-surface';
         container.append(surface);
         let workspace: BlockWorkspace | undefined;
+        let view!: ReturnType<typeof createView>;
+        let navigation: {dispose(): void} | null | undefined;
+        const cleanups: (() => void)[] = [];
         const placeholders: string[] = [];
         const dispose = () => {
             const active = blockly.getMainWorkspace();
+            for (const cleanup of cleanups.splice(0)) cleanup();
             blockly.Events.disable();
             try {
+                navigation?.dispose();
                 workspace?.dispose();
             } finally {
                 if (active === workspace) blockly.mainWorkspace = main;
@@ -183,7 +295,9 @@ export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendere
                     options.locale ?? container.ownerDocument.documentElement.lang)]);
                 element.setAttribute('type', alias);
             }
-            workspace = blockly.inject(surface, {readOnly: true, sounds: false, media: main?.options?.pathToMedia});
+            const startScale = main?.options?.zoomOptions?.startScale ?? defaultScale;
+            workspace = blockly.inject(surface, {readOnly: true, sounds: false, media: main?.options?.pathToMedia, scrollbars: true,
+                zoom: {controls: true, wheel: true, startScale, maxScale: 4, minScale: 0.25, scaleSpeed: 1.2}});
             workspace.markFocused = () => {};
             blockly.Xml.domToWorkspace(dom, workspace);
             if (marks) {
@@ -197,10 +311,14 @@ export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendere
                 const changed = workspace.getBlockById(id === root ? serializedRoot : id);
                 if (changed) markBlockLocation(changed, parts);
             }
-            const bounds = workspace.getBlocksBoundingBox();
-            surface.style.width = Math.max(100, Math.ceil(bounds.width) + 48) + 'px';
-            surface.style.height = Math.max(64, Math.ceil(bounds.height) + 48) + 'px';
-            blockly.svgResize(workspace);
+            view = createView(workspace, blockly, surface, container, startScale, !!options.attachNavigation);
+            cleanups.push(view.dispose);
+            navigation = options.attachNavigation?.(workspace, blockly, watermark);
+            if (navigation && watermark) {
+                // The host now positions the thumbnail beside its minimap.
+                watermark.dataset.navigation = '';
+                cleanups.push(() => delete watermark.dataset.navigation);
+            }
         } catch (error) {
             dispose();
             throw error;
@@ -208,6 +326,6 @@ export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendere
             blockly.mainWorkspace = main;
             blockly.Events.enable();
         }
-        return dispose;
+        return {dispose, view: view.api};
     };
 }

@@ -22,8 +22,26 @@
 .twgit-block-diff-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .twgit-block-diff-side { padding: 10px 14px; min-width: 0; }
 .twgit-block-diff-side + .twgit-block-diff-side { border-inline-start: 1px solid color-mix(in srgb, CanvasText 20%, Canvas); }
-.twgit-block-diff-preview { overflow: auto; max-height: 420px; }
-.twgit-block-diff-surface { position: relative; min-width: 100%; height: 64px; }
+/* A preview is a small workspace: it scrolls and zooms inside its frame, which people can make taller. */
+.twgit-block-diff-preview {
+    position: relative;
+    overflow: hidden;
+    resize: vertical;
+    min-height: 120px;
+    max-height: 85vh;
+    border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas);
+    border-radius: 6px;
+}
+.twgit-block-diff-surface { position: absolute; inset: 0; }
+.twgit-block-diff-watermark { position: absolute; z-index: 2; top: 10px; right: 12px; pointer-events: none; }
+.twgit-block-diff-watermark[data-navigation] { top: auto; right: var(--plus-watermark-right, 12px); bottom: var(--plus-watermark-bottom, 140px); }
+.twgit-block-diff-watermark > img {
+    display: block;
+    max-width: var(--plus-watermark-size, 48px);
+    max-height: var(--plus-watermark-size, 48px);
+    opacity: .6;
+}
+.twgit-block-diff-link { display: block; padding: 6px 12px 0; }
 /* These markers also apply to the live Editor workspace returned by the host. */
 .twgit-changed-block > .blocklyPath { stroke: var(--twgit-change, #635bce); stroke-width: 2.5px; }
 .twgit-changed-block-part { outline: 2.5px solid #b4510a; outline-offset: 2px; }

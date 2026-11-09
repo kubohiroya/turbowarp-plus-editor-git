@@ -71,6 +71,12 @@ const diffFile = new Blob([patch], {type: 'text/x-diff'});
 
 ロケーターは一致したブロックを中央に移動し、差分ビューと同じ入力欄やフィールドを強調します。別の差分の選択・差分ファイルの切り替え・ビューの終了で強調を解除します。
 
+### 表示枠
+
+変更前・変更後の各枠は読み取り専用の作業領域です。Editor のコードエリアと同じ倍率でブロックを描き、枠の高さをブロックに合わせます（160〜420 px。枠の右下をドラッグすると高くできます）。ドラッグとスクロールバーで動かし、拡大縮小ボタンと Ctrl＋ホイール（トラックパッドのピンチ）で拡大縮小します。ホイールだけの操作は、レビュー全体のスクロールに使います。同じ比較の枠は拡大率・高さ・スクロール位置を連動させ、「変更前と変更後を連動して動かす」で切り離せます。
+
+`createScratchBlocksDiffRenderer` の `attachNavigation(workspace, blockly, watermark)` に、ホストのコードエリアと同じ操作部品を付ける関数を渡せます。TurboWarp Plus Editor は右下にコスチュームのサムネイル、ミニマップ、拡大縮小ボタンの列を並べます。`watermark` はその版の現在のコスチュームを表示する要素で、素材を読む `loadAsset` があるときに渡します。`attachNavigation` がなければ Scratch Blocks の拡大縮小ボタンを使います。独自の描画関数は `{dispose, view}` を返すと、`createPreviewSync` による連動に加われます。
+
 ## PR 単位でレビューする
 
 同じエントリの `ProjectSourceReview` は、作品ファイルを複数含む変更セットをまとめてレビューするためのビューです。`title`・`description`・`verification` には PR 作者が記した目的と確認観点を渡します。`files` に作品ファイルの `{path, patch, beforeSource?}` や、関連ファイルの `{path, status, summary?}` を渡します。ブロックを描画する `renderBlock` は個別差分ビューと共通です。
