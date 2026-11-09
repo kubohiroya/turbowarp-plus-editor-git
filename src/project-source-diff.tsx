@@ -15,6 +15,8 @@ export {createScratchBlocksDiffLocator} from './block-diff-location.js';
 export type {ProjectBlockLocation, ProjectBlockLocator, ScratchBlockLocationWorkspace} from './block-diff-location.js';
 export type {BlockPart} from './project-source-patch.js';
 export {createProjectSourceDiff} from './project-source-patch.js';
+export {compareProjectForReview} from './project-source-review-model.js';
+export type {ScriptChangeKind, ScriptReview, ScriptReviewSide, ScriptSummaryItem, TargetReview} from './project-source-review-model.js';
 export {currentCostume} from './project-assets.js';
 export {assetFileName, organizeProjectChanges, projectPropertyLabel} from './project-change-model.js';
 export type {ChangedFile, OrganizeProjectChangesInput, ProjectChangeList, ProjectChangeStatus, ProjectElementChange, ProjectElementKind,
