@@ -246,3 +246,34 @@ test('probes Git metadata and the scoped work tree, and reports active Git locks
     const fresh = await repository.read('projects/demo');
     assert.equal(await repository.probe('projects/demo'), fresh.probe);
 });
+
+test('project comparisons read the last commit against the working tree, or a commit against its parent', async t => {
+    const {root, git, write, handle} = await fixture(t);
+    const folder = 'projects/demo';
+    await write(folder + '/sb3-source.json', '{"assetsDirectory": "media"}');
+    await fs.mkdir(path.join(root, folder, 'media'));
+    await write(folder + '/media/a.svg', '<svg>committed</svg>');
+    git('add', '.'); git('commit', '-qm', 'media');
+    const commit = git('rev-parse', 'HEAD');
+    await write(folder + '/project.source.json', '{"targets":[{"name":"Stage","isStage":true,"blocks":{}}]}\n');
+    git('add', '.');
+    await write(folder + '/media/a.svg', '<svg>work</svg>');
+    const bytes = await gitBytes(root);
+    const repo = await openRepository(handle);
+    const snapshot = await repo.read(folder);
+    const worktree = await repo.readProject(snapshot, folder, {kind: 'worktree'});
+    assert.equal(worktree.before, '{"targets":[]}\n');
+    assert.match(worktree.after, /"Stage"/);
+    assert.deepEqual(worktree.assetsDirectory, {before: 'media', after: 'media'});
+    const read = async (comparison, version) => {
+        const blob = await repo.projectAssetLoader(snapshot, folder, comparison)({version, md5ext: 'a.svg', signal: new AbortController().signal});
+        return blob && await blob.text();
+    };
+    assert.equal(await read({kind: 'worktree'}, 'before'), '<svg>committed</svg>');
+    assert.equal(await read({kind: 'worktree'}, 'after'), '<svg>work</svg>');
+    const history = await repo.readProject(snapshot, folder, {kind: 'commit', commit});
+    assert.deepEqual(history.assetsDirectory, {before: 'assets', after: 'media'});
+    assert.equal(await read({kind: 'commit', commit}, 'before'), null);
+    assert.equal(await read({kind: 'commit', commit}, 'after'), '<svg>committed</svg>');
+    assert.deepEqual(await gitBytes(root), bytes);
+});
