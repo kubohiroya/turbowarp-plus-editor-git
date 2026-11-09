@@ -22,6 +22,8 @@ export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js'
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
 
 export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
+export {openProjectComparison} from './project-comparison.js';
+export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
 export type {Repository, Snapshot, FileChange, FileDiff} from './repository.js';
 
 export interface GitHost {

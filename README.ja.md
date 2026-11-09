@@ -114,6 +114,19 @@ const diffFile = new Blob([patch], {type: 'text/x-diff'});
 
 どちらかの版を作品として読めないときは理由を示し、`fallback` を表示します。`fallback` がなければエラーだけを示します。
 
+### 比べてから選ぶダイアログ
+
+`openProjectComparison(document, options)` は、見出しの付いた複数の比較を 1 つのモーダルに並べ、利用者に操作を選んでもらいます。各 `sections` は `ProjectSourceComparison` と同じ `before`・`after` を取ります。選ばれた `actions` の `id` で解決し、閉じるか Escape では `null` で解決します。最初の操作にフォーカスを置くので、失われるものが少ない操作を先に並べます。作品フォルダは、未保存の編集があるときに「あなたの未保存の編集」と「フォルダでの変更」を並べるのに使います。
+
+```ts
+const choice = await openProjectComparison(document, {
+    title: '外部の変更と未保存の編集',
+    sections: [{title: 'あなたの未保存の編集', before: base, after: edited}, {title: 'フォルダでの変更', before: base, after: disk}],
+    actions: [{id: 'keep', label: '編集を残す'}, {id: 'discard', label: '編集を破棄してフォルダから読み込む'}],
+    renderBlock, locale: 'ja'
+});
+```
+
 ## 公開
 
 npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを

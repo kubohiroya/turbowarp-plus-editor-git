@@ -37,6 +37,19 @@ Each receive-pack POST carries a new UUID v4 in `Git-Push-Id`. A browser replay 
 
 When the Editor host supplies connection settings, the Local Git panel offers fetch, fast-forward pull and push for the current branch and its existing GitHub HTTPS `origin`. Authorize push when connecting to enable the explicit push action. Fetch updates Git metadata. Pull requires a stopped project, a clean worktree, and regular non-executable files. Pull stages the changes, rechecks the local state, and then applies them. Reopen the project from the panel after a successful pull.
 
+## Comparing before choosing
+
+`openProjectComparison(document, options)` lays several titled comparisons of `project.source.json` texts in one modal and asks the user to choose an action. Each of `sections` takes the same `before` and `after` as `ProjectSourceComparison`. The promise resolves with the chosen action's `id`, or with `null` when the dialog is closed or Escape is pressed. The first action receives focus, so list the one that loses the least first. The project folder uses it to show "Your unsaved edits" next to "Changes in the folder" before replacing unsaved edits.
+
+```ts
+const choice = await openProjectComparison(document, {
+    title: 'External changes and your unsaved edits',
+    sections: [{title: 'Your unsaved edits', before: base, after: edited}, {title: 'Changes in the folder', before: base, after: disk}],
+    actions: [{id: 'keep', label: 'Keep My Edits'}, {id: 'discard', label: 'Discard Edits and Load from Folder'}],
+    renderBlock
+});
+```
+
 ## Release
 
 `.github/workflows/release.yml` publishes to npm. Push a `v<version>` tag that names the
