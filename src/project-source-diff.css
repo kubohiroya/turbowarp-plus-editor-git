@@ -95,3 +95,14 @@
 .twgit-pr-paging, .twgit-pr-revision { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .twgit-pr-revision code { overflow-wrap: anywhere; }
 .twgit-review .twgit-block-diff-side h4 { font-size: 1em; }
+
+/* Costume (or backdrop) thumbnails in stage and sprite headings. */
+.twgit-review-thumbnails { display: inline-flex; align-items: center; gap: 4px; margin-inline-end: 6px; vertical-align: middle; }
+.twgit-review-thumbnails img {
+    width: 30px;
+    height: 30px;
+    object-fit: contain;
+    background: Canvas;
+    border: 1px solid var(--twgit-review-line, color-mix(in srgb, CanvasText 18%, Canvas));
+    border-radius: 4px;
+}

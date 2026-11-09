@@ -3,6 +3,8 @@ import {createTwoFilesPatch} from 'diff';
 import {createReadOnlyFs, errorCode, GitPanelError, pathParts, readOptional, sameBytes} from './filesystem.js';
 import {runRemoteOperation} from './remote-operations.js';
 import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
+import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from './project-asset-paths.js';
+import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
 export type ChangeGroup = 'staged' | 'unstaged' | 'untracked' | 'commit';
@@ -14,6 +16,8 @@ export interface FileChange {
     worktree: boolean;
     oldMode: number | null;
     newMode: number | null;
+    /** For `commit` changes, the commit compared with its first parent. */
+    commit?: string;
 }
 export interface Commit {
     oid: string;
@@ -22,6 +26,8 @@ export interface Commit {
     timestamp: number;
 }
 interface Entry {oid: string; mode: number}
+/** Where one version of a file is read from: a commit or tree, the index, or the working tree. */
+type Source = {kind: 'tree'; ref: string} | {kind: 'index'} | {kind: 'worktree'};
 type Metadata = Map<string, Uint8Array | null>;
 export interface Snapshot {
     branch: string | undefined;
@@ -150,7 +156,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             const a = before.get(path), b = after.get(path);
             if (a?.oid !== b?.oid || a?.mode !== b?.mode) result.push({
                 path, group: 'commit', before: a?.oid ?? null, after: b?.oid ?? null,
-                oldMode: a?.mode ?? null, newMode: b?.mode ?? null, worktree: false
+                oldMode: a?.mode ?? null, newMode: b?.mode ?? null, worktree: false, commit: oid
             });
         }
         await assertSnapshot(snapshot);
@@ -194,6 +200,47 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             oldText, newText, undefined, undefined, {context: 3, timeout: 1000});
         return patch === undefined ? {...base, tooLarge: true, patch: '', text} :
             {...base, patch: 'diff --git a/file b/file\n' + patch.replace(/^=+\n/, ''), text};
+    };
+    const sourceOf = async (snapshot: Snapshot, change: FileChange, version: ProjectVersion): Promise<Source | null> => {
+        if (change[version] === null) return null;
+        switch (change.group) {
+        case 'staged': return version === 'after' ? {kind: 'index'} : snapshot.head ? {kind: 'tree', ref: snapshot.head} : null;
+        case 'unstaged': return version === 'after' ? {kind: 'worktree'} : {kind: 'index'};
+        case 'untracked': return version === 'after' ? {kind: 'worktree'} : null;
+        case 'commit': {
+            if (!change.commit) return null;
+            if (version === 'after') return {kind: 'tree', ref: change.commit};
+            const parent = (await git.readCommit({...options, cache, oid: change.commit})).commit.parent[0];
+            return parent ? {kind: 'tree', ref: parent} : null;
+        }
+        }
+    };
+    /** Reads one regular file of one version, or `null` when it is missing or larger than the limit. */
+    const readVersion = async (source: Source, path: string, limit: number): Promise<Uint8Array | null> => {
+        if (source.kind === 'worktree') {
+            const stat = await fs.promises.stat('/' + path).catch(() => null);
+            if (!stat?.isFile() || stat.size > limit) return null;
+            const bytes = await readOptional(fs, '/' + path);
+            return bytes && bytes.byteLength <= limit ? bytes : null;
+        }
+        const entry = (await entries(source.kind === 'tree' ? source.ref : null, path)).get(path);
+        if (!entry || (entry.mode !== 0o100644 && entry.mode !== 0o100755)) return null;
+        const {blob} = await git.readBlob({...options, cache, oid: entry.oid});
+        return blob.byteLength <= limit ? blob : null;
+    };
+    const readAsset = async (snapshot: Snapshot, change: FileChange, version: ProjectVersion, md5ext: string, signal: AbortSignal) => {
+        if (signal.aborted) return null;
+        fs.clearReads();
+        await assertSnapshot(snapshot);
+        const source = await sourceOf(snapshot, change, version);
+        if (!source) return null;
+        const folder = pathParts(change.path).slice(0, -1);
+        const settings = await readVersion(source, [...folder, 'sb3-source.json'].join('/'), folderSettingsLimit);
+        const directory = assetsDirectoryParts(settings && new TextDecoder().decode(settings));
+        if (!directory || signal.aborted) return null;
+        const bytes = await readVersion(source, [...folder, ...directory, md5ext].join('/'), assetLimit);
+        await fs.checkReads();
+        return bytes && !signal.aborted ? new Blob([bytes as Uint8Array<ArrayBuffer>]) : null;
     };
     const directoryAt = async (path: string) => {
         let directory = root;
@@ -241,7 +288,16 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             }),
         read: (scope?: string) => serial(() => read(scope)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
-        historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid))
+        historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
+        /**
+         * Reads the assets of both versions of a selected project file, for thumbnails. Staged changes compare HEAD with
+         * the index, unstaged ones the index with the working tree, untracked ones nothing with the working tree, and
+         * commit changes the first parent with the commit. Each version's sb3-source.json names its assets directory.
+         * Reads never write, and resolve `null` for anything missing, invalid, larger than 10 MiB or changed since the snapshot.
+         */
+        assetLoader: (snapshot: Snapshot, change: FileChange): ProjectAssetLoader => ({version, md5ext, signal}) =>
+            !isAssetName(md5ext) || signal.aborted ? Promise.resolve(null) :
+                serial(() => readAsset(snapshot, change, version, md5ext, signal)).catch(() => null)
     };
 }
 export type Repository = Awaited<ReturnType<typeof openRepository>>;
