@@ -3,14 +3,33 @@ import type {BlockChange, BlockSide, ProjectSource, ProjectTarget} from './proje
 import type {ScriptBlockMark} from './scratch-block-diff-renderer.js';
 
 export interface ScriptReviewSide extends BlockSide { marks: ScriptBlockMark[] }
+/**
+ * What happened to one script. `moved` means only positions changed, `reordered` only how blocks connect;
+ * neither changes what the script does.
+ */
+export type ScriptChangeKind = 'added' | 'removed' | 'updated' | 'reorganized' | 'moved' | 'reordered';
+/** One phrase of a script's summary, in the order shown. The view words it in the reader's language. */
+export type ScriptSummaryItem =
+    | {kind: 'hatReplaced'; before: string; after: string}  // hat block opcodes
+    | {kind: 'wrapped'; opcode: string}                     // a new C block now holds blocks that existed before
+    | {kind: 'branchAdded'; opcode: string}                 // control_if or control_if_else added
+    | {kind: 'valueChanged'; opcode: string; name: string}  // an input or field of an existing block, by its name
+    | {kind: 'blocksAdded'; count: number}
+    | {kind: 'blocksRemoved'; count: number}
+    | {kind: 'reordered'}
+    | {kind: 'moved'};
 export interface ScriptReview {
     id: string;
     before: ScriptReviewSide[];
     after: ScriptReviewSide[];
+    kind: ScriptChangeKind;
+    summary: ScriptSummaryItem[];
 }
 export interface TargetReview {
     name: string;
     isStage: boolean;
+    /** Added or removed as a whole, or changed. Added and removed targets list no properties. */
+    status: 'added' | 'removed' | 'updated';
     /** The stage or sprite in each version, absent where it does not exist. */
     before?: ProjectTarget;
     after?: ProjectTarget;
@@ -66,7 +85,7 @@ function groupScripts(before: ProjectTarget | undefined, after: ProjectTarget | 
         for (const root of new Set(roots[version].values())) {
             const key = version + ':' + root;
             const id = groupOf(key);
-            const group = groups.get(id) ?? {id, before: [], after: []};
+            const group = groups.get(id) ?? {id, before: [], after: [], kind: 'updated' as ScriptChangeKind, summary: [] as ScriptSummaryItem[]};
             const side: ScriptReviewSide = {target, id: root, marks: []};
             group[version].push(side);
             groups.set(id, group);
@@ -109,7 +128,7 @@ export function compareProjectForReview(before: ProjectSource, after: ProjectSou
         const properties = changedProperties({...a}, {...b}, 'blocks');
         if (scripts.length || properties.length) {
             const {name, isStage} = (b ?? a)!;
-            targets.push({name, isStage, scripts, properties, before: a, after: b});
+            targets.push({name, isStage, status: !a ? 'added' : !b ? 'removed' : 'updated', scripts, properties, before: a, after: b});
         }
     }
     return {targets, properties: changedProperties(before, after, 'targets')};
