@@ -43,6 +43,11 @@ const initial: State = {repository: null, snapshot: null, project: null, browser
     changes: [], selected: null, diff: null, commit: null, error: null, busy: false};
 const controllers = new WeakMap<object, Controller>();
 type PickerWindow = Window & {showDirectoryPicker?: (options: {id: string; mode: 'readwrite'}) => Promise<FileSystemDirectoryHandle>};
+type ObserverWindow = Window & {FileSystemObserver?: new (callback: () => void) => {
+    observe(handle: FileSystemDirectoryHandle, options: {recursive: boolean}): Promise<void>;
+    disconnect(): void;
+}};
+const watchInterval = 2000;
 
 function GitPanel({document, host, controller}: {document: Document; host: GitHost; controller: Controller}) {
     const [visible, setVisible] = useState(false);
@@ -59,6 +64,10 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     const alive = useRef(true);
     const opening = useRef(false);
     const dialog = useRef<HTMLDivElement>(null);
+    const reviewing = useRef(review);
+    reviewing.current = review;
+    // The last fingerprint acted on, so a failing read or an open diff is not retried on every check.
+    const handled = useRef<string | null>(null);
     const labels = labelsFor(locale);
     const run = async (operation: () => Promise<Partial<State>>) => {
         if (running.current || !alive.current) return;
@@ -104,6 +113,59 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         });
         return () => {alive.current = false; epoch.current++; remoteRequest.current?.abort(); unsubscribe?.();};
     }, [host]);
+    // While the panel is open, notice Git commands, agents and editors that change the repository outside the Editor.
+    useEffect(() => {
+        const repository = state.repository;
+        if (!visible || !repository) return;
+        const view = document.defaultView as ObserverWindow;
+        let stopped = false;
+        let checking = false;
+        const check = async () => {
+            const {snapshot} = current.current;
+            if (stopped || checking || running.current || document.visibilityState === 'hidden' ||
+                !snapshot || current.current.repository !== repository) return;
+            checking = true;
+            try {
+                const probe = await repository.probe(snapshot.scope);
+                if (stopped || probe === 'locked' || probe === snapshot.probe || probe === handled.current ||
+                    current.current.snapshot !== snapshot) return;
+                handled.current = probe;
+                const {selected, commit} = current.current;
+                // Keep an open diff, commit or review in place and ask for a refresh instead.
+                if (selected || commit || reviewing.current) {
+                    setState(previous => previous.snapshot === snapshot ? {...previous, notice: labelsFor(locale).outdated} : previous);
+                } else await controller.refresh();
+            } catch {
+                // Entries can disappear while another tool writes. The next check reads them again.
+            } finally {
+                checking = false;
+            }
+        };
+        let soon: number | undefined;
+        const schedule = () => {view.clearTimeout(soon); soon = view.setTimeout(() => void check(), 300);};
+        const interval = view.setInterval(() => void check(), watchInterval);
+        const onFocus = () => void check();
+        view.addEventListener('focus', onFocus);
+        document.addEventListener('visibilitychange', onFocus);
+        let observer: InstanceType<NonNullable<ObserverWindow['FileSystemObserver']>> | null = null;
+        try {
+            if (view.FileSystemObserver) {
+                observer = new view.FileSystemObserver(schedule);
+                observer.observe(repository.root, {recursive: true}).catch(() => {});
+            }
+        } catch {
+            observer = null;
+        }
+        void check();
+        return () => {
+            stopped = true;
+            view.clearInterval(interval);
+            view.clearTimeout(soon);
+            view.removeEventListener('focus', onFocus);
+            document.removeEventListener('visibilitychange', onFocus);
+            observer?.disconnect();
+        };
+    }, [visible, state.repository, locale]);
     useEffect(() => {
         if (!visible) return;
         const previous = document.activeElement as HTMLElement | null;
