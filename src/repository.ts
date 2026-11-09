@@ -31,6 +31,8 @@ export interface Snapshot {
     changes: FileChange[];
     scope: string;
     metadata: Metadata;
+    /** Size and time fingerprint taken before the read. Compare it with `probe(scope)` to see later changes. */
+    probe: string;
 }
 export interface FileDiff {
     binary: boolean;
@@ -42,6 +44,8 @@ export interface FileDiff {
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 const textLimit = 1024 * 1024;
 const inScope = (path: string, scope: string) => !scope || path === scope || path.startsWith(scope + '/');
+// Above this many work-tree files, probes only watch Git metadata. Edits then need a manual refresh.
+const probeLimit = 5000;
 const sameMetadata = (a: Metadata, b: Metadata) => a.size === b.size && [...a].every(([path, bytes]) => sameBytes(bytes, b.get(path) ?? null));
 
 export async function openRepository(root: FileSystemDirectoryHandle) {
@@ -79,6 +83,61 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     };
     await metadata();
 
+    const fileAt = async (parts: string[]) => {
+        let directory = root;
+        for (const name of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(name);
+        return (await directory.getFileHandle(parts[parts.length - 1])).getFile();
+    };
+    const optionalFile = async (path: string) => {
+        try {return await fileAt(pathParts(path));} catch (error) {
+            if (['NotFoundError', 'TypeMismatchError'].includes((error as DOMException).name)) return null;
+            throw error;
+        }
+    };
+    const stamp = (file: File | null) => file ? `${file.size}:${file.lastModified}` : '-';
+    /**
+     * Fingerprints Git metadata and the work tree in `scope` from sizes and modification times, without
+     * reading file contents other than HEAD. Returns 'locked' while Git holds a lock on that metadata.
+     */
+    const probe = async (scope = ''): Promise<string> => {
+        const parts = pathParts(scope);
+        const headFile = await optionalFile('.git/HEAD');
+        if (!headFile) return 'locked';
+        const head = (await headFile.text()).trim();
+        const paths = ['.git/HEAD', '.git/index', '.git/packed-refs', '.git/shallow', '.git/config'];
+        if (head.startsWith('ref: refs/heads/')) {
+            try {pathParts(head.slice(5));} catch {return 'locked';}
+            paths.push('.git/' + head.slice(5));
+        }
+        const lines: string[] = [];
+        for (const path of paths) {
+            if (await optionalFile(path + '.lock')) return 'locked';
+            lines.push(`${path} ${stamp(await optionalFile(path))}`);
+        }
+        let start: FileSystemDirectoryHandle | null = root;
+        try {for (const name of parts) start = await start.getDirectoryHandle(name);} catch {start = null;}
+        const files: string[] = [];
+        const visit = async (directory: FileSystemDirectoryHandle, prefix: string): Promise<boolean> => {
+            const entries = (directory as FileSystemDirectoryHandle & {values(): AsyncIterable<FileSystemHandle>}).values();
+            for await (const entry of entries) {
+                const path = prefix + entry.name;
+                if (path === '.git') continue;
+                if (entry.kind === 'directory') {
+                    if (!await visit(entry as FileSystemDirectoryHandle, path + '/')) return false;
+                } else {
+                    files.push(`${path} ${stamp(await (entry as FileSystemFileHandle).getFile())}`);
+                    if (files.length > probeLimit) return false;
+                }
+            }
+            return true;
+        };
+        const prefix = parts.length ? parts.join('/') + '/' : '';
+        const complete = start ? await visit(start, prefix) : true;
+        if (complete) lines.push(...files.sort());
+        else lines.push('work tree not watched');
+        return lines.join('\n');
+    };
+
     const entries = async (ref: string | null, scope: string): Promise<Map<string, Entry>> => {
         const tree = ref === null ? git.STAGE() : git.TREE({ref});
         const result = await git.walk({
@@ -100,6 +159,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         scope = pathParts(scope).join('/');
         fs.clearReads();
         cache = {};
+        // Taken first, so a change during the read differs from the stored value and triggers another read.
+        const fingerprint = await probe(scope);
         const before = await metadata();
         let head: string | null;
         try {head = await git.resolveRef({...options, ref: 'HEAD'});} catch (error) {
@@ -132,7 +193,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before};
+        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before, probe: fingerprint};
     };
     const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
         fs.clearReads();
@@ -215,7 +276,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         await directory.getFileHandle('project.source.json');
         return directory;
     };
-    return {root, openProject, browse,
+    return {root, openProject, browse, probe,
         readOrigin: () => serial(() => git.getConfig({...options, path: 'remote.origin.url'})),
         remoteOperation: (operation: RemoteOperation, getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal) =>
             serial(async () => {
