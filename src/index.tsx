@@ -93,6 +93,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const alive = useRef(true);
     const opening = useRef(false);
     const dialog = useRef<HTMLDivElement>(null);
+    // A closed panel reads nothing; a refresh asked while it is closed waits until it opens again.
+    const shownRef = useRef(false);
+    const deferred = useRef(false);
     const reviewing = useRef(review);
     reviewing.current = review;
     // The last fingerprint acted on, so a failing read or an open diff is not retried on every check.
@@ -115,10 +118,20 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         } catch (error) {
             if (epoch.current !== ticket) return;
             const code = error instanceof GitPanelError ? error.code : 'failed';
+            // A background read that met another tool still writing tries again on the next check, without an alert.
+            if (automatic && code === 'changed') {
+                handled.current = null;
+                setState(previous => ({...previous, busy: false}));
+                return;
+            }
             const message = labels[code as keyof typeof labels] || labels.failed;
             setState(previous => ({...previous, error: automatic && previous.error ? previous.error : message, busy: false, diff: null}));
         } finally {
             running.current = false;
+            // A result dropped by a newer load still ends the busy state, unless a refresh follows at once.
+            if (epoch.current !== ticket && !refreshPending.current && alive.current) {
+                setState(previous => ({...previous, busy: false}));
+            }
             if (automatic) {background.current = null; settle();}
             if (refreshPending.current) {
                 refreshPending.current = false;
@@ -143,14 +156,26 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     controller.refresh = async (automatic = false) => {
         if (!alive.current || !current.current.repository) return;
+        if (!shownRef.current) {
+            deferred.current = true;
+            return;
+        }
         if (running.current) {
             if (!automatic) refreshPending.current = true;
             return;
         }
         await run(async () => {
             const {repository, project} = current.current;
-            const snapshot = await repository!.read(project ?? '');
-            return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
+            // A save or a Git command may still be finishing its writes; read again briefly before reporting a change.
+            for (let attempt = 1; ; attempt++) {
+                try {
+                    const snapshot = await repository!.read(project ?? '');
+                    return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
+                } catch (error) {
+                    if (!(error instanceof GitPanelError && error.code === 'changed') || attempt >= 5) throw error;
+                    await new Promise(resolve => setTimeout(resolve, 200 * attempt));
+                }
+            }
         }, automatic);
     };
     useEffect(() => {
@@ -159,13 +184,21 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             setDirty(host.isProjectDirty());
             if (event === 'loaded' && !opening.current) {
                 epoch.current++;
+                // An operation still running stays busy; its end, or the refresh queued after it, clears the flag.
                 setState(previous => ({...previous, project: null, snapshot: null, changes: [],
-                    selected: null, diff: null, commit: null, busy: false}));
+                    selected: null, diff: null, commit: null, busy: running.current}));
                 queueMicrotask(() => void controller.refresh());
             }
         });
         return () => {alive.current = false; epoch.current++; remoteRequest.current?.abort(); unsubscribe?.();};
     }, [host]);
+    useEffect(() => {
+        shownRef.current = shown;
+        if (shown && deferred.current) {
+            deferred.current = false;
+            void controller.refresh();
+        }
+    }, [shown]);
     // While the panel is open, notice Git commands, agents and editors that change the repository outside the Editor.
     useEffect(() => {
         const repository = state.repository;
@@ -175,7 +208,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         let checking = false;
         const check = async () => {
             const {snapshot} = current.current;
-            if (stopped || checking || running.current || document.visibilityState === 'hidden' ||
+            // A tab behind another one has no boxes; it reads again when it is shown.
+            const hidden = !dialog.current || !dialog.current.getClientRects().length;
+            if (stopped || checking || running.current || document.visibilityState === 'hidden' || hidden ||
                 !snapshot || current.current.repository !== repository) return;
             checking = true;
             try {
@@ -409,7 +444,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             </div>}
     </>;
     // In a tab the Editor stays usable beside the panel, so there is no backdrop, focus trap or Escape to close.
-    if (slot) return createPortal(<div className="twgit-panel twgit-panel-tab" role="region" aria-label={labels.title}>{content}</div>,
+    if (slot) return createPortal(<div className="twgit-panel twgit-panel-tab" ref={dialog} role="region" aria-label={labels.title}>{content}</div>,
         slot.element);
     return <div className="twgit-backdrop">
         <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
