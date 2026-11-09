@@ -35,8 +35,13 @@
     "vite.config.ts",
     "tsconfig.json",
     "README.ja.md",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "LICENSE"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.js",

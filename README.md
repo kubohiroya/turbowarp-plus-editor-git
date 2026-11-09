@@ -34,3 +34,11 @@ Each receive-pack POST carries a new UUID v4 in `Git-Push-Id`. A browser replay 
 `npm test` runs the local Git tests and a headless Smart HTTP fixture on IPv4 loopback using `git-http-backend`. The fixture uses disposable repositories and test credentials. [Proxy, authentication and CORS contract](https://github.com/kubohiroya/turbowarp-plus-editor/issues/315).
 
 When the Editor host supplies connection settings, the Local Git panel offers fetch, fast-forward pull and push for the current branch and its existing GitHub HTTPS `origin`. Authorize push when connecting to enable the explicit push action. Fetch updates Git metadata. Pull requires a stopped project, a clean worktree, and regular non-executable files. Pull stages the changes, rechecks the local state, and then applies them. Reopen the project from the panel after a successful pull.
+
+## Release
+
+`.github/workflows/release.yml` publishes to npm. Push a `v<version>` tag that names the
+`package.json` version on a `main` commit: the workflow runs the tests, packs the archive, attaches it
+to the GitHub Release, publishes it to npm and points `latest` and `next` at it. It authenticates with
+npm Trusted Publishing (OIDC), not a token, and publishes with provenance. The npm settings name this
+workflow file, so rename both together.

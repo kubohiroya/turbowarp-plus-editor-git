@@ -111,3 +111,11 @@ const diffFile = new Blob([patch], {type: 'text/x-diff'});
 ```
 
 どちらかの版を作品として読めないときは理由を示し、`fallback` を表示します。`fallback` がなければエラーだけを示します。
+
+## 公開
+
+npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを
+`main` のコミットに push すると、テストを通したうえで npm に入れるアーカイブを作り、GitHub Release に
+添付してから npm に公開し、`latest` と `next` をその版に向ける。認証はトークンではなく npm の
+Trusted Publisher（OIDC）で、provenance を付けて公開する。npm 側の設定にはこのワークフローの
+ファイル名をそのまま登録するため、改名するときは npm の設定も合わせる。
