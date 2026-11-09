@@ -43,18 +43,24 @@ function readAsset(loadAsset: ProjectAssetLoader, version: ProjectVersion, md5ex
     return read;
 }
 
-/** Loads the current costume of one version of a target as an object URL for an image, or `null` while it is unavailable. */
-export function useCostumeImage(target: ProjectTarget | undefined, version: ProjectVersion, loadAsset?: ProjectAssetLoader): string | null {
-    const costume = target && loadAsset ? currentCostume(target) : null;
-    const key = costume ? version + ':' + costume.md5ext : '';
+/** The image type of an asset file name, or `undefined` for sounds and anything that is not an image. */
+export function assetImageType(md5ext: string): string | undefined {
+    const match = /^[0-9A-Za-z_-]{1,128}\.([0-9A-Za-z]{1,8})$/.exec(md5ext);
+    return match ? imageTypes[match[1].toLowerCase()] : undefined;
+}
+
+/** Loads one image asset of one version as an object URL, or `null` while it is unavailable or not an image. */
+export function useAssetImage(md5ext: string | undefined, version: ProjectVersion, loadAsset?: ProjectAssetLoader): string | null {
+    const type = md5ext ? assetImageType(md5ext) : undefined;
+    const key = md5ext && type && loadAsset ? version + ':' + md5ext : '';
     const [image, setImage] = useState<{key: string; url: string}>();
     useEffect(() => {
-        if (!costume || !loadAsset) return;
+        if (!key || !loadAsset) return;
         let active = true;
         let url: string | undefined;
-        void readAsset(loadAsset, version, costume.md5ext).then(blob => {
+        void readAsset(loadAsset, version, md5ext!).then(blob => {
             if (!blob || !active) return;
-            url = URL.createObjectURL(new Blob([blob], {type: costume.type}));
+            url = URL.createObjectURL(new Blob([blob], {type}));
             setImage({key, url});
         });
         return () => {
@@ -63,4 +69,10 @@ export function useCostumeImage(target: ProjectTarget | undefined, version: Proj
         };
     }, [key, loadAsset]);
     return image?.key === key ? image.url : null;
+}
+
+/** Loads the current costume of one version of a target as an object URL for an image, or `null` while it is unavailable. */
+export function useCostumeImage(target: ProjectTarget | undefined, version: ProjectVersion, loadAsset?: ProjectAssetLoader): string | null {
+    const costume = target && loadAsset ? currentCostume(target) : null;
+    return useAssetImage(costume?.md5ext, version, loadAsset);
 }

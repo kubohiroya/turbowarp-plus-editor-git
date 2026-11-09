@@ -28,6 +28,12 @@ export interface Commit {
 interface Entry {oid: string; mode: number}
 /** Where one version of a file is read from: a commit or tree, the index, or the working tree. */
 type Source = {kind: 'tree'; ref: string} | {kind: 'index'} | {kind: 'worktree'};
+/**
+ * Two versions of a project folder as a person sees them: the last commit and the working tree, so changes split
+ * across the index and the working tree read as one; or one commit and its first parent.
+ */
+export type ProjectComparison = {kind: 'worktree'} | {kind: 'commit'; commit: string};
+const projectSourceLimit = 16 * 1024 * 1024;
 type Metadata = Map<string, Uint8Array | null>;
 export interface Snapshot {
     branch: string | undefined;
@@ -289,19 +295,51 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const {blob} = await git.readBlob({...options, cache, oid: entry.oid});
         return blob.byteLength <= limit ? blob : null;
     };
-    const readAsset = async (snapshot: Snapshot, change: FileChange, version: ProjectVersion, md5ext: string, signal: AbortSignal) => {
+    const comparisonSource = async (snapshot: Snapshot, comparison: ProjectComparison, version: ProjectVersion): Promise<Source | null> => {
+        if (comparison.kind === 'worktree') return version === 'after' ? {kind: 'worktree'} : snapshot.head ? {kind: 'tree', ref: snapshot.head} : null;
+        if (version === 'after') return {kind: 'tree', ref: comparison.commit};
+        const parent = (await git.readCommit({...options, cache, oid: comparison.commit})).commit.parent[0];
+        return parent ? {kind: 'tree', ref: parent} : null;
+    };
+    const readAsset = (snapshot: Snapshot, change: FileChange, version: ProjectVersion, md5ext: string, signal: AbortSignal) =>
+        readFolderAsset(snapshot, pathParts(change.path).slice(0, -1), () => sourceOf(snapshot, change, version), md5ext, signal);
+    const readFolderAsset = async (snapshot: Snapshot, folder: string[], resolve: () => Promise<Source | null>, md5ext: string,
+        signal: AbortSignal) => {
         if (signal.aborted) return null;
         fs.clearReads();
         await assertSnapshot(snapshot);
-        const source = await sourceOf(snapshot, change, version);
+        const source = await resolve();
         if (!source) return null;
-        const folder = pathParts(change.path).slice(0, -1);
         const settings = await readVersion(source, [...folder, 'sb3-source.json'].join('/'), folderSettingsLimit);
         const directory = assetsDirectoryParts(settings && new TextDecoder().decode(settings));
         if (!directory || signal.aborted) return null;
         const bytes = await readVersion(source, [...folder, ...directory, md5ext].join('/'), assetLimit);
         await fs.checkReads();
         return bytes && !signal.aborted ? new Blob([bytes as Uint8Array<ArrayBuffer>]) : null;
+    };
+    /** Reads the project file and the assets directory of both versions of a project folder. */
+    const readProject = async (snapshot: Snapshot, folder: string, comparison: ProjectComparison) => {
+        fs.clearReads();
+        await assertSnapshot(snapshot);
+        const parts = pathParts(folder);
+        const read = async (version: ProjectVersion) => {
+            const source = await comparisonSource(snapshot, comparison, version);
+            if (!source) return {source: null, assetsDirectory: 'assets'};
+            const bytes = await readVersion(source, [...parts, 'project.source.json'].join('/'), projectSourceLimit);
+            const settings = await readVersion(source, [...parts, 'sb3-source.json'].join('/'), folderSettingsLimit);
+            const directory = assetsDirectoryParts(settings && new TextDecoder().decode(settings));
+            let text: string | null = null;
+            if (bytes) {
+                try {text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);} catch {
+                    throw new GitPanelError('unsupported');
+                }
+            }
+            return {source: text, assetsDirectory: directory ? directory.join('/') : 'assets'};
+        };
+        const before = await read('before'), after = await read('after');
+        await assertSnapshot(snapshot);
+        await fs.checkReads();
+        return {before: before.source, after: after.source, assetsDirectory: {before: before.assetsDirectory, after: after.assetsDirectory}};
     };
     const directoryAt = async (path: string) => {
         let directory = root;
@@ -358,7 +396,18 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
          */
         assetLoader: (snapshot: Snapshot, change: FileChange): ProjectAssetLoader => ({version, md5ext, signal}) =>
             !isAssetName(md5ext) || signal.aborted ? Promise.resolve(null) :
-                serial(() => readAsset(snapshot, change, version, md5ext, signal)).catch(() => null)
+                serial(() => readAsset(snapshot, change, version, md5ext, signal)).catch(() => null),
+        /**
+         * Reads the project file of a folder in both versions of a comparison, with each version's assets directory.
+         * `null` stands for a version without the file. Throws `changed` when the repository changed since the snapshot.
+         */
+        readProject: (snapshot: Snapshot, folder: string, comparison: ProjectComparison) =>
+            serial(() => readProject(snapshot, folder, comparison)),
+        /** Reads the assets of a folder in both versions of a comparison, like `assetLoader`. */
+        projectAssetLoader: (snapshot: Snapshot, folder: string, comparison: ProjectComparison): ProjectAssetLoader =>
+            ({version, md5ext, signal}) => !isAssetName(md5ext) || signal.aborted ? Promise.resolve(null) :
+                serial(() => readFolderAsset(snapshot, pathParts(folder), () => comparisonSource(snapshot, comparison, version),
+                    md5ext, signal)).catch(() => null)
     };
 }
 export type Repository = Awaited<ReturnType<typeof openRepository>>;

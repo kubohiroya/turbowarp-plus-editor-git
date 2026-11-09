@@ -168,27 +168,34 @@ export interface ProjectSourceComparisonProps {
     fallback?: React.ReactNode;
     /** Reads the images of both versions for thumbnails. Without it, stages and sprites are shown by name. */
     loadAsset?: ProjectAssetLoader;
+    /** Shows only the code of this stage or sprite, without the overview and the changes outside the code. */
+    target?: {isStage: boolean; name: string};
 }
 
 /** Compares two versions of a project.source.json by stage, sprite and code, as the pull request review does. */
-export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, loadAsset}: ProjectSourceComparisonProps) {
+export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, loadAsset, target}: ProjectSourceComparisonProps) {
     const labels = locale.startsWith('ja') ? ja : en;
+    const only = target && JSON.stringify([target.isStage, target.isStage || target.name]);
     const comparison = useMemo(() => {
+        let result;
         try {
-            return compareProjectForReview(parseProjectSource(before), parseProjectSource(after));
+            result = compareProjectForReview(parseProjectSource(before), parseProjectSource(after));
         } catch {
             return null;
         }
-    }, [before, after]);
+        if (!only) return result;
+        return {properties: [], targets: result.targets.filter(item => JSON.stringify([item.isStage, item.isStage || item.name]) === only)
+            .map(item => ({...item, properties: []}))};
+    }, [before, after, only]);
     if (!comparison) return fallback === undefined ? <p role="alert">{labels.invalid}</p> :
         <><p role="alert" className="twgit-review-unreadable">{labels.unreadable}</p>{fallback}</>;
     return <section className="twgit-block-diff twgit-review twgit-review-comparison" aria-label={labels.comparison}>
-        <header className="twgit-review-overview">
+        {!only && <header className="twgit-review-overview">
             <dl>
                 <div><dt>{labels.targets}</dt><dd>{comparison.targets.length}</dd></div>
                 <div><dt>{labels.scripts}</dt><dd>{countScripts(comparison)}</dd></div>
             </dl>
-        </header>
+        </header>}
         <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}/>
     </section>;
 }
