@@ -1,6 +1,8 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {render, unmountComponentAtNode} from 'react-dom';
 import {FileDiffView} from './file-diff-view.js';
+import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
+import type {ChangedFile} from './project-change-model.js';
 import {openRepository} from './repository.js';
 import type {Repository, Snapshot, FileChange, FileDiff, ChangeGroup} from './repository.js';
 import {labelsFor} from './messages.js';
@@ -214,6 +216,20 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
     });
     const selectFile = (selected: FileChange) => run(async () => ({selected,
         diff: await state.repository!.readDiff(state.snapshot!, selected)}));
+    // A selected stage or sprite element replaces the file diff; picking a file goes back to it.
+    const [element, setElement] = useState<string | null>(null);
+    const [fileListOpen, setFileListOpen] = useState(false);
+    const projectChanges = useProjectChanges(state.repository, state.snapshot, state.project, state.commit, state.changes);
+    const openFile = (file: ChangedFile | FileChange) => {
+        const change = state.changes.find(item => item.path === file.path && item.group === file.group);
+        if (!change) return;
+        setElement(null);
+        void selectFile(change);
+    };
+    const openElement = (key: string) => {
+        setElement(key);
+        setState(previous => ({...previous, selected: null, diff: null}));
+    };
     const selectCommit = (commit: string) => run(async () => ({commit,
         changes: await state.repository!.historyChanges(state.snapshot!, commit), selected: null, diff: null}));
     const remoteOperation = async (operation: RemoteOperation) => {
@@ -254,6 +270,8 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
         state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
     if (!visible) return null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
+    const projectList = typeof projectChanges === 'object' ? projectChanges : null;
+    const selection = projectList && !state.selected ? findElement(projectList.list, element) : null;
     return <div className="twgit-backdrop">
         <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
             onKeyDown={focusTrap}>
@@ -297,15 +315,22 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                             onClick={() => void browse([state.browser!.path, name].filter(Boolean).join('/'))}>{name}/</button></li>)}</ul>
                     </details>}
                     <h3><button disabled={state.busy} onClick={() => void controller.refresh()}>{labels.worktree}</button></h3>
-                    {groups.map(group => <section key={group}>
-                        <h3>{labels[group]} · {state.changes.filter(change => change.group === group).length}</h3>
-                        <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}>
-                            <button className="twgit-file" data-git-group={group} disabled={state.busy}
-                                aria-pressed={state.selected === change} onClick={() => void selectFile(change)}>
-                                <span>{!change.after ? 'D' : !change.before ? 'A' : 'M'}</span> {change.path}
-                            </button>
-                        </li>)}</ul>
-                    </section>)}
+                    {projectChanges === 'loading' && <p role="status">{projectChangeLabels(locale).loading}</p>}
+                    {projectChanges === 'unreadable' && <p>{projectChangeLabels(locale).unreadable}</p>}
+                    {(() => {
+                        const fileList = groups.map(group => <section key={group}>
+                            <h3>{labels[group]} · {state.changes.filter(change => change.group === group).length}</h3>
+                            <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}>
+                                <button className="twgit-file" data-git-group={group} disabled={state.busy}
+                                    aria-pressed={state.selected === change} onClick={() => openFile(change)}>
+                                    <span>{!change.after ? 'D' : !change.before ? 'A' : 'M'}</span> {change.path}
+                                </button>
+                            </li>)}</ul>
+                        </section>);
+                        return projectList ? <ProjectChangeListView changes={projectList} selected={selection ? element : null}
+                            locale={locale} busy={state.busy} onSelect={openElement} onSelectFile={openFile} fileList={fileList}
+                            fileListOpen={fileListOpen} setFileListOpen={setFileListOpen}/> : fileList;
+                    })()}
                     {!state.changes.length && <p>{labels.clean}</p>}
                     <details><summary>{labels.branches}</summary><ul>{state.snapshot?.branches.map(branch => <li key={branch}>{branch}</li>)}</ul></details>
                     <h3>{labels.history}</h3>
@@ -316,8 +341,10 @@ function GitPanel({document, host, controller}: {document: Document; host: GitHo
                     </li>)}</ol>
                 </aside>
                 <main className="twgit-diff">
-                    {state.selected ? <FileDiffView change={state.selected} diff={state.diff} labels={labels} locale={locale}
-                        renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> : <p>{labels.select}</p>}
+                    {selection && projectList ? <ProjectElementView changes={projectList} selection={selection} locale={locale}
+                        renderBlock={host.renderReviewBlock} onSelectFile={openFile}/> :
+                        state.selected ? <FileDiffView change={state.selected} diff={state.diff} labels={labels} locale={locale}
+                            renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> : <p>{labels.select}</p>}
                 </main>
             </div>}
             <footer>{labels.permissions}</footer>
