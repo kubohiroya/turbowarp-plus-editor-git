@@ -112,22 +112,24 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         if (automatic) background.current = new Promise(resolve => {settle = resolve;});
         running.current = true;
         const ticket = ++epoch.current;
-        // An automatic refresh keeps the current error and notice, such as an uncertain push result.
-        setState(previous => automatic ? {...previous, busy: true} : {...previous, busy: true, error: null, notice: undefined});
+        // An automatic refresh keeps the current error and notice, such as an uncertain push result. It also
+        // leaves the controls enabled: an operation clicked meanwhile waits for it above, whereas a button
+        // that turned disabled under the pointer would swallow the click.
+        if (!automatic) setState(previous => ({...previous, busy: true, error: null, notice: undefined}));
         try {
             const update = await operation();
-            if (epoch.current === ticket) setState(previous => ({...previous, ...update, busy: false}));
+            if (epoch.current === ticket) setState(previous => ({...previous, ...update, busy: automatic ? previous.busy : false}));
         } catch (error) {
             if (epoch.current !== ticket) return;
             const code = error instanceof GitPanelError ? error.code : 'failed';
             // A background read that met another tool still writing tries again on the next check, without an alert.
             if (automatic && code === 'changed') {
                 handled.current = null;
-                setState(previous => ({...previous, busy: false}));
                 return;
             }
             const message = labels[code as keyof typeof labels] || labels.failed;
-            setState(previous => ({...previous, error: automatic && previous.error ? previous.error : message, busy: false, diff: null}));
+            setState(previous => ({...previous, error: automatic && previous.error ? previous.error : message,
+                busy: automatic ? previous.busy : false, diff: null}));
         } finally {
             running.current = false;
             // A result dropped by a newer load still ends the busy state, unless a refresh follows at once.
