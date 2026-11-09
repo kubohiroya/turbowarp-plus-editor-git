@@ -36,6 +36,7 @@
     "tsconfig.json",
     "README.ja.md",
     "THIRD_PARTY_NOTICES.md",
+    "test/smart-http-fixture.js",
     "README.md",
     "LICENSE"
   ],
