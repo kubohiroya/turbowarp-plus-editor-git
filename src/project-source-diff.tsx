@@ -8,8 +8,8 @@ import type {LocationStatus} from './block-diff-preview.js';
 import './project-source-diff.css';
 
 export {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
-export {ProjectSourceReview} from './project-source-review.js';
-export type {ProjectSourceReviewFile, ProjectSourceReviewProps} from './project-source-review.js';
+export {ProjectSourceComparison, ProjectSourceReview} from './project-source-review.js';
+export type {ProjectSourceComparisonProps, ProjectSourceReviewFile, ProjectSourceReviewProps} from './project-source-review.js';
 
 export {createScratchBlocksDiffLocator} from './block-diff-location.js';
 export type {ProjectBlockLocation, ProjectBlockLocator, ScratchBlockLocationWorkspace} from './block-diff-location.js';

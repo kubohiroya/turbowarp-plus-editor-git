@@ -93,6 +93,41 @@ test('reads packed commits and detached HEAD, with commit changes and an unborn 
     assert.ok(initial.changes.every(change => change.group === 'untracked'));
 });
 
+test('returns both texts beside the diff and keeps project sources readable past the text diff limit', async t => {
+    const {root, write, handle} = await fixture(t);
+    const source = 'projects/demo/project.source.json';
+    await write(source, '{"targets":[{"name":"Stage","isStage":true,"blocks":{}}]}\n');
+    await fs.mkdir(path.join(root, 'projects/added'));
+    await write('projects/added/project.source.json', '{"targets":[]}\n');
+    const repo = await openRepository(handle);
+    let snapshot = await repo.read();
+    const change = path => snapshot.changes.find(item => item.path === path);
+    const edited = await repo.readDiff(snapshot, change(source));
+    assert.deepEqual(edited.text, {before: '{"targets":[]}\n', after: '{"targets":[{"name":"Stage","isStage":true,"blocks":{}}]}\n'});
+    assert.match(edited.patch, /\+\{"targets":\[\{"name":"Stage"/);
+    const added = change('projects/added/project.source.json');
+    assert.equal(added.before, null);
+    assert.deepEqual((await repo.readDiff(snapshot, added)).text, {before: '', after: '{"targets":[]}\n'});
+
+    // Above the 1 MiB text diff limit, only project sources keep their text, up to 16 MiB.
+    const padding = 'x'.repeat(1024 * 1024);
+    await write(source, JSON.stringify({targets: [], padding}) + '\n');
+    await write('notes.txt', padding + '\n');
+    snapshot = await repo.read();
+    const large = await repo.readDiff(snapshot, change(source));
+    assert.equal(large.tooLarge, true);
+    assert.equal(large.patch, '');
+    assert.equal(JSON.parse(large.text.after).padding.length, padding.length);
+    const notes = await repo.readDiff(snapshot, change('notes.txt'));
+    assert.equal(notes.tooLarge, true);
+    assert.equal(notes.text, undefined);
+    await write(source, JSON.stringify({padding: 'x'.repeat(16 * 1024 * 1024)}));
+    snapshot = await repo.read();
+    const oversized = await repo.readDiff(snapshot, change(source));
+    assert.equal(oversized.tooLarge, true);
+    assert.equal(oversized.text, undefined);
+});
+
 test('rejects stale snapshots, active Git locks, and paths outside the granted root', async t => {
     const {root, git, write, handle} = await fixture(t);
     await write('notes.txt', 'edited\n');
