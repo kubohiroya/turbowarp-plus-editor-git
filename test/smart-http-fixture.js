@@ -6,7 +6,9 @@ import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 
-const gitEnv = {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'};
+// Git's detached auto maintenance can repack loose objects while the code under test is reading them.
+const gitEnv = {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'maintenance.auto', GIT_CONFIG_VALUE_0: 'false', GIT_CONFIG_KEY_1: 'gc.auto', GIT_CONFIG_VALUE_1: '0'};
 const backend = join(execFileSync('git', ['--exec-path'], {encoding: 'utf8'}).trim(), 'git-http-backend');
 export const remote = 'https://github.com/fixture/work.git';
 export const readDiscovery = '/info/refs?service=git-upload-pack';
