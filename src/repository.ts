@@ -41,6 +41,8 @@ export interface Snapshot {
     branch: string | undefined;
     head: string | null;
     branches: string[];
+    /** Branches fetched from `origin` that have no local branch of the same name yet. */
+    remoteBranches: string[];
     commits: Commit[];
     changes: FileChange[];
     scope: string;
@@ -260,6 +262,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         const branch = await git.currentBranch(options);
         const branches = await git.listBranches(options);
+        const remoteBranches = (await git.listBranches({...options, remote: 'origin'}))
+            .filter(name => name !== 'HEAD' && !branches.includes(name)).sort();
         const commits = head ? (await git.log({...options, cache, ref: head, depth: 50})).map(({oid, commit}) => ({
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
@@ -285,7 +289,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch: branch || undefined, head, branches, commits, changes, scope, metadata: before, probe: fingerprint, upstream};
+        return {branch: branch || undefined, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
+            upstream};
     };
     const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
         fs.clearReads();
@@ -463,6 +468,17 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         /** Stages, unstages or commits; see `runLocalOperation`. `guard` throws to stop before each write. */
         localOperation: (operation: LocalOperation, guard: () => void) =>
             serial(() => runLocalOperation(root, operation, guard)),
+        /** Whether a local branch, or `origin/<name>` with `remote`, has the folder `path` (the root always exists). */
+        hasFolder: (name: string, path: string, remote = false) => serial(async () => {
+            const ref = remote ? `refs/remotes/origin/${name}` : `refs/heads/${name}`;
+            if (!path) return true;
+            try {
+                const {tree} = await git.readTree({...options, oid: await git.resolveRef({...options, ref}), filepath: path});
+                return tree.length > 0;
+            } catch {
+                return false;
+            }
+        }),
         read: (scope?: string) => serial(() => read(scope)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),

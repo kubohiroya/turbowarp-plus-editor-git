@@ -7,7 +7,10 @@ export type GitAuthor = {name: string; email: string};
 export type LocalOperation =
     | {kind: 'stage'; paths: readonly string[]}
     | {kind: 'unstage'; paths: readonly string[]}
-    | {kind: 'commit'; message: string; author?: GitAuthor};
+    | {kind: 'commit'; message: string; author?: GitAuthor}
+    /** Creates `name` at HEAD, or at `origin/<name>` with `fromRemote`, and switches to it with `checkout`. */
+    | {kind: 'createBranch'; name: string; fromRemote?: boolean; checkout: boolean}
+    | {kind: 'switchBranch'; name: string};
 
 const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'NotFoundError'].includes(errorCode(error) ?? '');
 
@@ -19,7 +22,8 @@ const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'NotFoundError'].inclu
 export async function runLocalOperation(root: FileSystemDirectoryHandle, operation: LocalOperation, guard: () => void) {
     const execute = async () => {
         guard();
-        const transaction = createMutationFs(root, false);
+        const switching = operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout);
+        const transaction = createMutationFs(root, switching);
         const options = {fs: transaction.fs, dir: '/', gitdir: '/.git', cache: {}};
         const read = createReadOnlyFs(root).promises;
         const exists = async (path: string) => {
@@ -36,7 +40,51 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
             '/.git/rebase-merge', '/.git/rebase-apply']) {
             if (await exists(path)) throw new GitPanelError('changed');
         }
-        if (operation.kind === 'stage') {
+        if (operation.kind === 'createBranch' || operation.kind === 'switchBranch') {
+            const name = operation.name.trim();
+            const local = `refs/heads/${name}`;
+            if (switching) {
+                // Like pull: switching rewrites the work tree, so it starts from a clean one.
+                if ((await git.statusMatrix({...options, refresh: false})).some(([, head, worktree, stage]) =>
+                    head !== worktree || head !== stage)) throw new GitPanelError('switchUnsafe');
+            }
+            if (operation.kind === 'createBranch') {
+                let object: string;
+                if (operation.fromRemote) {
+                    try {
+                        object = await git.resolveRef({...options, ref: `refs/remotes/origin/${name}`});
+                    } catch {
+                        throw new GitPanelError('invalid');
+                    }
+                } else {
+                    object = await git.resolveRef({...options, ref: 'HEAD'}).catch(() => {throw new GitPanelError('unsupported');});
+                }
+                try {
+                    // The ref first: isomorphic-git's checkout of a missing branch would write tracking config.
+                    await git.branch({...options, ref: name, object, checkout: false});
+                } catch (error) {
+                    const code = (error as {code?: string})?.code;
+                    if (code === 'AlreadyExistsError') throw new GitPanelError('branchExists');
+                    if (code === 'InvalidRefNameError') throw new GitPanelError('branchName');
+                    throw error;
+                }
+            } else if (!(await git.listBranches(options)).includes(name)) {
+                throw new GitPanelError('invalid');
+            }
+            if (switching) {
+                // Executable bits, links and submodules cannot be written from the browser.
+                const commit = await git.resolveRef({...options, ref: local});
+                await git.walk({...options, trees: [git.TREE({ref: commit})], map: async (path, [entry]) => {
+                    if (!entry || path === '.') return true;
+                    const type = await entry.type();
+                    if (type === 'tree') return true;
+                    if (type !== 'blob' || await entry.mode() !== 0o100644) throw new GitPanelError('unsupported');
+                    return true;
+                }});
+                await git.checkout({...options, ref: name});
+                if (await git.currentBranch(options) !== name) throw new GitPanelError('changed');
+            }
+        } else if (operation.kind === 'stage') {
             // The browser cannot see executable bits or links: staging such a file would change its mode in Git.
             const modes = new Map<string, number>();
             await git.walk({...options, trees: [git.STAGE()], map: async (path, [entry]) => {

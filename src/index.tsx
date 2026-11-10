@@ -354,11 +354,28 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 if (epoch.current !== ticket) throw new GitPanelError('changed');
                 // Staging records the saved files; edits still in the Editor would be left out without a word.
                 if (operation.kind === 'stage' && host.isProjectDirty()) throw new GitPanelError('saveFirst');
+                // Switching replaces the files the Editor opened, like pull.
+                if ((operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout)) &&
+                    (host.isProjectDirty() || host.isProjectRunning?.())) throw new GitPanelError('switchUnsafe');
             });
             if (operation.kind === 'commit') setMessage('');
             const snapshot = await repository.read(current.current.project ?? '');
             return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null, notice};
         });
+    };
+    const [newBranch, setNewBranch] = useState('');
+    const [switchAfterCreate, setSwitchAfterCreate] = useState(true);
+    const changeBranch = async (operation: Extract<LocalOperation, {kind: 'createBranch' | 'switchBranch'}>) => {
+        const repository = current.current.repository;
+        const project = current.current.project;
+        const switching = operation.kind === 'switchBranch' || operation.checkout;
+        if (!repository) return;
+        // Tell before switching when the open project folder is not on the branch.
+        if (switching && project && !(operation.kind === 'createBranch' && !operation.fromRemote) &&
+            !await repository.hasFolder(operation.name, project, operation.kind === 'createBranch' && operation.fromRemote) &&
+            !document.defaultView?.confirm(labels.projectMissing)) return;
+        await localOperation(operation, switching ? labels.switched : labels.branchCreated);
+        if (operation.kind === 'createBranch' && !operation.fromRemote) setNewBranch('');
     };
     const focusTrap = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {event.stopPropagation(); closePanel(); return;}
@@ -375,6 +392,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
     if (!shown) return null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
+    // Branches can be switched and created whenever writes are allowed and the repository has been read.
+    const branching = !!host.localWrite && !!state.snapshot;
     // Writing works on the current changes, not on a record from the history, and only on a branch.
     const writable = !!host.localWrite && !state.commit && !!state.snapshot?.branch;
     const unrecorded = [...new Set(state.changes.filter(change => change.group === 'unstaged' || change.group === 'untracked')
@@ -446,7 +465,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     {(() => {
                         const fileList = groups.map(group => <section key={group}>
                             <h3>{labels[group]} · {state.changes.filter(change => change.group === group).length}</h3>
-                            <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}>
+                            <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}
+                                className={writable ? 'twgit-file-row' : undefined}>
                                 <button className="twgit-file" data-git-group={group} disabled={state.busy}
                                     aria-pressed={state.selected === change} onClick={() => openFile(change)}>
                                     <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small> {change.path}
@@ -470,6 +490,31 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         <button type="button" disabled={state.busy || !staged || !message.trim()}
                             onClick={() => void localOperation({kind: 'commit', message, author: host.localWrite?.author?.()},
                                 labels.committed)}>{labels.commitButton}</button>
+                    </section>}
+                    {branching && state.snapshot && <section className="twgit-branches" aria-label={labels.branches}>
+                        <h3>{labels.branches}</h3>
+                        <ul>{state.snapshot.branches.map(name => <li key={name}><code>{name}</code>
+                            {name === state.snapshot!.branch ? <small> · {labels.currentBranch}</small> :
+                                <button type="button" disabled={state.busy} aria-label={`${labels.switchTo}: ${name}`}
+                                    onClick={() => void changeBranch({kind: 'switchBranch', name})}>{labels.switchTo}</button>}
+                        </li>)}</ul>
+                        {state.snapshot.head && <form onSubmit={event => {
+                            event.preventDefault();
+                            if (newBranch.trim()) void changeBranch({kind: 'createBranch', name: newBranch.trim(), checkout: switchAfterCreate});
+                        }}>
+                            <label>{labels.newBranch} <input value={newBranch} disabled={state.busy}
+                                onChange={event => setNewBranch(event.currentTarget.value)}/></label>
+                            <label><input type="checkbox" checked={switchAfterCreate} disabled={state.busy}
+                                onChange={event => setSwitchAfterCreate(event.currentTarget.checked)}/> {labels.switchAfterCreate}</label>
+                            <button type="submit" disabled={state.busy || !newBranch.trim()}>{labels.createBranch}</button>
+                        </form>}
+                        {state.snapshot.remoteBranches.length > 0 && <>
+                            <h3>{labels.remoteBranches}</h3>
+                            <ul>{state.snapshot.remoteBranches.map(name => <li key={name}><code>origin/{name}</code>
+                                <button type="button" disabled={state.busy} aria-label={`${labels.createFromRemote}: origin/${name}`}
+                                    onClick={() => void changeBranch({kind: 'createBranch', name, fromRemote: true, checkout: true})}>
+                                    {labels.createFromRemote}</button></li>)}</ul>
+                        </>}
                     </section>}
                     <h3>{labels.history}</h3>
                     <ol className="twgit-history">{state.snapshot?.commits.map(commit => <li key={commit.oid}>

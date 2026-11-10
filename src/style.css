@@ -26,7 +26,9 @@
 .twgit-panel aside li { overflow-wrap: anywhere; }
 .twgit-panel summary { cursor: pointer; }
 .twgit-panel .twgit-file { width: 100%; border: 0; margin: 1px 0; }
-.twgit-panel .twgit-stage { font-size: 11px; margin: 0 0 4px; }
+.twgit-panel .twgit-file-row { display: flex; gap: 6px; align-items: center; }
+.twgit-panel .twgit-file-row .twgit-file { flex: 1; min-width: 0; width: auto; text-align: start; }
+.twgit-panel .twgit-stage { flex: none; font-size: 11px; margin: 0; white-space: nowrap; }
 .twgit-commit { display: grid; gap: 6px; margin: 10px 0; padding: 8px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px; }
 .twgit-commit label { display: grid; gap: 4px; font-size: 12px; }
 .twgit-commit textarea { font: inherit; resize: vertical; min-height: 3em; }
@@ -65,3 +67,6 @@
 .twgit-comparison-body > p { margin: 0 0 8px; }
 .twgit-comparison-body > section { margin-top: 16px; }
 .twgit-comparison-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid GrayText; }
+.twgit-branches ul { list-style: none; padding: 0; margin: 4px 0; }
+.twgit-branches li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0; }
+.twgit-branches form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
