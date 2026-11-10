@@ -65,3 +65,6 @@
 .twgit-comparison-body > p { margin: 0 0 8px; }
 .twgit-comparison-body > section { margin-top: 16px; }
 .twgit-comparison-actions { display: flex; gap: 8px; justify-content: flex-end; padding: 10px 16px; border-top: 1px solid GrayText; }
+.twgit-branches ul { list-style: none; padding: 0; margin: 4px 0; }
+.twgit-branches li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0; }
+.twgit-branches form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
