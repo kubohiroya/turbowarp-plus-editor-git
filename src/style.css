@@ -2,6 +2,10 @@
 .twgit-panel { width: 94vw; height: 90vh; display: flex; flex-direction: column; background: Canvas; color: CanvasText; border: 1px solid GrayText; border-radius: 8px; box-shadow: 0 12px 48px #0005; font: 14px/1.5 system-ui, sans-serif; overflow: hidden; }
 .twgit-panel > header { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid GrayText; }
 .twgit-panel > header h2 { margin: 0 auto 0 0; font-size: 18px; }
+.twgit-panel .twgit-close, .twgit-close { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
+    border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.twgit-panel .twgit-close:hover, .twgit-close:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.twgit-panel .twgit-close:focus-visible, .twgit-close:focus-visible { outline: 2px solid Highlight; outline-offset: 1px; }
 .twgit-panel h3 { font-size: 14px; margin: 12px 0 5px; }
 .twgit-panel button { color: inherit; background: Canvas; border: 1px solid GrayText; border-radius: 4px; padding: 4px 8px; cursor: pointer; font: inherit; text-align: start; }
 .twgit-panel button:disabled { opacity: .5; cursor: default; }

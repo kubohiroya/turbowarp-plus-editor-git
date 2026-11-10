@@ -1,5 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {createPortal, render, unmountComponentAtNode} from 'react-dom';
+import {CloseButton} from './close-button.js';
 import {FileDiffView} from './file-diff-view.js';
 import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
 import type {ChangedFile} from './project-change-model.js';
@@ -485,7 +486,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 {!review && state.project !== null && <button disabled={state.busy} onClick={() => void openProject(state.project!)}>{labels.reload}</button>}
                 {state.repository && host.renderReviewBlock && <button type="button" disabled={state.busy}
                     onClick={() => setReview(!review)}>{review ? labels.localChanges : labels.pullRequests}</button>}
-                <button onClick={closePanel}>{labels.close}</button>
+                <CloseButton label={labels.close} onClick={closePanel}/>
             </header>
             <div className="twgit-context">
                 <span>{labels.repository} · {state.repository?.root.name || '—'}</span>
