@@ -74,6 +74,36 @@ function Snackbar({snack, closeLabel, onClose}: {snack: Snack; closeLabel: strin
     </div>, document.body);
 }
 
+/**
+ * The results of branch operations in a snackbar, as the branch button and the history view tell them: a switch with
+ * Reload Project while a project folder is selected, a new branch, or the reason for a refusal with Open Local Git.
+ * A declined confirmation tells nothing. `restoreFocus` takes the focus back when the snackbar closes from inside.
+ */
+export function useBranchSnackbar(locale: string, project: boolean, actions: Pick<BranchButtonActions, 'open' | 'reload'>,
+    restoreFocus?: () => void) {
+    const labels = labelsFor(locale);
+    const [snack, setSnack] = useState<Snack | null>(null);
+    const snacks = useRef(0);
+    const mounted = useRef(true);
+    useEffect(() => () => {mounted.current = false;}, []);
+    const show = (text: string, alert: boolean, action?: Snack['action']) => {
+        if (mounted.current) setSnack({id: ++snacks.current, text, alert, action});
+    };
+    const report = (result: HistoryActionResult, switched: boolean) => {
+        if (result.done) {
+            if (!switched) show(labels.branchCreated, false);
+            // The switch rewrote the files; the open project shows them after Reload Project.
+            else show(labels.switchedShort, false, project ? {label: labels.reload, run: actions.reload} : undefined);
+        } else if (result.error) show(result.error, true, {label: labels.openPanel, run: actions.open});
+    };
+    const element = snack && <Snackbar key={snack.id} snack={snack} closeLabel={labels.close} onClose={focus => {
+        setSnack(previous => previous?.id === snack.id ? null : previous);
+        // Focus inside the snackbar would be lost with it.
+        if (focus) restoreFocus?.();
+    }}/>;
+    return {report, element};
+}
+
 /** Git's branch glyph, drawn in the text color. */
 function BranchIcon() {
     return <svg className="twgit-branch-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
@@ -97,8 +127,6 @@ export function BranchButton({state, locale = 'en', ...actions}: BranchButtonPro
     const [checkout, setCheckout] = useState(true);
     const [creating, setCreating] = useState(false);
     const [createError, setCreateError] = useState('');
-    const [snack, setSnack] = useState<Snack | null>(null);
-    const snacks = useRef(0);
     const root = useRef<HTMLDivElement>(null);
     const trigger = useRef<HTMLButtonElement>(null);
     const popup = useRef<HTMLDivElement>(null);
@@ -146,17 +174,8 @@ export function BranchButton({state, locale = 'en', ...actions}: BranchButtonPro
         setInitial(from);
         setMode('menu');
     };
-    const show = (text: string, alert: boolean, action?: Snack['action']) => {
-        if (mounted.current) setSnack({id: ++snacks.current, text, alert, action});
-    };
-    /** Tells the result of a branch operation in a snackbar. A declined confirmation tells nothing. */
-    const report = (result: HistoryActionResult, switched: boolean) => {
-        if (result.done) {
-            if (!switched) show(labels.branchCreated, false);
-            // The switch rewrote the files; the open project shows them after Reload Project.
-            else show(labels.switchedShort, false, state.project ? {label: labels.reload, run: actions.reload} : undefined);
-        } else if (result.error) show(result.error, true, {label: labels.openPanel, run: actions.open});
-    };
+    const {report, element: snackbar} = useBranchSnackbar(locale, state.project, actions,
+        () => trigger.current?.focus({preventScroll: true}));
     const change = async (operation: () => Promise<HistoryActionResult>) => report(await operation(), true);
     const items: Item[] = [];
     if (!state.repository) {
@@ -265,10 +284,6 @@ export function BranchButton({state, locale = 'en', ...actions}: BranchButtonPro
                 </span>
             </form>
         </div>}
-        {snack && <Snackbar key={snack.id} snack={snack} closeLabel={labels.close} onClose={focus => {
-            setSnack(previous => previous?.id === snack.id ? null : previous);
-            // Focus inside the snackbar would be lost with it.
-            if (focus) trigger.current?.focus({preventScroll: true});
-        }}/>}
+        {snackbar}
     </div>;
 }
