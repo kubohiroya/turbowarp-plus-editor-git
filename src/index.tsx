@@ -80,8 +80,10 @@ interface Controller {
     publish(state: BranchButtonState): void;
     /** Follows `branch`. While anything follows it, the closed panel keeps watching the branches. */
     follow(listener: () => void): () => void;
-    /** Set by the panel to hear how many follow `branch`. */
-    followers(count: number): void;
+    /** How many follow `branch`. */
+    followers(): number;
+    /** Set by the panel while it is mounted, to hear when `followers()` changes. */
+    onFollowers(count: number): void;
 }
 function createController(): Controller {
     const listeners = new Set<() => void>();
@@ -94,13 +96,14 @@ function createController(): Controller {
         },
         follow(listener) {
             listeners.add(listener);
-            controller.followers(listeners.size);
+            controller.onFollowers(listeners.size);
             return () => {
                 listeners.delete(listener);
-                controller.followers(listeners.size);
+                controller.onFollowers(listeners.size);
             };
         },
-        followers() {}
+        followers: () => listeners.size,
+        onFollowers() {}
     };
     return controller;
 }
@@ -314,8 +317,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         if (!state.repository) setRefs(null);
         else if (state.snapshot) setRefs(refsOf(state.snapshot));
     }, [state.repository, state.snapshot]);
-    const [followers, setFollowers] = useState(0);
-    controller.followers = setFollowers;
+    const [followers, setFollowers] = useState(controller.followers());
+    useEffect(() => {
+        controller.onFollowers = setFollowers;
+        // A button may have started following before the panel was mounted.
+        setFollowers(controller.followers());
+        return () => {controller.onFollowers = () => {};};
+    }, []);
     // While the panel is open, notice Git commands, agents and editors that change the repository outside the Editor.
     // While it is out of view and a branch button follows it, read only the refs at the same moments, so the button
     // follows branch changes; the panel reads everything again when it comes into view.
@@ -353,7 +361,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     }, [visible, slot]);
     const chooseRoot = async () => {
         const view = document.defaultView as PickerWindow;
-        await run(async () => {
+        return run(async () => {
             let root: FileSystemDirectoryHandle;
             try {root = await view.showDirectoryPicker!({id: 'turbowarp-plus-git-root', mode: 'readwrite'});} catch (error) {
                 if ((error as DOMException).name === 'AbortError') return {};
@@ -508,8 +516,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     controller.choose = async language => {
         setLocale(language);
         const before = current.current.repository;
-        await chooseRoot();
-        if (current.current.repository && current.current.repository !== before) controller.open(language);
+        const result = await chooseRoot();
+        // The panel shows the chosen repository, or why it could not be read; a cancelled choice opens nothing.
+        if (!result.done && result.error || current.current.repository !== before) controller.open(language);
     };
     const branchState: BranchButtonState = {repository: !!state.repository, branch: refs?.branch, head: refs?.head ?? null,
         branches: refs?.branches ?? [], remoteBranches: refs?.remoteBranches ?? [], writable: !!host.localWrite && !!refs, busy: state.busy};

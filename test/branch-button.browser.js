@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
+import {execFileSync} from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
@@ -182,4 +185,83 @@ test('the branch button speaks English', async t => {
     await mount({repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false});
     await page.getByRole('button', {name: 'Local Git'}).click();
     assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Choose Repository…', 'Open Local Git']);
+});
+
+test('the branch button shares the panel\'s repository, switches as the panel does and follows other tools', async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-entry-'));
+    t.after(() => fs.rm(root, {recursive: true, force: true}));
+    const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8', env: {...process.env,
+        GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture',
+        GIT_COMMITTER_EMAIL: 'fixture@example.invalid'}}).trim();
+    git('init', '-q', '-b', 'main');
+    await fs.writeFile(path.join(root, 'notes.txt'), 'main\n');
+    git('add', '.');
+    git('commit', '-qm', 'first');
+    git('branch', 'jump');
+    git('update-ref', 'refs/remotes/origin/score', 'HEAD');
+    for (const panelFirst of [false, true]) {
+        const server = await serveEditorRuntime({script: fileURLToPath(new URL('./branch-entry-page.js', import.meta.url))});
+        // Writes to a dropped directory need these, as in the Editor's browser tests.
+        const args = ['--enable-experimental-web-platform-features'];
+        if (process.platform === 'darwin') args.push('--single-process', '--no-zygote', '--disable-crash-reporter');
+        const browser = await chromium.launch({args});
+        try {
+            const page = await browser.newPage({viewport: {width: 900, height: 700}});
+            const errors = [];
+            page.on('pageerror', error => errors.push(error.message));
+            page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
+            await page.goto(server.url);
+            await page.evaluate(options => mountEntry(options), {locale: 'en', writable: true, panelFirst});
+            const cdp = await page.context().newCDPSession(page);
+            for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', {
+                type, x: 100, y: 100, data: {items: [], files: [root], dragOperationsMask: 1}});
+            await page.waitForFunction(() => window.directoryReady);
+            const panel = page.getByRole('dialog', {name: 'Local Git'});
+            const menu = page.getByRole('menu', {name: 'Branches'});
+            // Choose Repository… from the button picks the repository and opens the panel on it.
+            await page.getByRole('button', {name: 'Local Git', exact: true}).click();
+            await menu.getByRole('menuitem', {name: 'Choose Repository…'}).click();
+            await panel.getByText('Repository · ' + path.basename(root)).waitFor();
+            await page.getByRole('button', {name: 'Branch: main', exact: true}).waitFor();
+            // A switch from the panel moves the button.
+            await panel.getByRole('button', {name: 'Switch: jump'}).click();
+            await page.getByRole('button', {name: 'Branch: jump', exact: true}).waitFor();
+            assert.equal(git('branch', '--show-current'), 'jump');
+            await panel.getByRole('button', {name: 'Close', exact: true}).click();
+            await panel.waitFor({state: 'detached'});
+            // With the panel closed, the button follows branches another tool creates and switches to.
+            git('branch', 'from-cli');
+            git('switch', '-q', 'from-cli');
+            await page.getByRole('button', {name: 'Branch: from-cli', exact: true}).waitFor({timeout: 10_000});
+            // A switch from the button goes through the panel's checks: unsaved edits refuse it, and the panel says why.
+            await page.evaluate(() => {host.dirty = true;});
+            await page.getByRole('button', {name: 'Branch: from-cli', exact: true}).click();
+            await menu.getByRole('menuitemradio', {name: 'main', exact: true}).click();
+            await panel.getByText('Stop the project, and save or record (or undo) every change, before switching branches.').waitFor();
+            assert.equal(git('branch', '--show-current'), 'from-cli');
+            await panel.getByRole('button', {name: 'Close', exact: true}).click();
+            await page.evaluate(() => {host.dirty = false;});
+            await page.getByRole('button', {name: 'Branch: from-cli', exact: true}).click();
+            await menu.getByRole('menuitemradio', {name: 'main', exact: true}).click();
+            await panel.getByText('Switched branches. Use Reload Project to open the files of this branch.').waitFor();
+            await page.getByRole('button', {name: 'Branch: main', exact: true}).waitFor();
+            assert.equal(git('branch', '--show-current'), 'main');
+            await panel.getByRole('button', {name: 'Close', exact: true}).click();
+            // Create and switch to an origin branch.
+            await page.getByRole('button', {name: 'Branch: main', exact: true}).click();
+            await menu.getByRole('menuitem', {name: 'Create and switch to score'}).click();
+            await page.getByRole('button', {name: 'Branch: score', exact: true}).waitFor();
+            assert.equal(git('branch', '--show-current'), 'score');
+            await panel.getByRole('button', {name: 'Close', exact: true}).click();
+            git('switch', '-q', 'main');
+            git('branch', '-q', '-D', 'score', 'from-cli');
+            // Disposing the panel removes the button.
+            await page.evaluate(() => panel.dispose());
+            await page.locator('.twgit-branch-button').waitFor({state: 'detached'});
+            assert.deepEqual(errors, []);
+        } finally {
+            await browser.close();
+            await server.close();
+        }
+    }
 });
