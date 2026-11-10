@@ -28,12 +28,12 @@ import type {LocatorVM} from './editor-block-locator.js';
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
 
-export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
+export {openRepository, createReadOnlyFs, GitPanelError, pullRequestRef} from './repository.js';
 export {openProjectComparison} from './project-comparison.js';
 export {openProjectSourceTabs} from './project-source-tabs.js';
 export type {ProjectSourceTabsFile, ProjectSourceTabsOptions} from './project-source-tabs.js';
 export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
-export type {Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
+export type {PullRequestBase, PullRequestFetch, PullRequestFiles, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
 export {HistoryGraph, laneColors} from './history-graph-view.js';
 export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.js';
 export {layoutHistory} from './history-graph.js';
@@ -365,6 +365,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 notice: operation === 'pull' && current.current.project !== null ? labels.pulledProject : labels.remoteDone};
         });
     };
+    // A connected GitHub connection reads pull request contents over Git Smart HTTP, so private repositories work too.
+    const pullRequestConnection = useMemo(() => {
+        const settings = host.connectionSettings;
+        const getSession = settings?.getSession;
+        return getSession ? {getSession, connected: () => settings.getView().state.status === 'connected'} : undefined;
+    }, [host]);
     const [message, setMessage] = useState('');
     const localOperation = (operation: LocalOperation, notice?: string) => {
         const repository = current.current.repository;
@@ -517,7 +523,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             {!state.repository && <p>{labels.empty}</p>}
             {review && state.repository && host.renderReviewBlock &&
                 <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}
-                    locateFor={reviewLocator} openTabs={openTabs}/>}
+                    locateFor={reviewLocator} openTabs={openTabs} connection={pullRequestConnection}/>}
             {!review && state.repository && <div className="twgit-content">
                 <aside>
                     {state.browser && <details>
