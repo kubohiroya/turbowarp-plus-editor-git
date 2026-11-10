@@ -124,19 +124,27 @@ function useBlockLocation(comparison: Comparison, locateBlock?: ProjectBlockLoca
     };
 }
 
-function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location}: {
+/** What a script is called in a review: its hat block, or both hat blocks when the change replaced it. */
+function scriptReviewTitle(script: ScriptReview, labels: typeof ja) {
+    const beforeTitle = script.before[0] && scriptTitle(script.before[0], labels);
+    const afterTitle = script.after[0] && scriptTitle(script.after[0], labels);
+    return beforeTitle && afterTitle && beforeTitle !== afterTitle ? beforeTitle + ' → ' + afterTitle : afterTitle ?? beforeTitle;
+}
+
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location, expanded = false}: {
     script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
     renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; location?: BlockLocation;
+    /** Starts open, as in a tab that holds this one script. */
+    expanded?: boolean;
 }) {
-    const [open, setOpen] = useState(false);
+    const [open, setOpen] = useState(expanded);
     const {sync, toggle} = usePreviewSync(labels === ja ? 'ja' : 'en');
     const status = script.kind;
     const locale = labels === ja ? 'ja' : 'en';
     const summary = script.summary.map(item => summaryPhrase(item, locale)).join(labels === ja ? '、' : ', ');
-    const beforeTitle = script.before[0] && scriptTitle(script.before[0], labels);
-    const afterTitle = script.after[0] && scriptTitle(script.after[0], labels);
-    const title = beforeTitle && afterTitle && beforeTitle !== afterTitle ? beforeTitle + ' → ' + afterTitle : afterTitle ?? beforeTitle;
-    return <details className="twgit-review-script" onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
+    const title = scriptReviewTitle(script, labels);
+    return <details className="twgit-review-script" open={expanded || undefined}
+        onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
         <summary>
             <span className="twgit-review-status">{labels[status]}</span>
             <strong>{title}</strong>
@@ -427,5 +435,53 @@ export function ProjectSourceReview({title, description, verification, files, re
                 locateBlock={'locateBlock' in file ? file.locateBlock : undefined}
                 review={{file: file.path, keys: reviewed, set: setReviewed}}/>}
         </section>)}
+    </section>;
+}
+
+/** The words of one tab of a project comparison opened as tabs. */
+export function reviewTabWords(locale: string) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    return {
+        script: (script: ScriptReview) => `${scriptReviewTitle(script, labels)} · ${labels[script.kind]}`,
+        target: (target: TargetReview) => target.isStage ? labels.stage : target.name,
+        targetDetails: labels.properties,
+        project: labels.comparison,
+        noChanges: labels.noChanges
+    };
+}
+
+/** One script of a comparison, open, for a tab of its own. */
+export function ScriptReviewTab({comparison, script, renderBlock, locale = 'en', loadAsset, locateBlock}: {
+    comparison: Comparison; script: ScriptReview; renderBlock: ProjectBlockRenderer; locale?: string;
+    loadAsset?: ProjectAssetLoader; locateBlock?: ProjectBlockLocator;
+}) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    const location = useBlockLocation(comparison, locateBlock);
+    return <section className="twgit-block-diff twgit-review twgit-review-tab">
+        <ScriptComparison script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset} location={location} expanded/>
+        <Legend labels={labels}/>
+    </section>;
+}
+
+/**
+ * What changed in a stage or sprite outside its code, or in the project as a whole when no target is given,
+ * for a tab of its own.
+ */
+export function TargetReviewTab({comparison, target, locale = 'en', loadAsset}: {
+    comparison: Comparison; target?: TargetReview; locale?: string; loadAsset?: ProjectAssetLoader;
+}) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    if (!target) {
+        return <section className="twgit-block-diff twgit-review twgit-review-tab">
+            {comparison.properties.length > 0 ? <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p> :
+                <p>{labels.noChanges}</p>}
+        </section>;
+    }
+    return <section className="twgit-block-diff twgit-review twgit-review-tab">
+        <h5><TargetThumbnails target={target} labels={labels} loadAsset={loadAsset}/>{target.isStage ? labels.stage : target.name}</h5>
+        {target.status !== 'updated' && <p className="twgit-review-target-status">
+            {(target.status === 'added' ? labels.targetAdded : labels.targetRemoved)(target.name, target.isStage)}</p>}
+        {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
+        {target.scripts.length > 0 && <p>{labels.scriptCount(target.scripts.length)}</p>}
     </section>;
 }

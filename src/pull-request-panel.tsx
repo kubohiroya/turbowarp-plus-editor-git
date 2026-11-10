@@ -5,6 +5,10 @@ import {ProjectSourceReview} from './project-source-review.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {Repository} from './repository.js';
 import type {ProjectBlockLocator} from './block-diff-location.js';
+import {readProjectSourceDiff} from './project-source-patch.js';
+import type {ProjectSourceTabsFile} from './project-source-tabs.js';
+
+type OpenTabs = (key: string, files: readonly ProjectSourceTabsFile[]) => number;
 
 const en = {
     title: 'Pull requests', number: 'Pull request number', openNumber: 'Open pull request',
@@ -15,7 +19,8 @@ const en = {
     unavailable: 'GitHub could not read this repository or pull request. The panel supports public repositories.',
     rateLimit: 'The public GitHub API rate limit was reached. Try again after the limit resets.',
     failed: 'Could not read GitHub. Try again.', changed: 'The pull request changed while it was being read. Open it again.',
-    tooManyFiles: 'GitHub only returns the first 3,000 changed files. This pull request exceeds that limit.'
+    tooManyFiles: 'GitHub only returns the first 3,000 changed files. This pull request exceeds that limit.',
+    openTabs: 'Open as tabs'
 };
 const ja: typeof en = {
     title: 'プルリクエスト', number: 'プルリクエスト番号', openNumber: 'PR を開く',
@@ -27,7 +32,8 @@ const ja: typeof en = {
     rateLimit: '公開 GitHub API の利用上限に達しました。上限の解除後に再試行してください。',
     failed: 'GitHub から取得できませんでした。再試行してください。',
     changed: '取得中にプルリクエストが更新されました。もう一度開いてください。',
-    tooManyFiles: '変更ファイルが GitHub API の取得上限である 3,000 件を超えています。'
+    tooManyFiles: '変更ファイルが GitHub API の取得上限である 3,000 件を超えています。',
+    openTabs: 'タブで開く'
 };
 
 function errorMessage(error: unknown, labels: typeof en) {
@@ -38,9 +44,10 @@ type Result<T> = {data: T; error?: never} | {data?: never; error: string};
 type Listing = Awaited<ReturnType<GitHubPullRequests['list']>>;
 type Pull = Awaited<ReturnType<GitHubPullRequests['load']>>;
 
-function PullRequests({name, labels, locale, renderBlock, locateFor}: {
+function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs}: {
     name: string; labels: typeof en; locale: string; renderBlock: ProjectBlockRenderer;
     locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
+    openTabs?: OpenTabs;
 }) {
     const client = useMemo(() => createGitHubPullRequests(name), [name]);
     const [page, setPage] = useState(1);
@@ -109,6 +116,18 @@ function PullRequests({name, labels, locale, renderBlock, locateFor}: {
                     {pr.author && <span>{pr.author}</span>}
                     <code title={pr.head.sha}>{pr.head.ref} → {pr.base.ref}</code>
                     <a href={pr.url} target="_blank" rel="noreferrer">{labels.onGitHub}</a>
+                    {openTabs && <button type="button" data-git-open-tabs="" onClick={() => openTabs(`${name}#${pr.number}@${pr.head.sha}`,
+                        pr.files.flatMap(file => {
+                            if (!('patch' in file)) return [];
+                            let projects;
+                            try {
+                                projects = readProjectSourceDiff(file.patch, file.beforeSource);
+                            } catch {
+                                return [];
+                            }
+                            return projects ? [{path: file.path, before: projects[0], after: projects[1], loadAsset: file.loadAsset,
+                                locateBlock: locateFor?.(file.path, pr.head.sha)}] : [];
+                        }))}>{labels.openTabs}</button>}
                 </p>
                 <ProjectSourceReview title={pr.title} description={pr.description} files={locateFor ? pr.files.map(file => 'patch' in file ? {...file, locateBlock: locateFor(file.path, pr.head.sha)} : file) : pr.files}
                     renderBlock={renderBlock} locale={locale} rememberAs={`${name}#${pr.number}`}/>
@@ -117,8 +136,10 @@ function PullRequests({name, labels, locale, renderBlock, locateFor}: {
     </div>;
 }
 
-export function PullRequestReviewPanel({repository, locale, renderBlock, locateFor}: {
+export function PullRequestReviewPanel({repository, locale, renderBlock, locateFor, openTabs}: {
     repository: Repository; locale: string; renderBlock: ProjectBlockRenderer;
+    /** Opens a pull request's project changes as tabs of the host's layout. */
+    openTabs?: OpenTabs;
     /** Returns a locator for a project file whose PR head matches the open project, or `undefined`. */
     locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
 }) {
@@ -135,5 +156,5 @@ export function PullRequestReviewPanel({repository, locale, renderBlock, locateF
     }, [repository]);
     if (origin?.repository !== repository) return <p role="status" className="twgit-context">{labels.loading}</p>;
     if (!origin.name) return <p className="twgit-context" role="status">{origin.failed ? labels.failed : labels.noOrigin}</p>;
-    return <PullRequests key={origin.name} name={origin.name} labels={labels} locale={locale} renderBlock={renderBlock} locateFor={locateFor}/>;
+    return <PullRequests key={origin.name} name={origin.name} labels={labels} locale={locale} renderBlock={renderBlock} locateFor={locateFor} openTabs={openTabs}/>;
 }
