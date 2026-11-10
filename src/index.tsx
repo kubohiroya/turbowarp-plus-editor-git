@@ -68,7 +68,7 @@ export interface GitPanelRequest {
     mount(element: HTMLElement, close: () => void): {requestClose(): void; dispose(): void};
 }
 type BranchOperation = Extract<LocalOperation, {kind: 'createBranch' | 'switchBranch'}>;
-/** The panel's side of the host's entries to it: set by the panel as it renders, used by the menu and the branch buttons. */
+/** The panel's side of its entries: set by the panel as it renders, used by the branch buttons and `mountGitPanel`'s result. */
 interface Controller {
     open(locale: string): void;
     refresh(automatic?: boolean): Promise<void>;
