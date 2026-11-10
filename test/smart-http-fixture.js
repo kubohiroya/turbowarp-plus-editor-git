@@ -176,3 +176,23 @@ export function adapterOptions(fixture, bearer = 'fixture-write') {
         fetch: (url, init) => fetch(url, {...init, headers: {...Object.fromEntries(init.headers), Origin: 'https://editor.example.invalid'}})
     };
 }
+
+/**
+ * Publishes a pull request the way GitHub exposes it on the base repository: `refs/pull/<number>/head` points at the
+ * head commit. With `fork`, the head is committed in a separate clone and pushed only to that ref, so no branch of the
+ * base repository contains it.
+ */
+export async function publishPullRequest(fixture, number, {fork = false, branch = 'feature', from, edit}) {
+    const dir = from ?? join(fixture.root, fork ? `fork-${number}` : `branch-${number}`);
+    if (!from) {
+        git(fixture.root, 'clone', '-q', fixture.bare, dir);
+        if (!fork) git(dir, 'switch', '-q', '-c', branch);
+    }
+    await edit(dir);
+    git(dir, 'add', '-A');
+    git(dir, '-c', 'user.name=Contributor', '-c', 'user.email=contributor@example.invalid', 'commit', '-qm', `pull request ${number}`);
+    const head = git(dir, 'rev-parse', 'HEAD');
+    if (!fork) git(dir, 'push', '-q', '--force', fixture.bare, branch);
+    git(dir, 'push', '-q', fixture.bare, `+HEAD:refs/pull/${number}/head`);
+    return {dir, head};
+}

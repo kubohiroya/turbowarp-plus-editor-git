@@ -167,3 +167,19 @@ test('project assets come from raw.githubusercontent.com at the merge base and h
     assert.equal(await pending, null);
     assert.equal(api, apiRequests);
 });
+
+test('metadata reads one pull request in one request, for contents fetched over the connection', async () => {
+    const requests = [];
+    const client = createGitHubPullRequests('owner/game', async (url, options) => {
+        assert.equal(options.credentials, 'omit');
+        requests.push(new URL(url).pathname);
+        if (new URL(url).pathname === '/repos/owner/game/pulls/42') return Response.json(pr);
+        return new Response('', {status: 404});
+    });
+    const metadata = await client.metadata(42, signal);
+    assert.deepEqual(requests, ['/repos/owner/game/pulls/42']);
+    assert.equal(metadata.base.sha, base);
+    assert.equal(metadata.head.sha, head);
+    assert.equal(metadata.url, 'https://github.com/owner/game/pull/42');
+    await assert.rejects(client.metadata(7, signal), {code: 'unavailable'});
+});

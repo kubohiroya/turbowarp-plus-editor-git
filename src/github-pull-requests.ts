@@ -165,6 +165,13 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
         await request(repoPath(name) + '/contents/' + contentPath(path) + '?ref=' + revision, signal, 'application/vnd.github.raw+json'), sourceLimit);
 
     return {
+        /** Reads one pull request's title, description, state and both revisions, without its files (one request). */
+        async metadata(number: number, signal: AbortSignal) {
+            if (!Number.isSafeInteger(number) || number < 1) throw invalidResponse();
+            const pr = await metadata(number, signal);
+            if (pr.number !== number) throw invalidResponse();
+            return {...pr, url: 'https://github.com/' + repository + '/pull/' + number};
+        },
         async list(page: number, signal: AbortSignal) {
             const result = await json(repo + '/pulls?state=all&sort=updated&per_page=20&page=' + page, signal);
             if (!Array.isArray(result)) throw invalidResponse();

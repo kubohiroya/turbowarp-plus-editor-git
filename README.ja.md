@@ -41,6 +41,14 @@ receive-pack の POST ごとに UUID v4 を発行し、`Git-Push-Id` に設定�
 
 Editor のホストが接続設定を渡すと、ローカル Git パネルで、現在のブランチと既存の GitHub HTTPS リモート `origin` に対して fetch、fast-forward pull、push ができます。push には接続時の明示許可が必要です。fetch は Git のメタデータを更新します。pull は作品を停止し、作業ツリーがクリーンで通常の実行権限なしファイルだけを扱える場合に使えます。変更を一時領域に組み立て、ローカルの状態を再確認してから適用します。pull 後はパネルから作品を再読込できます。
 
+### 接続を使って PR を読む
+
+GitHub 接続が接続済みのとき、PR レビューは PR の中身を GitHub API ではなく同じ Git Smart HTTP の経路で読みます。非公開リポジトリの PR も読め、中身の取得には API の利用上限を使いません。`repository.fetchPullRequest(number, getSession, guard, signal)` は GitHub の `refs/pull/<番号>/head` を、すべてのブランチと一緒に fetch します（広告と pack の 2 件）。フォークからの PR も base のリポジトリのこの ref で取れます。ブランチは fetch と同じく `refs/remotes/origin/*` を更新します。`repository.readPullRequest(head, {sha, branch})` は、手元の Git オブジェクトから、ベースとの merge base と head を比べます。変更されたパス（内容が同じ移動は名前の変更として対にします）、`project.source.json` ごとのブロック差分、同じコミットから読むサムネイルを返します。プロキシの経路と GitHub App の権限は変えません。
+
+取得した head は `refs/pull/origin/<番号>/head` に置き、同じ PR を取得するたびに置き換えます（head は force-push されることがあるため）。`refs/heads`・`refs/remotes`・`refs/tags` の外にあるので、Git CLI では `git for-each-ref refs/pull` と `git log --all` に出て、`git branch -a` と `git tag` には出ません。`refs/remotes/origin/` の下に置くと GitHub のブランチに見え、`git fetch --prune` で消えます。ref を作らずに取得すると、オブジェクトがどこからも参照されず `git gc` で消えます。要らなくなった ref は `git update-ref -d refs/pull/origin/<番号>/head` で消せます。取得で書くのはオブジェクトと ref だけで、fetch・pull と同じ一時領域とロック（`tw-plus-git-mutation`）を通します。作業ツリー、インデックス、HEAD、`.git/config` は書きません。
+
+一覧と、公開リポジトリの題名・本文・ベースは、引き続き公開 API から読みます（PR ごとに 1 件）。API のベースのコミットが取得で手元に来ていればそれと比べ、なければベースのブランチと比べます。非公開リポジトリではベースのブランチが API でしかわからないため、GitHub の既定のブランチと比べ、別のブランチを選べるようにします。失敗したときは、未接続またはセッション切れ、接続にリポジトリを読む権限がない、その番号の PR がない、ネットワーク、のどれかを示します。接続しているときに中身を公開 API から読むことはありません。接続していないときは、従来どおり公開 API を読みます。選んだブランチにすでにマージされた PR は、API がベースのコミットを返さない限り、変更なしと表示されます。
+
 ## 作品ソースのブロック差分
 
 `@kubohiroya/turbowarp-plus-editor-git/project-source-diff` の `createProjectSourceDiff` に、変更前後の `project.source.json` の文字列を渡します。戻り値を `project.diff` として保存できます。生成した unified diff には全行の文脈が入るので、ビューへ渡すときは `.diff` だけで変更前後を復元できます。既存のコンパクトな Git 差分を使う場合は、`beforeSource` に対応する変更前の JSON も渡します。
