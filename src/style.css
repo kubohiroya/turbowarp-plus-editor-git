@@ -125,3 +125,7 @@
     padding: 2px 8px; font: inherit; cursor: pointer; }
 .twgit-snackbar button.twgit-snackbar-close { border-color: transparent; padding: 0 6px; font-size: 18px; line-height: 1.2; }
 .twgit-snackbar button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+/* The history in a side panel of the host. */
+.twgit-history-view { box-sizing: border-box; padding: 8px; font: 13px/1.5 system-ui, sans-serif; }
+.twgit-history-view > p { margin: 0 0 8px; }
+.twgit-history-view > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }

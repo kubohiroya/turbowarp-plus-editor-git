@@ -5,7 +5,9 @@ import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLab
 import type {ChangedFile} from './project-change-model.js';
 import {openRepository} from './repository.js';
 import type {BranchRefs, Repository, Snapshot, FileChange, FileDiff, ChangeGroup, HistoryCommit, HistoryCursor} from './repository.js';
-import {BranchButton} from './branch-button.js';
+import {BranchButton, useBranchSnackbar} from './branch-button.js';
+import {changeMarks} from './change-marks.js';
+import type {ChangeMark} from './change-marks.js';
 import type {BranchButtonState} from './branch-button.js';
 import {HistoryGraph} from './history-graph-view.js';
 import type {HistoryActionResult} from './history-graph-view.js';
@@ -36,6 +38,8 @@ export {HistoryGraph, laneColors} from './history-graph-view.js';
 export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.js';
 export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
+export {changeMarks} from './change-marks.js';
+export type {ChangeMark} from './change-marks.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
 
 export interface GitHost {
@@ -79,7 +83,10 @@ interface Controller {
     reload(): void;
     /** What the branch buttons show. */
     branch: BranchButtonState;
-    publish(state: BranchButtonState): void;
+    /** The chosen repository and its last snapshot, published with `branch`. */
+    repository: Repository | null;
+    snapshot: Snapshot | null;
+    publish(state: BranchButtonState, repository: Repository | null, snapshot: Snapshot | null): void;
     /** Follows `branch`. While anything follows it, the closed panel keeps watching the branches. */
     follow(listener: () => void): () => void;
     /** How many follow `branch`. */
@@ -93,8 +100,12 @@ function createController(): Controller {
         open() {}, async refresh() {}, async choose() {}, async changeBranch() {return {done: false};}, reload() {},
         branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
             project: false},
-        publish(state) {
+        repository: null,
+        snapshot: null,
+        publish(state, repository, snapshot) {
             controller.branch = state;
+            controller.repository = repository;
+            controller.snapshot = snapshot;
             for (const listener of [...listeners]) listener();
         },
         follow(listener) {
@@ -530,7 +541,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         branches: refs?.branches ?? [], remoteBranches: refs?.remoteBranches ?? [], writable: !!host.localWrite && !!refs, busy: state.busy,
         project: state.project !== null};
     const published = JSON.stringify(branchState);
-    useEffect(() => controller.publish(branchState), [published]);
+    useEffect(() => controller.publish(branchState, state.repository, state.snapshot), [published, state.repository, state.snapshot]);
     if (!shown) return null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
     // Branches can be switched and created whenever writes are allowed and the repository has been read.
@@ -721,14 +732,18 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
 }
 
 /** The branch button of the panel mounted for `vm`, or nothing while no panel is mounted for it. */
-function BranchEntry({vm, locale}: {vm: object; locale: string}) {
+/** Calls `listener` with the controller of the panel mounted for `vm`, now and whenever it is mounted or disposed. */
+function findController(vm: object, listener: (controller: Controller | undefined) => void) {
+    const update = () => listener(controllers.get(vm));
+    registrations.add(update);
+    update();
+    return () => {registrations.delete(update);};
+}
+
+/** The panel mounted for `vm` and what it last published. Following it keeps the closed panel watching the branches. */
+function useController(vm: object) {
     const [controller, setController] = useState(() => controllers.get(vm));
-    useEffect(() => {
-        const update = () => setController(controllers.get(vm));
-        registrations.add(update);
-        update();
-        return () => {registrations.delete(update);};
-    }, [vm]);
+    useEffect(() => findController(vm, setController), [vm]);
     const [state, setState] = useState(controller?.branch);
     useEffect(() => {
         if (!controller) return;
@@ -736,6 +751,11 @@ function BranchEntry({vm, locale}: {vm: object; locale: string}) {
         update();
         return controller.follow(update);
     }, [controller]);
+    return {controller, state};
+}
+
+function BranchEntry({vm, locale}: {vm: object; locale: string}) {
+    const {controller, state} = useController(vm);
     if (!controller || !state) return null;
     return <BranchButton state={state} locale={locale} open={() => controller.open(locale)} choose={() => void controller.choose(locale)}
         reload={() => controller.reload()}
@@ -752,4 +772,113 @@ function BranchEntry({vm, locale}: {vm: object; locale: string}) {
 export function renderBranchButton(createElement: (component: any, props: any, ...children: any[]) => any,
     {vm, locale = 'en'}: {vm: object; locale?: string}) {
     return createElement(BranchEntry, {vm, locale});
+}
+
+type History = {commits: HistoryCommit[]; cursor: HistoryCursor | null; loading: boolean; failed: boolean};
+
+/** The history of the panel's repository, read again whenever its branches move. */
+function HistoryEntry({vm, locale}: {vm: object; locale: string}) {
+    const {controller, state} = useController(vm);
+    const labels = labelsFor(locale);
+    const repository = state && controller?.repository || null;
+    const [history, setHistory] = useState<History>({commits: [], cursor: null, loading: false, failed: false});
+    const [selected, setSelected] = useState<string | null>(null);
+    const ticket = useRef(0);
+    const root = useRef<HTMLDivElement>(null);
+    const refs = state ? [state.head, ...state.branches, '', ...state.remoteBranches].join('\n') : '';
+    useEffect(() => {
+        const current = ++ticket.current;
+        if (!repository) {
+            setHistory({commits: [], cursor: null, loading: false, failed: false});
+            return;
+        }
+        // The rows read before stay until the new page arrives, so focus in the list is kept.
+        setHistory(previous => ({...previous, cursor: null, loading: true, failed: false}));
+        repository.history().then(page => {
+            if (ticket.current === current) setHistory({commits: page.commits, cursor: page.cursor, loading: false, failed: false});
+        }, () => {
+            if (ticket.current === current) setHistory({commits: [], cursor: null, loading: false, failed: true});
+        });
+    }, [repository, refs]);
+    const showMore = () => {
+        if (!repository || !history.cursor || history.loading) return;
+        const current = ticket.current;
+        setHistory(previous => ({...previous, loading: true}));
+        repository.history({after: history.cursor}).then(page => {
+            if (ticket.current === current) setHistory(previous => ({commits: [...previous.commits, ...page.commits],
+                cursor: page.cursor, loading: false, failed: false}));
+        }, () => {
+            if (ticket.current === current) setHistory(previous => ({...previous, cursor: null, loading: false, failed: true}));
+        });
+    };
+    const {report, element: snackbar} = useBranchSnackbar(locale, !!state?.project, {
+        open: () => controller?.open(locale), reload: () => controller?.reload()
+    }, () => root.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus({preventScroll: true}));
+    if (!controller || !state) return null;
+    if (!repository) return <div className="twgit-history-view" ref={root}>
+        <p>{labels.historyViewEmpty}</p>
+        <button type="button" onClick={() => void controller.choose(locale)}>{labels.choose}</button>
+    </div>;
+    const change = async (operation: BranchOperation) => {
+        const result = await controller.changeBranch(operation);
+        report(result, operation.kind === 'switchBranch' || !!operation.checkout);
+        return result;
+    };
+    return <div className="twgit-history-view" ref={root}>
+        <HistoryGraph commits={history.commits} selected={selected} locale={locale} busy={state.busy} onSelect={setSelected}
+            hasMore={!!history.cursor} loadingMore={history.loading} onShowMore={showMore} localBranches={state.branches}
+            {...state.writable ? {
+                // A refused create stays in the graph's form with its reason; only a done one is told in the snackbar.
+                onCreateBranch: async (oid: string, name: string, checkout: boolean) => {
+                    const result = await controller.changeBranch({kind: 'createBranch', name, at: oid, checkout});
+                    if (result.done) report(result, checkout);
+                    return result;
+                },
+                onSwitchBranch: (name: string) => change({kind: 'switchBranch', name}),
+                onCreateFromRemote: (name: string) => change({kind: 'createBranch', name, fromRemote: true, checkout: true})
+            } : {}}/>
+        {history.loading && !history.commits.length && <p role="status">{labels.historyLoading}</p>}
+        {history.failed && <p>{labels.historyFailed}</p>}
+        {snackbar}
+    </div>;
+}
+
+/**
+ * Renders the history graph of the repository chosen in the panel mounted for `vm`, for a side panel of the host. It
+ * follows branch changes made anywhere, offers the graph's branch actions when the panel allows writes and tells their
+ * results in the branch button's snackbar. Before a repository is chosen it offers to choose one; it renders nothing
+ * while no panel is mounted for `vm`.
+ */
+export function renderHistoryView(createElement: (component: any, props: any, ...children: any[]) => any,
+    {vm, locale = 'en'}: {vm: object; locale?: string}) {
+    return createElement(HistoryEntry, {vm, locale});
+}
+
+/**
+ * Follows the Git status of the files under `directory`, as the panel mounted for `vm` last read it, and calls
+ * `listener` with their marks by path relative to `directory`. The marks are empty while no repository is chosen or
+ * `directory` is outside it. Returns the function that stops following.
+ */
+export function followChangeMarks(vm: object, directory: FileSystemDirectoryHandle,
+    listener: (marks: ReadonlyMap<string, ChangeMark>) => void) {
+    let stopped = false;
+    let read: Snapshot | null | undefined;
+    let unfollow = () => {};
+    const update = async (controller: Controller | undefined) => {
+        const {repository, snapshot} = controller ?? {repository: null, snapshot: null};
+        if (snapshot === read) return;
+        read = snapshot;
+        const path = repository && snapshot ? await repository.root.resolve(directory).catch(() => null) : null;
+        if (!stopped && read === snapshot) listener(path ? changeMarks(snapshot!.changes, path.join('/')) : new Map());
+    };
+    const unregister = findController(vm, controller => {
+        unfollow();
+        unfollow = controller ? controller.follow(() => void update(controller)) : () => {};
+        void update(controller);
+    });
+    return () => {
+        stopped = true;
+        unregister();
+        unfollow();
+    };
 }

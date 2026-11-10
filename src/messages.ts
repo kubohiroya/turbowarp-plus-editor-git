@@ -52,7 +52,7 @@ export const messages = {
         historyCreateFromRemote: 'Create and switch to {name}', historyCopy: 'Copy commit ID', historyCopied: 'Copied the commit ID.',
         historyCopyFailed: 'Could not copy the commit ID.', historyRefs: 'Branches', cancel: 'Cancel',
         branchMenu: 'Branches', openPanel: 'Open Local Git', newBranchItem: 'New Branch…', newBranchTitle: 'New Branch',
-        switchedShort: 'Switched branches.'
+        switchedShort: 'Switched branches.', historyViewEmpty: 'Choose a Git repository to show its history here.'
     },
     ja: {
         pullRequests: 'プルリクエスト', localChanges: 'ローカルの変更',
@@ -107,7 +107,7 @@ export const messages = {
         historyCreateFromRemote: '{name} を作って切り替える', historyCopy: 'コミットの ID をコピー', historyCopied: 'コミットの ID をコピーしました。',
         historyCopyFailed: 'コミットの ID をコピーできませんでした。', historyRefs: 'ブランチ', cancel: 'キャンセル',
         branchMenu: 'ブランチ', openPanel: 'ローカル Git を開く', newBranchItem: '新しいブランチ…', newBranchTitle: '新しいブランチ',
-        switchedShort: 'ブランチを切り替えました。'
+        switchedShort: 'ブランチを切り替えました。', historyViewEmpty: 'Git リポジトリを選ぶと、ここに履歴を表示します。'
     }
 };
 export type Labels = typeof messages.en;
