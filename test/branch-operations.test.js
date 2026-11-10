@@ -164,3 +164,18 @@ test('refuses a name that clashes with an existing branch under refs/heads, befo
     await run(repository, {kind: 'createBranch', name: 'prize', checkout: false});
     assert.equal(git('rev-parse', 'prize'), git('rev-parse', 'main'));
 });
+
+test('refs reads the branch fields of a snapshot alone, and follows switches by other tools', async t => {
+    const {git, repository} = await fixture(t);
+    git('update-ref', 'refs/remotes/origin/score', 'main');
+    git('update-ref', 'refs/remotes/origin/main', 'main');
+    const {branch, head, branches, remoteBranches} = await repository.read();
+    assert.deepEqual(await repository.refs(), {branch, head, branches, remoteBranches});
+    assert.deepEqual(await repository.refs(), {branch: 'main', head: git('rev-parse', 'main'), branches: ['feature', 'main'],
+        remoteBranches: ['score']});
+    git('switch', '-q', 'feature');
+    assert.equal((await repository.refs()).branch, 'feature');
+    git('switch', '-q', '--detach', 'main');
+    assert.deepEqual(await repository.refs(), {branch: undefined, head: git('rev-parse', 'main'), branches: ['feature', 'main'],
+        remoteBranches: ['score']});
+});
