@@ -26,6 +26,10 @@
 .twgit-panel aside li { overflow-wrap: anywhere; }
 .twgit-panel summary { cursor: pointer; }
 .twgit-panel .twgit-file { width: 100%; border: 0; margin: 1px 0; }
+.twgit-panel .twgit-stage { font-size: 11px; margin: 0 0 4px; }
+.twgit-commit { display: grid; gap: 6px; margin: 10px 0; padding: 8px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px; }
+.twgit-commit label { display: grid; gap: 4px; font-size: 12px; }
+.twgit-commit textarea { font: inherit; resize: vertical; min-height: 3em; }
 .twgit-diff { padding: 0 16px 16px; min-width: 0; overflow: auto; }
 .twgit-diff .diff { font-size: 12px; }
 .twgit-history { list-style: none; margin: 0; padding: 0; }
