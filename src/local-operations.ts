@@ -38,7 +38,7 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
         // Another tool is in the middle of a merge, rebase or its own write: leave the repository to it.
         for (const path of ['/.git/index.lock', '/.git/MERGE_HEAD', '/.git/CHERRY_PICK_HEAD', '/.git/REVERT_HEAD',
             '/.git/rebase-merge', '/.git/rebase-apply']) {
-            if (await exists(path)) throw new GitPanelError('changed');
+            if (await exists(path)) throw new GitPanelError('locked');
         }
         if (operation.kind === 'createBranch' || operation.kind === 'switchBranch') {
             const name = operation.name.trim();

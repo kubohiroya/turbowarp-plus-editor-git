@@ -136,3 +136,45 @@ test('a push response that fails after its report-status leaves the outcome unkn
     assert.equal(git(bare, 'rev-parse', 'main'), pushed);
     assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/main'), tracking);
 });
+
+test('a branch made from origin/<name> fetches, pulls and pushes the remote branch of the same name without tracking config', async t => {
+    const fixture = await startFixture(t);
+    const {client, seed, bare} = fixture;
+    const fetch = globalThis.fetch;
+    t.mock.method(globalThis, 'fetch', (url, init) => {
+        const headers = new Headers(init.headers);
+        headers.set('Origin', 'https://editor.example.invalid');
+        return fetch(url, {...init, headers});
+    });
+    const session = async (target, write) => ({connection: {mode: 'desktop', proxyOrigin: fixture.origin},
+        bearer: write ? 'fixture-write' : 'fixture-read', expiresAt: Date.now() + 60000});
+    // GitHub has a second branch, already fetched into origin/shared.
+    git(seed, 'switch', '-q', '-c', 'shared');
+    await writeFile(join(seed, 'project.txt'), 'shared 1\n');
+    commit(seed, 'shared 1');
+    git(seed, 'push', '-q', bare, 'shared');
+    git(client, 'fetch', '-q', bare, 'refs/heads/shared:refs/remotes/origin/shared');
+    const config = await readFile(join(client, '.git/config'));
+    const repository = await openRepository(directoryHandle(client));
+    await repository.localOperation({kind: 'createBranch', name: 'shared', fromRemote: true, checkout: true}, () => {});
+    assert.equal(git(client, 'branch', '--show-current'), 'shared');
+    assert.deepEqual(await readFile(join(client, '.git/config')), config);
+    // GitHub moves on; fetch and pull follow refs/heads/shared.
+    await writeFile(join(seed, 'project.txt'), 'shared 2\n');
+    const second = commit(seed, 'shared 2');
+    git(seed, 'push', '-q', bare, 'shared');
+    await repository.remoteOperation('fetch', session, () => {});
+    assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/shared'), second);
+    await repository.remoteOperation('pull', session, () => {});
+    assert.equal(git(client, 'rev-parse', 'HEAD'), second);
+    assert.equal(await readFile(join(client, 'project.txt'), 'utf8'), 'shared 2\n');
+    // A local record goes to GitHub's branch of the same name.
+    await writeFile(join(client, 'project.txt'), 'shared 3\n');
+    await repository.localOperation({kind: 'stage', paths: ['project.txt']}, () => {});
+    await repository.localOperation({kind: 'commit', message: 'shared 3', author: {name: 'Editor', email: 'editor@example.invalid'}}, () => {});
+    const third = git(client, 'rev-parse', 'HEAD');
+    await repository.remoteOperation('push', session, () => {});
+    assert.equal(git(bare, 'rev-parse', 'refs/heads/shared'), third);
+    assert.equal(git(bare, 'rev-parse', 'refs/heads/main'), git(seed, 'rev-parse', 'main'));
+    assert.deepEqual(await readFile(join(client, '.git/config')), config);
+});
