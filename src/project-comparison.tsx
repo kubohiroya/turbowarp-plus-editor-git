@@ -1,4 +1,5 @@
 import React, {useEffect, useRef} from 'react';
+import {CloseButton} from './close-button.js';
 import {render, unmountComponentAtNode} from 'react-dom';
 import {ProjectSourceComparison} from './project-source-review.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
@@ -21,6 +22,7 @@ export interface ProjectComparisonOptions {
     sections: readonly ProjectComparisonSection[];
     /** The first action is the one the dialog focuses. Closing the dialog or pressing Escape chooses none. */
     actions: readonly ProjectComparisonAction[];
+    /** The tooltip and accessible name of the X button that closes the dialog. By default, "Close" in the locale. */
     closeLabel?: string;
     renderBlock: ProjectBlockRenderer;
     locale?: string;
@@ -32,7 +34,7 @@ export interface ProjectComparisonDialogProps extends ProjectComparisonOptions {
 const focusable = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]';
 
 /** A modal that lays project comparisons side by side in sections and asks the user to choose an action. */
-export function ProjectComparisonDialog({title, description, notes = [], sections, actions, closeLabel = 'Close',
+export function ProjectComparisonDialog({title, description, notes = [], sections, actions, closeLabel,
     renderBlock, locale = 'en', onChoose}: ProjectComparisonDialogProps) {
     const dialog = useRef<HTMLDivElement>(null);
     const first = useRef<HTMLButtonElement>(null);
@@ -55,7 +57,7 @@ export function ProjectComparisonDialog({title, description, notes = [], section
             aria-label={title} onKeyDown={keyDown}>
             <header>
                 <h2>{title}</h2>
-                <button type="button" onClick={() => onChoose(null)}>{closeLabel}</button>
+                <CloseButton label={closeLabel ?? (locale.startsWith('ja') ? '閉じる' : 'Close')} onClick={() => onChoose(null)}/>
             </header>
             <div className="twgit-comparison-body">
                 {description && <p>{description}</p>}

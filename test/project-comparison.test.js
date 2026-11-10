@@ -31,4 +31,14 @@ test('the comparison dialog shows each section and offers the actions in order',
     assert.deepEqual(actions, [['keep', 'Keep My Edits'], ['discard', 'Discard Edits and Load from Folder']]);
     // Both comparisons reach the code view of the changed sprite.
     assert.equal(html.match(/Cat/g)?.length >= 2, true);
+    // The dialog closes from an X, named only in its tooltip and for screen readers.
+    assert.match(html, /<button type="button" class="twgit-close" aria-label="Close" title="Close"><svg [^>]*aria-hidden="true"/);
+    assert.doesNotMatch(html, />Close</);
+});
+
+test('the close button of the comparison dialog is named in the locale by default', () => {
+    const html = ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectComparisonDialog, {
+        title: '比較', sections: [], actions: [], locale: 'ja', renderBlock: async () => {}, onChoose() {}
+    }));
+    assert.match(html, /class="twgit-close" aria-label="閉じる" title="閉じる"/);
 });
