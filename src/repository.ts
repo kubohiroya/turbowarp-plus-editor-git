@@ -64,6 +64,8 @@ export interface HistoryPage {
 export const historyPageSize = 50;
 const projectSourceLimit = 16 * 1024 * 1024;
 type Metadata = Map<string, Uint8Array | null>;
+/** The branch fields of a snapshot. */
+export type BranchRefs = Pick<Snapshot, 'branch' | 'head' | 'branches' | 'remoteBranches'>;
 export interface Snapshot {
     branch: string | undefined;
     head: string | null;
@@ -275,13 +277,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     const assertSnapshot = async (snapshot: Snapshot) => {
         if (!sameMetadata(snapshot.metadata, await metadata())) throw new GitPanelError('changed');
     };
-    const read = async (scope = ''): Promise<Snapshot> => {
-        scope = pathParts(scope).join('/');
-        fs.clearReads();
-        cache = {};
-        // Taken first, so a change during the read differs from the stored value and triggers another read.
-        const fingerprint = await probe(scope);
-        const before = await metadata();
+    const readRefs = async (): Promise<BranchRefs> => {
         let head: string | null;
         try {head = await git.resolveRef({...options, ref: 'HEAD'});} catch (error) {
             if (errorCode(error) !== 'NotFoundError') throw error;
@@ -291,6 +287,16 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const branches = await git.listBranches(options);
         const remoteBranches = (await git.listBranches({...options, remote: 'origin'}))
             .filter(name => name !== 'HEAD' && !branches.includes(name)).sort();
+        return {branch: branch || undefined, head, branches, remoteBranches};
+    };
+    const read = async (scope = ''): Promise<Snapshot> => {
+        scope = pathParts(scope).join('/');
+        fs.clearReads();
+        cache = {};
+        // Taken first, so a change during the read differs from the stored value and triggers another read.
+        const fingerprint = await probe(scope);
+        const before = await metadata();
+        const {branch, head, branches, remoteBranches} = await readRefs();
         const commits = head ? (await git.log({...options, cache, ref: head, depth: 50})).map(({oid, commit}) => ({
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
@@ -316,7 +322,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch: branch || undefined, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
+        return {branch, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
             upstream};
     };
     interface HistoryNode {commit: HistoryCommit; time: number; children: number; expanded: boolean}
@@ -613,6 +619,14 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             }
         }),
         read: (scope?: string) => serial(() => read(scope)),
+        /**
+         * The current branch, HEAD and the branch names, read from refs only. Cheap enough to follow branch changes made
+         * by other tools while nothing else is read; `read` returns the same fields.
+         */
+        refs: () => serial(() => {
+            fs.clearReads();
+            return readRefs();
+        }),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
         /**
