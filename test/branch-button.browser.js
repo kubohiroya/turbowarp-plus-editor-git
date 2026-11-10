@@ -11,7 +11,9 @@ import {serveEditorRuntime} from '@kubohiroya/turbowarp-plus-editor-test-runtime
 // Screenshots go where TWGIT_SCREENSHOTS points, when set.
 const screenshots = process.env.TWGIT_SCREENSHOTS;
 const repository = {repository: true, branch: 'main', head: '1234567890abcdef1234567890abcdef12345678',
-    branches: ['jump', 'main', 'sound'], remoteBranches: ['score'], writable: true, busy: false};
+    branches: ['jump', 'main', 'sound'], remoteBranches: ['score'], writable: true, busy: false, project: true};
+const noRepository = {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
+    project: false};
 
 async function open(t, locale) {
     const server = await serveEditorRuntime({script: fileURLToPath(new URL('./branch-button-page.js', import.meta.url))});
@@ -21,6 +23,8 @@ async function open(t, locale) {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
+    // The snackbar's time runs on a clock the test moves.
+    await page.clock.install();
     await page.goto(server.url);
     const mount = state => page.evaluate(value => mountBranchButton(value), {state, locale});
     const calls = () => page.evaluate(() => calls);
@@ -75,24 +79,78 @@ test('the branch button lists the branches, moves with the keyboard and switches
     assert.equal(await menu.count(), 0);
     assert.deepEqual(await calls(), [['open']]);
 
-    // A switch goes through the panel, which then shows its result: a switch that ran, or why it did not.
+    // A switch goes through the panel; its result shows in a snackbar, and the panel stays closed.
+    const snackbar = page.locator('[data-git-snackbar]');
     await button.click();
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
     assert.deepEqual((await calls()).at(-1), ['switchBranch', 'sound']);
-    await page.evaluate(() => finish({done: false, error: 'ブランチを切り替える前に…'}));
-    await page.waitForFunction(() => calls.at(-1)[0] === 'open');
-    // A switch that was cancelled at the panel's question opens nothing.
+    await page.evaluate(() => finish({done: true}));
+    await snackbar.getByRole('status').getByText('ブランチを切り替えました。').waitFor();
+    // With a project folder selected, it offers the panel's Reload Project; focus stays on the button.
+    const reload = snackbar.getByRole('button', {name: '作品を再読込'});
+    assert.equal(await reload.count(), 1);
+    assert.equal(await button.evaluate(element => element === document.activeElement), true);
+    if (screenshots) await page.screenshot({path: path.join(screenshots, 'branch-snackbar.png')});
+    // Tab reaches its buttons; while focused it stays, and it hides after six seconds once left alone.
+    await page.keyboard.press('Tab');
+    assert.equal(await reload.evaluate(element => element === document.activeElement), true);
+    await page.clock.runFor(7000);
+    assert.equal(await snackbar.count(), 1);
+    await page.keyboard.press('Tab');
+    assert.equal(await snackbar.getByRole('button', {name: '閉じる'}).evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press('Shift+Tab');
+    await reload.click();
+    await snackbar.waitFor({state: 'detached'});
+    assert.deepEqual((await calls()).at(-1), ['reload']);
+    assert.equal(await button.evaluate(element => element === document.activeElement), true);
+    // A refused switch tells the panel's reason as an alert, with a way to open the panel.
+    await button.click();
+    await menu.getByRole('menuitemradio', {name: 'jump'}).click();
+    await page.evaluate(() => finish({done: false, error: 'ブランチを切り替える前に、実行を止めてください。'}));
+    await snackbar.getByRole('alert').getByText('ブランチを切り替える前に、実行を止めてください。').waitFor();
+    assert.equal(await snackbar.getByRole('button', {name: '作品を再読込'}).count(), 0);
+    await snackbar.getByRole('button', {name: 'ローカル Git を開く'}).click();
+    await snackbar.waitFor({state: 'detached'});
+    assert.deepEqual((await calls()).slice(-2), [['switchBranch', 'jump'], ['open']]);
+    // A switch cancelled at the panel's question tells nothing.
     await button.click();
     await menu.getByRole('menuitemradio', {name: 'jump'}).click();
     await page.evaluate(() => finish({done: false}));
     await menu.waitFor({state: 'detached'});
-    assert.deepEqual((await calls()).slice(-2), [['open'], ['switchBranch', 'jump']]);
+    await page.clock.runFor(100);
+    assert.equal(await snackbar.count(), 0);
+    // Without a project folder there is nothing to reload; a new result replaces the old, and hides by itself.
+    await mount({...repository, project: false});
     await button.click();
     await menu.getByRole('menuitem', {name: 'score を作って切り替える'}).click();
     await page.evaluate(() => finish({done: true}));
-    await page.waitForFunction(() => calls.at(-1)[0] === 'open');
-    assert.deepEqual((await calls()).slice(-2), [['createFromRemote', 'score'], ['open']]);
+    await snackbar.getByText('ブランチを切り替えました。').waitFor();
+    assert.deepEqual(await snackbar.getByRole('button').allTextContents(), ['×']);
+    assert.deepEqual((await calls()).at(-1), ['createFromRemote', 'score']);
+    await page.clock.runFor(5000);
+    assert.equal(await snackbar.count(), 1);
+    await page.clock.runFor(1500);
+    await snackbar.waitFor({state: 'detached'});
+    // Hovering keeps it; Escape on it closes it and returns to the button.
+    await button.click();
+    await menu.getByRole('menuitemradio', {name: 'sound'}).click();
+    await page.evaluate(() => finish({done: false, error: '最初の理由'}));
+    await snackbar.getByText('最初の理由').waitFor();
+    await button.click();
+    await menu.getByRole('menuitemradio', {name: 'sound'}).click();
+    await page.evaluate(() => finish({done: false, error: '次の理由'}));
+    await snackbar.getByText('次の理由').waitFor();
+    assert.equal(await snackbar.count(), 1);
+    await snackbar.hover();
+    await page.clock.runFor(7000);
+    assert.equal(await snackbar.count(), 1);
+    await snackbar.getByRole('button', {name: 'ローカル Git を開く'}).focus();
+    await page.keyboard.press('Escape');
+    await snackbar.waitFor({state: 'detached'});
+    assert.equal(await button.evaluate(element => element === document.activeElement), true);
+    assert.deepEqual((await calls()).filter(call => call[0] === 'open'), [], 'Escape runs no action');
+    await mount(repository);
 
     // New Branch: a small form at HEAD, with "Switch to it" on. A refused name stays to be corrected.
     await button.click();
@@ -116,8 +174,11 @@ test('the branch button lists the branches, moves with the keyboard and switches
     assert.deepEqual((await calls()).at(-1), ['createBranch', 'title-screen', false]);
     await page.evaluate(() => finish({done: true}));
     await dialog.waitFor({state: 'detached'});
-    assert.deepEqual((await calls()).at(-1), ['open']);
+    // Created without switching: the snackbar says so, and the panel stays closed.
+    await snackbar.getByRole('status').getByText('ブランチを作りました。').waitFor();
+    assert.deepEqual((await calls()).at(-1), ['createBranch', 'title-screen', false]);
     assert.equal(await button.evaluate(element => element === document.activeElement), true);
+    await snackbar.getByRole('button', {name: '閉じる'}).click();
     // Escape cancels the form.
     await button.click();
     await menu.getByRole('menuitem', {name: '新しいブランチ…'}).click();
@@ -140,7 +201,7 @@ test('the branch button lists the branches, moves with the keyboard and switches
 test('the branch button tells each repository state apart, and only lists the branches without writes', async t => {
     const {page, mount, calls} = await open(t, 'ja');
     // No repository: "Git", which offers to choose one.
-    await mount({repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false});
+    await mount(noRepository);
     const git = page.getByRole('button', {name: 'ローカル Git'});
     assert.match(await git.textContent(), /^Git▾$/u);
     await git.click();
@@ -181,8 +242,13 @@ test('the branch button speaks English', async t => {
     await page.getByRole('button', {name: 'Branch: main'}).click();
     assert.deepEqual(await page.getByRole('menu', {name: 'Branches'}).locator('[role^="menuitem"]').allTextContents(),
         ['jump', '✓main', 'sound', 'Create and switch to score', 'New Branch…', 'Open Local Git']);
-    await page.keyboard.press('Escape');
-    await mount({repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false});
+    await page.getByRole('menuitemradio', {name: 'jump'}).click();
+    await page.evaluate(() => finish({done: true}));
+    const snackbar = page.locator('[data-git-snackbar]');
+    await snackbar.getByText('Switched branches.').waitFor();
+    assert.deepEqual(await snackbar.getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label') ?? button.textContent)),
+        ['Reload Project', 'Close']);
+    await mount(noRepository);
     await page.getByRole('button', {name: 'Local Git'}).click();
     assert.deepEqual(await page.getByRole('menuitem').allTextContents(), ['Choose Repository…', 'Open Local Git']);
 });
@@ -233,26 +299,33 @@ test('the branch button shares the panel\'s repository, switches as the panel do
             git('branch', 'from-cli');
             git('switch', '-q', 'from-cli');
             await page.getByRole('button', {name: 'Branch: from-cli', exact: true}).waitFor({timeout: 10_000});
-            // A switch from the button goes through the panel's checks: unsaved edits refuse it, and the panel says why.
+            // A switch from the button goes through the panel's checks: unsaved edits refuse it, and a snackbar tells why.
+            const snackbar = page.locator('[data-git-snackbar]');
             await page.evaluate(() => {host.dirty = true;});
             await page.getByRole('button', {name: 'Branch: from-cli', exact: true}).click();
             await menu.getByRole('menuitemradio', {name: 'main', exact: true}).click();
-            await panel.getByText('Stop the project, and save or record (or undo) every change, before switching branches.').waitFor();
+            await snackbar.getByRole('alert').getByText('Stop the project, and save or record (or undo) every change, before switching branches.').waitFor();
             assert.equal(git('branch', '--show-current'), 'from-cli');
+            assert.equal(await panel.count(), 0);
+            // Its action opens the panel, which shows the same reason.
+            await snackbar.getByRole('button', {name: 'Open Local Git'}).click();
+            await panel.getByText('Stop the project, and save or record (or undo) every change, before switching branches.').waitFor();
             await panel.getByRole('button', {name: 'Close', exact: true}).click();
             await page.evaluate(() => {host.dirty = false;});
             await page.getByRole('button', {name: 'Branch: from-cli', exact: true}).click();
             await menu.getByRole('menuitemradio', {name: 'main', exact: true}).click();
-            await panel.getByText('Switched branches. Use Reload Project to open the files of this branch.').waitFor();
+            await snackbar.getByRole('status').getByText('Switched branches.').waitFor();
             await page.getByRole('button', {name: 'Branch: main', exact: true}).waitFor();
             assert.equal(git('branch', '--show-current'), 'main');
-            await panel.getByRole('button', {name: 'Close', exact: true}).click();
+            assert.equal(await panel.count(), 0);
+            // No project folder is selected, so there is nothing to reload.
+            assert.equal(await snackbar.getByRole('button', {name: 'Reload Project'}).count(), 0);
             // Create and switch to an origin branch.
             await page.getByRole('button', {name: 'Branch: main', exact: true}).click();
             await menu.getByRole('menuitem', {name: 'Create and switch to score'}).click();
             await page.getByRole('button', {name: 'Branch: score', exact: true}).waitFor();
             assert.equal(git('branch', '--show-current'), 'score');
-            await panel.getByRole('button', {name: 'Close', exact: true}).click();
+            await snackbar.getByRole('button', {name: 'Close'}).click();
             git('switch', '-q', 'main');
             git('branch', '-q', '-D', 'score', 'from-cli');
             // Disposing the panel removes the button.

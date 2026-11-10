@@ -89,6 +89,8 @@ interface Controller {
     /** Asks for a repository, then opens the panel on it. */
     choose(locale: string): Promise<void>;
     changeBranch(operation: BranchOperation): Promise<HistoryActionResult>;
+    /** Reloads the project folder selected in the panel, as Reload Project does. */
+    reload(): void;
     /** What the branch buttons show. */
     branch: BranchButtonState;
     publish(state: BranchButtonState): void;
@@ -102,8 +104,9 @@ interface Controller {
 function createController(): Controller {
     const listeners = new Set<() => void>();
     const controller: Controller = {
-        open() {}, async refresh() {}, async choose() {}, async changeBranch() {return {done: false};},
-        branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false},
+        open() {}, async refresh() {}, async choose() {}, async changeBranch() {return {done: false};}, reload() {},
+        branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
+            project: false},
         publish(state) {
             controller.branch = state;
             for (const listener of [...listeners]) listener();
@@ -552,6 +555,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const loadAsset = useMemo(() => state.repository && state.snapshot && state.selected ?
         state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
     controller.changeBranch = changeBranch;
+    controller.reload = () => {
+        if (current.current.project !== null) void openProject(current.current.project);
+    };
     controller.choose = async language => {
         setLocale(language);
         const before = current.current.repository;
@@ -560,7 +566,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         if (!result.done && result.error || current.current.repository !== before) controller.open(language);
     };
     const branchState: BranchButtonState = {repository: !!state.repository, branch: refs?.branch, head: refs?.head ?? null,
-        branches: refs?.branches ?? [], remoteBranches: refs?.remoteBranches ?? [], writable: !!host.localWrite && !!refs, busy: state.busy};
+        branches: refs?.branches ?? [], remoteBranches: refs?.remoteBranches ?? [], writable: !!host.localWrite && !!refs, busy: state.busy,
+        project: state.project !== null};
     const published = JSON.stringify(branchState);
     useEffect(() => controller.publish(branchState), [published]);
     if (!shown) return null;
@@ -785,6 +792,7 @@ function BranchEntry({vm, locale}: {vm: object; locale: string}) {
     }, [controller]);
     if (!controller || !state) return null;
     return <BranchButton state={state} locale={locale} open={() => controller.open(locale)} choose={() => void controller.choose(locale)}
+        reload={() => controller.reload()}
         switchBranch={name => controller.changeBranch({kind: 'switchBranch', name})}
         createBranch={(name, checkout) => controller.changeBranch({kind: 'createBranch', name, checkout})}
         createFromRemote={name => controller.changeBranch({kind: 'createBranch', name, fromRemote: true, checkout: true})}/>;

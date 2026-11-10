@@ -120,3 +120,12 @@
 .twgit-branch-popup form input:not([type]) { flex: 1; min-width: 10em; font: inherit; }
 .twgit-branch-popup form button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
 .twgit-branch-popup form button:disabled { opacity: .5; cursor: default; }
+/* The branch button's result, at the bottom of the window, in the project folder status's look. */
+.twgit-snackbar { position: fixed; z-index: 1000; bottom: 1rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 10px; box-sizing: border-box; max-width: min(32rem, calc(100vw - 2rem)); padding: .5rem .5rem .5rem .85rem; background: Canvas;
+    color: CanvasText; border: 1px solid currentColor; border-radius: .4rem; box-shadow: 0 4px 16px #0003; font: 14px/1.5 system-ui, sans-serif; }
+.twgit-snackbar > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.twgit-snackbar button { flex: none; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px;
+    padding: 2px 8px; font: inherit; cursor: pointer; }
+.twgit-snackbar button.twgit-snackbar-close { border-color: transparent; padding: 0 6px; font-size: 18px; line-height: 1.2; }
+.twgit-snackbar button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
