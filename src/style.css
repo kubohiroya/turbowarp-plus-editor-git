@@ -87,3 +87,4 @@
 .twgit-graph-more { margin: 6px 0; }
 .twgit-graph-status { margin: 4px 0; font-size: 11px; min-height: 1em; }
 .twgit-panel .twgit-graph-popup [role="menuitem"]:focus-visible, .twgit-graph-popup [role="menuitem"]:focus-visible { outline-offset: -2px; }
+.twgit-graph-form-error { margin: 0; color: #a11919; overflow-wrap: anywhere; }

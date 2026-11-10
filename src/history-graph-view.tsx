@@ -4,6 +4,8 @@ import type {GraphRow} from './history-graph.js';
 import {labelsFor} from './messages.js';
 import type {HistoryCommit} from './repository.js';
 
+/** How a write action ended: `error` is the message to show when it did not run to the end. */
+export type HistoryActionResult = {done: true} | {done: false; error?: string};
 export interface HistoryGraphProps {
     /** Commits newest first, each child above its parents, as `Repository.history` returns them page by page. */
     commits: readonly HistoryCommit[];
@@ -19,10 +21,13 @@ export interface HistoryGraphProps {
     onShowMore?(): void;
     /** Local branch names, so `origin/<name>` is offered as a new branch only when there is none yet. */
     localBranches?: readonly string[];
-    /** Write actions. Each is offered only when given. */
-    onCreateBranch?(oid: string, name: string, checkout: boolean): void | Promise<void>;
-    onSwitchBranch?(name: string): void | Promise<void>;
-    onCreateFromRemote?(name: string): void | Promise<void>;
+    /**
+     * Write actions. Each is offered only when given. The branch form stays open with the name until `onCreateBranch`
+     * resolves `{done: true}` (or nothing); `{done: false, error}` or a rejection shows the reason in the form.
+     */
+    onCreateBranch?(oid: string, name: string, checkout: boolean): void | Promise<void | HistoryActionResult>;
+    onSwitchBranch?(name: string): void | Promise<unknown>;
+    onCreateFromRemote?(name: string): void | Promise<unknown>;
 }
 
 /** Lane colors that read on light and dark backgrounds. */
@@ -64,6 +69,10 @@ export function HistoryGraph(props: HistoryGraphProps) {
     const [branchName, setBranchName] = useState('');
     const [checkout, setCheckout] = useState(true);
     const [status, setStatus] = useState('');
+    const [creating, setCreating] = useState(false);
+    const [createError, setCreateError] = useState('');
+    const mounted = useRef(true);
+    useEffect(() => () => {mounted.current = false;}, []);
     const focusIndex = Math.max(0, commits.findIndex(commit => commit.oid === (active ?? selected)));
     const locals = useMemo(() => new Set(props.localBranches ??
         commits.flatMap(commit => commit.refs.filter(ref => ref.kind === 'branch').map(ref => ref.name))), [commits, props.localBranches]);
@@ -72,6 +81,13 @@ export function HistoryGraph(props: HistoryGraphProps) {
         if (!element) return;
         element.querySelector<HTMLElement>(menu?.mode === 'create' ? 'input' : '[role="menuitem"]')?.focus();
     }, [menu?.oid, menu?.mode]);
+    // After a refused create, the name is selected for correcting.
+    useEffect(() => {
+        if (!createError || creating) return;
+        const input = popup.current?.querySelector('input:not([type])') as HTMLInputElement | null;
+        input?.focus();
+        input?.select();
+    }, [createError, creating]);
     const date = (timestamp: number) => new Date(timestamp * 1000).toLocaleString(locale, {dateStyle: 'medium', timeStyle: 'short'});
     const refName = (ref: HistoryCommit['refs'][number]) => ref.current && ref.kind === 'branch' ? `${ref.name} (${labels.currentBranch})` : ref.name;
     const closeMenu = (focus: 'menu' | 'row' | false) => {
@@ -84,6 +100,7 @@ export function HistoryGraph(props: HistoryGraphProps) {
         if (props.onCreateBranch) actions.push({id: 'create', label: labels.historyCreateHere, run: () => {
             setBranchName('');
             setCheckout(true);
+            setCreateError('');
             setMenu({oid: commit.oid, mode: 'create'});
         }});
         for (const ref of commit.refs) {
@@ -121,7 +138,7 @@ export function HistoryGraph(props: HistoryGraphProps) {
         if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
-            closeMenu('menu');
+            if (!creating) closeMenu('menu');
             return;
         }
         if (menu?.mode !== 'menu') return;
@@ -141,9 +158,19 @@ export function HistoryGraph(props: HistoryGraphProps) {
     const submitBranch = async (event: React.FormEvent, oid: string) => {
         event.preventDefault();
         const name = branchName.trim();
-        if (!name || !props.onCreateBranch) return;
-        closeMenu('row');
-        await props.onCreateBranch(oid, name, checkout);
+        if (!name || !props.onCreateBranch || creating) return;
+        setCreating(true);
+        setCreateError('');
+        let result: void | HistoryActionResult;
+        try {
+            result = await props.onCreateBranch(oid, name, checkout);
+        } catch (error) {
+            result = {done: false, error: error instanceof Error && error.message ? error.message : labels.failed};
+        }
+        if (!mounted.current) return;
+        setCreating(false);
+        if (!result || result.done) closeMenu('menu');
+        else setCreateError(result.error ?? '');
     };
     rows.current.length = commits.length;
     menuButtons.current.length = commits.length;
@@ -185,13 +212,15 @@ export function HistoryGraph(props: HistoryGraphProps) {
                 {open?.mode === 'create' && <div ref={popup} className="twgit-graph-popup" role="dialog"
                     aria-label={labels.historyCreateHere} onKeyDown={onMenuKey}>
                     <form onSubmit={event => void submitBranch(event, commit.oid)}>
-                        <label>{labels.newBranch} <input value={branchName} required
+                        <label>{labels.newBranch} <input value={branchName} required disabled={creating}
+                            aria-invalid={createError ? true : undefined}
                             onChange={event => setBranchName(event.currentTarget.value)}/></label>
-                        <label><input type="checkbox" checked={checkout}
+                        <label><input type="checkbox" checked={checkout} disabled={creating}
                             onChange={event => setCheckout(event.currentTarget.checked)}/> {labels.switchAfterCreate}</label>
+                        {createError && <p className="twgit-graph-form-error" role="alert">{createError}</p>}
                         <span className="twgit-graph-form-actions">
-                            <button type="submit" disabled={busy || !branchName.trim()}>{labels.createBranch}</button>
-                            <button type="button" onClick={() => closeMenu('menu')}>{labels.cancel}</button>
+                            <button type="submit" disabled={creating || busy || !branchName.trim()}>{labels.createBranch}</button>
+                            <button type="button" disabled={creating} onClick={() => closeMenu('menu')}>{labels.cancel}</button>
                         </span>
                     </form>
                 </div>}

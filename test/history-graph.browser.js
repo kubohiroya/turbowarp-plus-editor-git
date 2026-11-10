@@ -131,12 +131,45 @@ test('the history graph draws lanes, moves with the keyboard and offers each com
     const dialog = page.getByRole('dialog', {name: 'ここからブランチを作る…'});
     await dialog.waitFor();
     assert.equal(await dialog.getByRole('checkbox', {name: '作ったら切り替える'}).isChecked(), true);
-    await page.keyboard.type('from-start');
+    const input = dialog.getByRole('textbox', {name: '新しいブランチの名前'});
+    const menuButton = page.locator('.twgit-graph-menu-button').nth(sprite);
+    // A refused create keeps the form, the name and the focus, and tells why; the controls wait while it runs.
+    await page.keyboard.type('main');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => calls.some(call => call[0] === 'createBranch'));
+    assert.deepEqual((await page.evaluate(() => calls)).at(-1), ['createBranch', commits[sprite].oid, 'main', true]);
+    assert.equal(await input.isDisabled(), true);
+    assert.equal(await dialog.getByRole('button', {name: 'キャンセル'}).isDisabled(), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await dialog.count(), 1, 'Escape waits while the create runs');
+    await page.evaluate(() => finishCreate({done: false, error: '同じ名前のブランチがすでにあります。'}));
+    await dialog.getByRole('alert').getByText('同じ名前のブランチがすでにあります。').waitFor();
+    assert.equal(await input.inputValue(), 'main');
+    await page.waitForFunction(() => document.activeElement.matches('[role="dialog"] input:not([type])') &&
+        document.activeElement.selectionStart === 0 && document.activeElement.selectionEnd === 4);
+    // A rejection is shown the same way.
+    await page.keyboard.press('Enter');
+    await page.evaluate(() => finishCreate(Promise.reject(new Error('ほかの Git の操作が、このリポジトリを使っています。'))));
+    await dialog.getByRole('alert').getByText('ほかの Git の操作が、このリポジトリを使っています。').waitFor();
+    // The corrected name replaces the selected one; success closes the form and focus returns to the row's actions button.
+    await page.waitForFunction(() => document.activeElement.matches('[role="dialog"] input:not([type])'));
+    await page.keyboard.type('from-start');
+    await page.keyboard.press('Enter');
     assert.deepEqual((await page.evaluate(() => calls)).at(-1), ['createBranch', commits[sprite].oid, 'from-start', true]);
-    assert.equal(await dialog.count(), 0);
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.oid), commits[sprite].oid);
+    await page.evaluate(() => finishCreate({done: true}));
+    await dialog.waitFor({state: 'detached'});
+    await page.waitForFunction(oid => document.activeElement === document.querySelector(`[data-oid="${oid}"]`)
+        .parentElement.querySelector('[aria-haspopup="menu"]'), commits[sprite].oid);
+    assert.equal(await menuButton.evaluate(element => element === document.activeElement), true);
+    // Cancel closes without creating anything.
+    const count = (await page.evaluate(() => calls)).length;
+    await menuItems(sprite);
+    await page.keyboard.press('Enter');
+    await dialog.waitFor();
+    await page.keyboard.type('unused');
+    await dialog.getByRole('button', {name: 'キャンセル'}).click();
+    await dialog.waitFor({state: 'detached'});
+    assert.equal((await page.evaluate(() => calls)).length, count);
     // Switch and create from origin call through with the branch name.
     await menuItems(sound);
     await page.getByRole('menuitem', {name: 'sound に切り替える'}).click();

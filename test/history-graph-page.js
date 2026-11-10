@@ -14,7 +14,11 @@ globalThis.mountGraph = ({commits, locale, localBranches}) => {
     const draw = selected => render(React.createElement(HistoryGraph, {commits, locale, localBranches, selected,
         hasMore: true, onShowMore: () => calls.push(['showMore']),
         onSelect: oid => {calls.push(['select', oid]); draw(oid);},
-        onCreateBranch: (oid, name, checkout) => {calls.push(['createBranch', oid, name, checkout]);},
+        // The test settles each create with `finishCreate(result)`.
+        onCreateBranch: (oid, name, checkout) => {
+            calls.push(['createBranch', oid, name, checkout]);
+            return new Promise(resolve => {globalThis.finishCreate = resolve;});
+        },
         onSwitchBranch: name => {calls.push(['switchBranch', name]);},
         onCreateFromRemote: name => {calls.push(['createFromRemote', name]);}}), host);
     draw(null);
