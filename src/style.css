@@ -34,9 +34,6 @@
 .twgit-commit textarea { font: inherit; resize: vertical; min-height: 3em; }
 .twgit-diff { padding: 0 16px 16px; min-width: 0; overflow: auto; }
 .twgit-diff .diff { font-size: 12px; }
-.twgit-history { list-style: none; margin: 0; padding: 0; }
-.twgit-history li { padding: 5px 0; }
-.twgit-history small { display: block; font-size: 11px; }
 .twgit-panel > footer { font-size: 11px; padding: 8px 16px; border-top: 1px solid GrayText; }
 .twgit-error { margin: 6px 16px; color: #a11919; padding: 8px; background: #fff0f0; }
 @media (max-width: 700px) { .twgit-content { grid-template-columns: minmax(180px, 42%) minmax(0, 1fr); } .twgit-panel > header { flex-wrap: wrap; } }
@@ -70,3 +67,24 @@
 .twgit-branches ul { list-style: none; padding: 0; margin: 4px 0; }
 .twgit-branches li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0; }
 .twgit-branches form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.twgit-graph-list { list-style: none; margin: 0; padding: 0; }
+.twgit-graph-row { position: relative; display: flex; align-items: stretch; gap: 4px; height: 44px; }
+.twgit-graph-lanes { flex: none; display: block; }
+.twgit-panel .twgit-graph-commit, .twgit-graph-commit { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center;
+    gap: 1px; margin: 2px 0; padding: 2px 6px; border: 0; text-align: start; }
+.twgit-graph-subject, .twgit-graph-meta { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.twgit-graph-meta { font-size: 11px; opacity: .8; }
+.twgit-graph-ref { display: inline-block; margin-inline-end: 4px; padding: 0 5px; font-size: 11px; line-height: 16px; border-radius: 8px;
+    border: 1px solid color-mix(in srgb, CanvasText 35%, Canvas); }
+.twgit-graph-ref-current { font-weight: 600; border-color: currentColor; }
+.twgit-graph-ref-remote { border-style: dashed; }
+.twgit-panel .twgit-graph-menu-button, .twgit-graph-menu-button { flex: none; align-self: center; padding: 0 6px; line-height: 22px; }
+.twgit-graph-popup { position: absolute; z-index: 6; top: 100%; right: 0; display: grid; gap: 2px; min-width: 200px; padding: 6px;
+    background: Canvas; color: CanvasText; border: 1px solid GrayText; border-radius: 6px; box-shadow: 0 8px 24px #0004; }
+.twgit-panel .twgit-graph-popup [role="menuitem"], .twgit-graph-popup [role="menuitem"] { border: 0; text-align: start; }
+.twgit-graph-popup form { display: grid; gap: 6px; font-size: 12px; }
+.twgit-graph-form-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.twgit-graph-more { margin: 6px 0; }
+.twgit-graph-status { margin: 4px 0; font-size: 11px; min-height: 1em; }
+.twgit-panel .twgit-graph-popup [role="menuitem"]:focus-visible, .twgit-graph-popup [role="menuitem"]:focus-visible { outline-offset: -2px; }
+.twgit-graph-form-error { margin: 0; color: #a11919; overflow-wrap: anywhere; }

@@ -4,7 +4,9 @@ import {FileDiffView} from './file-diff-view.js';
 import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
 import type {ChangedFile} from './project-change-model.js';
 import {openRepository} from './repository.js';
-import type {Repository, Snapshot, FileChange, FileDiff, ChangeGroup} from './repository.js';
+import type {Repository, Snapshot, FileChange, FileDiff, ChangeGroup, HistoryCommit, HistoryCursor} from './repository.js';
+import {HistoryGraph} from './history-graph-view.js';
+import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
 import {GitPanelError} from './filesystem.js';
 import {ConnectionSettings} from './connection-settings.js';
@@ -25,7 +27,11 @@ export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch
 export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
 export {openProjectComparison} from './project-comparison.js';
 export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
-export type {Repository, Snapshot, FileChange, FileDiff} from './repository.js';
+export type {Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
+export {HistoryGraph, laneColors} from './history-graph-view.js';
+export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.js';
+export {layoutHistory} from './history-graph.js';
+export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
 
 export interface GitHost {
@@ -112,9 +118,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const labels = labelsFor(locale);
     // A background refresh never drops a user's operation: the operation waits for that refresh instead.
     const background = useRef<Promise<void> | null>(null);
-    const run = async (operation: () => Promise<Partial<State>>, automatic = false) => {
+    /** Whether an operation ran to the end, or the message the panel shows for why it did not. */
+    const run = async (operation: () => Promise<Partial<State>>, automatic = false): Promise<HistoryActionResult> => {
         if (running.current && !automatic && background.current) await background.current;
-        if (running.current || !alive.current) return;
+        if (running.current || !alive.current) return {done: false};
         let settle = () => {};
         if (automatic) background.current = new Promise(resolve => {settle = resolve;});
         running.current = true;
@@ -126,17 +133,19 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         try {
             const update = await operation();
             if (epoch.current === ticket) setState(previous => ({...previous, ...update, busy: automatic ? previous.busy : false}));
+            return {done: true};
         } catch (error) {
-            if (epoch.current !== ticket) return;
+            if (epoch.current !== ticket) return {done: false};
             const code = error instanceof GitPanelError ? error.code : 'failed';
             // A background read that met another tool still writing tries again on the next check, without an alert.
             if (automatic && code === 'changed') {
                 handled.current = null;
-                return;
+                return {done: false};
             }
             const message = labels[code as keyof typeof labels] || labels.failed;
             setState(previous => ({...previous, error: automatic && previous.error ? previous.error : message,
                 busy: automatic ? previous.busy : false, diff: null}));
+            return {done: false, error: message};
         } finally {
             running.current = false;
             // A result dropped by a newer load still ends the busy state, unless a refresh follows at once.
@@ -347,7 +356,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const [message, setMessage] = useState('');
     const localOperation = (operation: LocalOperation, notice?: string) => {
         const repository = current.current.repository;
-        if (!repository || !host.localWrite) return Promise.resolve();
+        if (!repository || !host.localWrite) return Promise.resolve<HistoryActionResult>({done: false});
         return run(async () => {
             const ticket = epoch.current;
             await repository.localOperation(operation, () => {
@@ -365,22 +374,56 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     const [newBranch, setNewBranch] = useState('');
     const [switchAfterCreate, setSwitchAfterCreate] = useState(true);
-    const changeBranch = async (operation: Extract<LocalOperation, {kind: 'createBranch' | 'switchBranch'}>) => {
+    const changeBranch = async (operation: Extract<LocalOperation, {kind: 'createBranch' | 'switchBranch'}>): Promise<HistoryActionResult> => {
         const repository = current.current.repository;
         const project = current.current.project;
         const switching = operation.kind === 'switchBranch' || operation.checkout;
-        if (!repository) return;
+        if (!repository) return {done: false};
         // Tell before switching when the open project folder is not on the branch.
-        if (switching && project && !(operation.kind === 'createBranch' && !operation.fromRemote) &&
-            !await repository.hasFolder(operation.name, project, operation.kind === 'createBranch' && operation.fromRemote) &&
-            !document.defaultView?.confirm(labels.projectMissing)) return;
-        await localOperation(operation, switching ? labels.switched : labels.branchCreated);
-        if (operation.kind === 'createBranch' && !operation.fromRemote) setNewBranch('');
+        const at = operation.kind === 'createBranch' ? operation.at : undefined;
+        if (switching && project && !(operation.kind === 'createBranch' && !operation.fromRemote && !at) &&
+            !await (at ? repository.hasFolder(at, project, 'commit') :
+                repository.hasFolder(operation.name, project, operation.kind === 'createBranch' && operation.fromRemote)) &&
+            !document.defaultView?.confirm(labels.projectMissing)) return {done: false};
+        const result = await localOperation(operation, switching ? labels.switched : labels.branchCreated);
+        if (operation.kind === 'createBranch' && !operation.fromRemote && !at) setNewBranch('');
+        return result;
+    };
+    // The history graph reads its own pages after each snapshot, through the same queue as the other reads.
+    const [history, setHistory] = useState<{commits: HistoryCommit[]; cursor: HistoryCursor | null; loading: boolean; failed: boolean}>(
+        {commits: [], cursor: null, loading: false, failed: false});
+    const historyTicket = useRef(0);
+    useEffect(() => {
+        const ticket = ++historyTicket.current;
+        const repository = state.repository;
+        if (!repository || !state.snapshot) {
+            setHistory({commits: [], cursor: null, loading: false, failed: false});
+            return;
+        }
+        // The rows read before stay until the new page arrives, so focus in the list is kept.
+        setHistory(previous => ({...previous, cursor: null, loading: true, failed: false}));
+        repository.history().then(page => {
+            if (historyTicket.current === ticket) setHistory({commits: page.commits, cursor: page.cursor, loading: false, failed: false});
+        }, () => {
+            if (historyTicket.current === ticket) setHistory({commits: [], cursor: null, loading: false, failed: true});
+        });
+    }, [state.repository, state.snapshot]);
+    const showMoreHistory = () => {
+        const repository = state.repository;
+        if (!repository || !history.cursor || history.loading) return;
+        const ticket = historyTicket.current;
+        setHistory(previous => ({...previous, loading: true}));
+        repository.history({after: history.cursor}).then(page => {
+            if (historyTicket.current === ticket) setHistory(previous => ({commits: [...previous.commits, ...page.commits],
+                cursor: page.cursor, loading: false, failed: false}));
+        }, () => {
+            if (historyTicket.current === ticket) setHistory(previous => ({...previous, cursor: null, loading: false, failed: true}));
+        });
     };
     const focusTrap = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {event.stopPropagation(); closePanel(); return;}
         if (event.key !== 'Tab') return;
-        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')]
+        const items = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled):not([tabindex="-1"]), input:not(:disabled), select:not(:disabled), a[href], summary, [tabindex="0"]')]
             .filter(item => item.getClientRects().length > 0);
         const first = items[0], last = items[items.length - 1];
         if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) {
@@ -517,11 +560,17 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         </>}
                     </section>}
                     <h3>{labels.history}</h3>
-                    <ol className="twgit-history">{state.snapshot?.commits.map(commit => <li key={commit.oid}>
-                        <button disabled={state.busy} aria-pressed={state.commit === commit.oid} title={commit.oid}
-                            onClick={() => void selectCommit(commit.oid)}>{commit.message.split('\n')[0]}</button>
-                        <small>{commit.author} · {new Date(commit.timestamp * 1000).toLocaleString(locale)}</small>
-                    </li>)}</ol>
+                    {state.snapshot && <HistoryGraph commits={history.commits} selected={state.commit} locale={locale} busy={state.busy}
+                        onSelect={oid => void selectCommit(oid)} hasMore={!!history.cursor} loadingMore={history.loading}
+                        onShowMore={showMoreHistory} localBranches={state.snapshot.branches}
+                        {...branching ? {
+                            onCreateBranch: (oid: string, name: string, checkout: boolean) =>
+                                changeBranch({kind: 'createBranch', name, at: oid, checkout}),
+                            onSwitchBranch: (name: string) => changeBranch({kind: 'switchBranch', name}),
+                            onCreateFromRemote: (name: string) => changeBranch({kind: 'createBranch', name, fromRemote: true, checkout: true})
+                        } : {}}/>}
+                    {history.loading && !history.commits.length && <p>{labels.historyLoading}</p>}
+                    {history.failed && <p>{labels.historyFailed}</p>}
                 </aside>
                 <main className="twgit-diff">
                     {selection && projectList ? <ProjectElementView changes={projectList} selection={selection} locale={locale}

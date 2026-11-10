@@ -46,7 +46,11 @@ export const messages = {
         gitStaged: 'Staged', gitUnstaged: 'Unstaged', gitUntracked: 'Untracked',
         upstreamSame: 'Same as GitHub', upstreamAhead: 'Ahead of GitHub', upstreamBehind: 'Behind GitHub', upstreamDiverged: 'Diverged from GitHub',
         upstreamUnknown: 'Not checked with GitHub yet', records: 'records', checkedAt: 'as of the last check',
-        failed: 'Could not read the repository. Check folder access and refresh.'
+        failed: 'Could not read the repository. Check folder access and refresh.',
+        historyMore: 'Show more', historyLoading: 'Reading records…', historyFailed: 'Could not read the records.',
+        historyActions: 'Actions', historyCreateHere: 'Create branch here…', historySwitch: 'Switch to {name}',
+        historyCreateFromRemote: 'Create and switch to {name}', historyCopy: 'Copy commit ID', historyCopied: 'Copied the commit ID.',
+        historyCopyFailed: 'Could not copy the commit ID.', historyRefs: 'Branches', cancel: 'Cancel'
     },
     ja: {
         pullRequests: 'プルリクエスト', localChanges: 'ローカルの変更',
@@ -95,7 +99,11 @@ export const messages = {
         gitStaged: 'ステージ済み (staged)', gitUnstaged: '未ステージ (unstaged)', gitUntracked: '未追跡 (untracked)',
         upstreamSame: 'GitHub と同じ', upstreamAhead: 'GitHub より進んでいる', upstreamBehind: 'GitHub より遅れている', upstreamDiverged: 'GitHub と分かれている',
         upstreamUnknown: 'まだ GitHub と確かめていない', records: '件', checkedAt: '最後に確かめた時点',
-        failed: 'リポジトリを読み込めませんでした。フォルダへのアクセスを確認し、再取得してください。'
+        failed: 'リポジトリを読み込めませんでした。フォルダへのアクセスを確認し、再取得してください。',
+        historyMore: 'さらに表示', historyLoading: '記録を読込中…', historyFailed: '記録を読み込めませんでした。',
+        historyActions: '操作', historyCreateHere: 'ここからブランチを作る…', historySwitch: '{name} に切り替える',
+        historyCreateFromRemote: '{name} を作って切り替える', historyCopy: 'コミットの ID をコピー', historyCopied: 'コミットの ID をコピーしました。',
+        historyCopyFailed: 'コミットの ID をコピーできませんでした。', historyRefs: 'ブランチ', cancel: 'キャンセル'
     }
 };
 export type Labels = typeof messages.en;
