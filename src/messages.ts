@@ -51,7 +51,8 @@ export const messages = {
         historyActions: 'Actions', historyCreateHere: 'Create branch here…', historySwitch: 'Switch to {name}',
         historyCreateFromRemote: 'Create and switch to {name}', historyCopy: 'Copy commit ID', historyCopied: 'Copied the commit ID.',
         historyCopyFailed: 'Could not copy the commit ID.', historyRefs: 'Branches', cancel: 'Cancel',
-        branchMenu: 'Branches', openPanel: 'Open Local Git', newBranchItem: 'New Branch…', newBranchTitle: 'New Branch'
+        branchMenu: 'Branches', openPanel: 'Open Local Git', newBranchItem: 'New Branch…', newBranchTitle: 'New Branch',
+        switchedShort: 'Switched branches.'
     },
     ja: {
         pullRequests: 'プルリクエスト', localChanges: 'ローカルの変更',
@@ -105,7 +106,8 @@ export const messages = {
         historyActions: '操作', historyCreateHere: 'ここからブランチを作る…', historySwitch: '{name} に切り替える',
         historyCreateFromRemote: '{name} を作って切り替える', historyCopy: 'コミットの ID をコピー', historyCopied: 'コミットの ID をコピーしました。',
         historyCopyFailed: 'コミットの ID をコピーできませんでした。', historyRefs: 'ブランチ', cancel: 'キャンセル',
-        branchMenu: 'ブランチ', openPanel: 'ローカル Git を開く', newBranchItem: '新しいブランチ…', newBranchTitle: '新しいブランチ'
+        branchMenu: 'ブランチ', openPanel: 'ローカル Git を開く', newBranchItem: '新しいブランチ…', newBranchTitle: '新しいブランチ',
+        switchedShort: 'ブランチを切り替えました。'
     }
 };
 export type Labels = typeof messages.en;
