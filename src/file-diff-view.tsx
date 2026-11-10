@@ -7,8 +7,8 @@ import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ProjectAssetLoader} from './project-assets.js';
 import type {ProjectBlockLocator} from './block-diff-location.js';
 
-const en = {view: 'Show changes as', blocks: 'Blocks', text: 'Text'};
-const ja: typeof en = {view: '変更の表示', blocks: 'ブロック', text: 'テキスト'};
+const en = {view: 'Show changes as', blocks: 'Blocks', text: 'Text', openTabs: 'Open as tabs'};
+const ja: typeof en = {view: '変更の表示', blocks: 'ブロック', text: 'テキスト', openTabs: 'タブで開く'};
 
 /** Project sources are the files the panel opens as projects. */
 export const isProjectSource = (path: string) => path.split('/').pop() === 'project.source.json';
@@ -16,9 +16,11 @@ export const isProjectSource = (path: string) => path.split('/').pop() === 'proj
 /**
  * Shows one changed file. Project sources are compared as blocks by default, with their text diff one switch away.
  */
-export function FileDiffView({change, diff, labels, locale, renderBlock, loadAsset, locateBlock}: {
+export function FileDiffView({change, diff, labels, locale, renderBlock, loadAsset, locateBlock, onOpenTabs}: {
     change: FileChange; diff: FileDiff | null; labels: ReturnType<typeof labelsFor>; locale: string;
     renderBlock?: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; locateBlock?: ProjectBlockLocator;
+    /** Opens the comparison as tabs of the host's layout, a tab group for each stage or sprite. */
+    onOpenTabs?(before: string | null, after: string | null): void;
 }) {
     const [view, setView] = useState<'blocks' | 'text'>('blocks');
     const names = locale.startsWith('ja') ? ja : en;
@@ -40,6 +42,8 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, loadAss
         {sources && <div className="twgit-view-switch" role="group" aria-label={names.view}>
             {(['blocks', 'text'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode}
                 data-git-view={mode} onClick={() => setView(mode)}>{names[mode]}</button>)}
+            {onOpenTabs && <button type="button" data-git-open-tabs="" onClick={() => onOpenTabs(
+                change.before === null ? null : sources.before, change.after === null ? null : sources.after)}>{names.openTabs}</button>}
         </div>}
         {sources && view === 'blocks' ? <ProjectSourceComparison renderBlock={renderBlock!} locale={locale} fallback={text} loadAsset={loadAsset} locateBlock={locateBlock}
             before={change.before === null ? null : sources.before} after={change.after === null ? null : sources.after}/> : text}

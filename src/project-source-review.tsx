@@ -124,19 +124,27 @@ function useBlockLocation(comparison: Comparison, locateBlock?: ProjectBlockLoca
     };
 }
 
-function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location}: {
+/** What a script is called in a review: its hat block, or both hat blocks when the change replaced it. */
+function scriptReviewTitle(script: ScriptReview, labels: typeof ja) {
+    const beforeTitle = script.before[0] && scriptTitle(script.before[0], labels);
+    const afterTitle = script.after[0] && scriptTitle(script.after[0], labels);
+    return beforeTitle && afterTitle && beforeTitle !== afterTitle ? beforeTitle + ' → ' + afterTitle : afterTitle ?? beforeTitle;
+}
+
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location, expanded = false}: {
     script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
     renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; location?: BlockLocation;
+    /** Starts open, as in a tab that holds this one script. */
+    expanded?: boolean;
 }) {
-    const [open, setOpen] = useState(false);
+    const [open, setOpen] = useState(expanded);
     const {sync, toggle} = usePreviewSync(labels === ja ? 'ja' : 'en');
     const status = script.kind;
     const locale = labels === ja ? 'ja' : 'en';
     const summary = script.summary.map(item => summaryPhrase(item, locale)).join(labels === ja ? '、' : ', ');
-    const beforeTitle = script.before[0] && scriptTitle(script.before[0], labels);
-    const afterTitle = script.after[0] && scriptTitle(script.after[0], labels);
-    const title = beforeTitle && afterTitle && beforeTitle !== afterTitle ? beforeTitle + ' → ' + afterTitle : afterTitle ?? beforeTitle;
-    return <details className="twgit-review-script" onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
+    const title = scriptReviewTitle(script, labels);
+    return <details className="twgit-review-script" open={expanded || undefined}
+        onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
         <summary>
             <span className="twgit-review-status">{labels[status]}</span>
             <strong>{title}</strong>
@@ -339,8 +347,21 @@ const scriptBlocks = ({target, id}: ScriptReview['before'][number]) => {
 };
 const scriptPrint = (script: ScriptReview) => fingerprint([script.kind, script.before.map(scriptBlocks), script.after.map(scriptBlocks)]);
 const storageKey = (name: string) => `turbowarp-plus-git:reviewed:${name}`;
+// Marks of reviews that are not remembered, shared by the tabs of one comparison while the page is open.
+const memoryMarks = new Map<string, Record<string, string>>();
+// Whoever shows the marks of a review, such as the review panel and the tabs of the same pull request.
+const markListeners = new Map<string, Set<() => void>>();
+const subscribeMarks = (name: string, listener: () => void) => {
+    const listeners = markListeners.get(name) ?? new Set();
+    markListeners.set(name, listeners.add(listener));
+    return () => {
+        listeners.delete(listener);
+        if (!listeners.size) markListeners.delete(name);
+    };
+};
 // Browser storage can be missing or refuse access; the marks then last while the review is open.
-const readMarks = (name: string): Record<string, string> => {
+const readMarks = (name: string, remember = true): Record<string, string> => {
+    if (!remember) return memoryMarks.get(name) ?? {};
     try {
         const value = JSON.parse(globalThis.localStorage?.getItem(storageKey(name)) ?? '{}');
         return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -348,13 +369,18 @@ const readMarks = (name: string): Record<string, string> => {
         return {};
     }
 };
-const writeMarks = (name: string, marks: Record<string, string>) => {
+const writeMarks = (name: string, marks: Record<string, string>, remember = true) => {
+    if (!remember) {
+        if (Object.keys(marks).length) memoryMarks.set(name, marks);
+        else memoryMarks.delete(name);
+    }
     try {
-        if (Object.keys(marks).length) globalThis.localStorage?.setItem(storageKey(name), JSON.stringify(marks));
-        else globalThis.localStorage?.removeItem(storageKey(name));
+        if (remember && Object.keys(marks).length) globalThis.localStorage?.setItem(storageKey(name), JSON.stringify(marks));
+        else if (remember) globalThis.localStorage?.removeItem(storageKey(name));
     } catch {
         // Not kept; the marks still work for this review.
     }
+    markListeners.get(name)?.forEach(listener => listener());
 };
 
 export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en', rememberAs}: ProjectSourceReviewProps) {
@@ -379,18 +405,24 @@ export function ProjectSourceReview({title, description, verification, files, re
         return prints;
     }, [entries]);
     const [checked, setChecked] = useState<{entries: typeof entries; marks: Record<string, string>}>();
+    // A mark set in a tab of the same pull request shows here too.
+    const [, refresh] = useState(0);
+    useEffect(() => rememberAs ? subscribeMarks(rememberAs, () => {
+        setChecked(undefined);
+        refresh(count => count + 1);
+    }) : undefined, [rememberAs]);
     const marks = checked?.entries === entries ? checked.marks : rememberAs ? readMarks(rememberAs) : {};
     const reviewed = new Set([...scriptPrints].filter(([key, print]) => marks[key] === print).map(([key]) => key));
-    const setReviewed = (key: string, value: boolean) => setChecked(previous => {
-        const current = previous?.entries === entries ? previous.marks : rememberAs ? readMarks(rememberAs) : {};
+    const setReviewed = (key: string, value: boolean) => {
         // Keep only marks that still match a script of this review.
         const next: Record<string, string> = {};
-        for (const [name, print] of scriptPrints) if (current[name] === print) next[name] = print;
+        for (const [name, print] of scriptPrints) if (marks[name] === print) next[name] = print;
         if (value) next[key] = scriptPrints.get(key)!;
         else delete next[key];
+        // Writing tells the tabs of this review, and this panel, which then keeps the marks it has just set.
         if (rememberAs) writeMarks(rememberAs, next);
-        return {entries, marks: next};
-    });
+        setChecked({entries, marks: next});
+    };
     const targets = entries.reduce((total, entry) => total + (entry.comparison?.targets.length ?? 0), 0);
     const scripts = entries.reduce((total, entry) => total + (entry.comparison ? countScripts(entry.comparison) : 0), 0);
     const body = description?.trim();
@@ -427,5 +459,85 @@ export function ProjectSourceReview({title, description, verification, files, re
                 locateBlock={'locateBlock' in file ? file.locateBlock : undefined}
                 review={{file: file.path, keys: reviewed, set: setReviewed}}/>}
         </section>)}
+    </section>;
+}
+
+/** The words of one tab of a project comparison opened as tabs. */
+export function reviewTabWords(locale: string) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    return {
+        script: (script: ScriptReview) => `${scriptReviewTitle(script, labels)} · ${labels[script.kind]}`,
+        target: (target: TargetReview) => target.isStage ? labels.stage : target.name,
+        targetDetails: labels.properties,
+        project: labels.comparison,
+        noChanges: labels.noChanges
+    };
+}
+
+/**
+ * Where a tab keeps its reviewed mark: under `name` with the review of the same name, in the browser when
+ * `remember` is set, or else while the page is open.
+ */
+export interface ReviewMarkPlace {
+    name: string;
+    remember: boolean;
+    file: string;
+    target: TargetReview;
+}
+
+function useReviewMark(place: ReviewMarkPlace | undefined, script: ScriptReview) {
+    const [, refresh] = useState(0);
+    useEffect(() => place && subscribeMarks(place.name, () => refresh(count => count + 1)), [place?.name]);
+    if (!place) return {};
+    const key = reviewKey(place.file, place.target, script);
+    const print = scriptPrint(script);
+    return {
+        reviewed: readMarks(place.name, place.remember)[key] === print,
+        setReviewed(value: boolean) {
+            const marks = {...readMarks(place.name, place.remember)};
+            if (value) marks[key] = print;
+            else delete marks[key];
+            writeMarks(place.name, marks, place.remember);
+        }
+    };
+}
+
+/** One script of a comparison, open, for a tab of its own. */
+export function ScriptReviewTab({comparison, script, renderBlock, locale = 'en', loadAsset, locateBlock, mark}: {
+    comparison: Comparison; script: ScriptReview; renderBlock: ProjectBlockRenderer; locale?: string;
+    loadAsset?: ProjectAssetLoader; locateBlock?: ProjectBlockLocator;
+    /** Offers the reviewed mark, shared with the review panel and other tabs that use the same place. */
+    mark?: ReviewMarkPlace;
+}) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    const location = useBlockLocation(comparison, locateBlock);
+    const {reviewed, setReviewed} = useReviewMark(mark, script);
+    return <section className="twgit-block-diff twgit-review twgit-review-tab">
+        <ScriptComparison script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset} location={location} expanded
+            reviewed={reviewed} setReviewed={setReviewed}/>
+        <Legend labels={labels}/>
+    </section>;
+}
+
+/**
+ * What changed in a stage or sprite outside its code, or in the project as a whole when no target is given,
+ * for a tab of its own.
+ */
+export function TargetReviewTab({comparison, target, locale = 'en', loadAsset}: {
+    comparison: Comparison; target?: TargetReview; locale?: string; loadAsset?: ProjectAssetLoader;
+}) {
+    const labels = locale.startsWith('ja') ? ja : en;
+    if (!target) {
+        return <section className="twgit-block-diff twgit-review twgit-review-tab">
+            {comparison.properties.length > 0 ? <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p> :
+                <p>{labels.noChanges}</p>}
+        </section>;
+    }
+    return <section className="twgit-block-diff twgit-review twgit-review-tab">
+        <h5><TargetThumbnails target={target} labels={labels} loadAsset={loadAsset}/>{target.isStage ? labels.stage : target.name}</h5>
+        {target.status !== 'updated' && <p className="twgit-review-target-status">
+            {(target.status === 'added' ? labels.targetAdded : labels.targetRemoved)(target.name, target.isStage)}</p>}
+        {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
+        {target.scripts.length > 0 && <p>{labels.scriptCount(target.scripts.length)}</p>}
     </section>;
 }
