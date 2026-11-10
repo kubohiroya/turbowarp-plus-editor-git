@@ -2,7 +2,9 @@
 
 [English](README.md)
 
-TurboWarp Plus Editor のファイルメニューに「ローカル Git」を追加します。リポジトリルートを一度選び、配下の sb3-toolchain v1 作品フォルダをパネルから開きます。作品の編集と保存には Editor の project-folder 接続を使います。
+TurboWarp Plus Editor に「ローカル Git」パネルを追加します。リポジトリルートを一度選び、配下の sb3-toolchain v1 作品フォルダをパネルから開きます。作品の編集と保存には Editor の project-folder 接続を使います。
+
+パネルは、Editor のメニューバーのブランチのボタンから開きます。`mountGitPanel({vm, document, host})` はパネルを組み込み、`{open(locale), refresh(), dispose()}` を返します。`renderBranchButton(createElement, {vm, locale})` は、`vm` に組み込んだパネルのボタンを描きます。パネルがないとき（ホストがローカル Git を出さないときなど）は何も描きません。ボタンはブランチのアイコン、現在のブランチ名、▾ を表示します。リポジトリを選ぶ前は **Git** と表示し、**リポジトリを選択…** に進みます。detached HEAD ではコミットの短い ID を、記録がまだないブランチではそのことを表示します。メニュー（`role="menu"`。矢印キー・Home・End・Enter で操作し、Escape でボタンに戻ります）には、ローカルブランチ（現在のブランチに印）、`origin` にあってローカルにないブランチの **… を作って切り替える**、**新しいブランチ…**（HEAD からブランチを作る小さな欄。既定で作ったら切り替えます）、**ローカル Git を開く** を並べます。ボタンとパネルは同じリポジトリと同じ操作を使うので、メニューからの切り替えも、パネルのボタンと同じく確かめ、同じ理由で断ります。切り替えた後は、パネルを開いて結果（**作品を再読込** の案内など）を示します。`localWrite` がなければ、メニューはブランチを示すだけです。ボタンは、パネルやほかのツールでのブランチの変更に追従します。パネルが見えていない間は、下のパネルの確認と同じ契機で、HEAD とブランチの参照だけを読みます。`BranchButton` は、状態をホストが持つ場合のためのボタン単体です。
 
 ステージ済み・未ステージ・未追跡の変更、現在のブランチ、HEAD、ローカルブランチと履歴を表示します。ファイルを選ぶとテキスト差分またはバイナリのサイズを確認できます。作品データ（`project.source.json`）は、ホストがブロックの描画関数を渡していればステージ・スプライト別、コード別のブロックで比べ、「テキスト」に切り替えると行単位の差分を表示します。ステージ・スプライトの見出しには、その版の現在のコスチューム（ステージは背景）のサムネイルを添えます。素材は比較する版から読みます（ステージ済みは HEAD とインデックス、未ステージはインデックスと作業ツリー、未追跡は作業ツリー、コミットは第一親とそのコミット）。素材のフォルダはその版の `sb3-source.json` の `assetsDirectory`（既定は `assets`）です。読めない版では名前だけを示します。コミットを選ぶと第一親との差分を表示します。作品を選んでいるときは、変更一覧と差分をそのフォルダに絞ります。
 
@@ -14,7 +16,7 @@ TurboWarp Plus Editor のファイルメニューに「ローカル Git」を追
 
 File System Access に対応する Chromium 系ブラウザーが必要です。初版は通常の `.git` ディレクトリとファイル内容の変更を扱います。linked worktree、サブモジュール、シンボリックリンクは対象外です。作業ツリーの実行権限の変更はブラウザーから検出できません。Git に記録済みのファイルモードは表示します。バイナリアセットはサイズを示し、テキスト差分の生成には上限があります。
 
-Node.js 26 で `npm ci` と `npm test` を実行します。Vite でライブラリとスタイルシート、TypeScript で型宣言を生成します。`npm pack` で Editor 用の配布物を作成します。`npm run test:browser` は、最小 editor runtime（`@kubohiroya/turbowarp-plus-editor-test-runtime`）の上で、履歴グラフのキーボード操作と操作メニュー、比較ダイアログのブロックの描画を Chromium で試します。Editor が固定する VM と Scratch Blocks を使い、Editor のビルドは要りません。Editor では既定で有効です。起動 URL に `twPlusLocalGit=0` を指定するとパネルの接続を解除できます。
+Node.js 26 で `npm ci` と `npm test` を実行します。Vite でライブラリとスタイルシート、TypeScript で型宣言を生成します。`npm pack` で Editor 用の配布物を作成します。`npm run test:browser` は、最小 editor runtime（`@kubohiroya/turbowarp-plus-editor-test-runtime`）の上で、ブランチのボタンのメニューとキーボード操作（実際のリポジトリでパネルと並べた場合も）、履歴グラフのキーボード操作と操作メニュー、比較ダイアログのブロックの描画を Chromium で試します。Editor が固定する VM と Scratch Blocks を使い、Editor のビルドは要りません。Editor では既定で有効です。起動 URL に `twPlusLocalGit=0` を指定するとパネルの接続を解除でき、ブランチのボタンも出ません。
 
 パネルの構成とローカル Git の扱いは [duff](https://github.com/chigichan24/duff) を参考にしました。実装には [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git) と [react-diff-view](https://github.com/otakustay/react-diff-view) を使用し、同梱依存のライセンスはビルド時の第三者ライセンス一覧に収録します。
 
