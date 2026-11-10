@@ -2,6 +2,8 @@ import * as git from 'isomorphic-git';
 import {createTwoFilesPatch} from 'diff';
 import {createReadOnlyFs, errorCode, GitPanelError, pathParts, readOptional, sameBytes} from './filesystem.js';
 import {runRemoteOperation} from './remote-operations.js';
+import {runLocalOperation} from './local-operations.js';
+import type {LocalOperation} from './local-operations.js';
 import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
 import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from './project-asset-paths.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
@@ -458,6 +460,9 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                     throw error;
                 }
             }),
+        /** Stages, unstages or commits; see `runLocalOperation`. `guard` throws to stop before each write. */
+        localOperation: (operation: LocalOperation, guard: () => void) =>
+            serial(() => runLocalOperation(root, operation, guard)),
         read: (scope?: string) => serial(() => read(scope)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),

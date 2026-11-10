@@ -10,6 +10,7 @@ import {GitPanelError} from './filesystem.js';
 import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
+import type {GitAuthor, LocalOperation} from './local-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ScratchBlockLocationWorkspace} from './block-diff-location.js';
@@ -25,6 +26,7 @@ export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
 export {openProjectComparison} from './project-comparison.js';
 export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
 export type {Repository, Snapshot, FileChange, FileDiff} from './repository.js';
+export type {GitAuthor, LocalOperation} from './local-operations.js';
 
 export interface GitHost {
     connectionSettings?: GitConnectionSettings;
@@ -42,6 +44,11 @@ export interface GitHost {
     openTargetCode?(targetId: string): void | Promise<void>;
     /** The Editor's code workspace as it is now. */
     getWorkspace?(): ScratchBlockLocationWorkspace | null | Promise<ScratchBlockLocationWorkspace | null>;
+    /**
+     * Offers staging, unstaging and commits. Without it the panel only reads. `author` is used only where the
+     * repository's Git config has no user.name or user.email; the panel never writes the config.
+     */
+    localWrite?: {author?(): GitAuthor | undefined};
 }
 export interface GitPanelRequest {
     reference: {providerId: string; documentId: string};
@@ -337,6 +344,22 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 notice: operation === 'pull' && current.current.project !== null ? labels.pulledProject : labels.remoteDone};
         });
     };
+    const [message, setMessage] = useState('');
+    const localOperation = (operation: LocalOperation, notice?: string) => {
+        const repository = current.current.repository;
+        if (!repository || !host.localWrite) return Promise.resolve();
+        return run(async () => {
+            const ticket = epoch.current;
+            await repository.localOperation(operation, () => {
+                if (epoch.current !== ticket) throw new GitPanelError('changed');
+                // Staging records the saved files; edits still in the Editor would be left out without a word.
+                if (operation.kind === 'stage' && host.isProjectDirty()) throw new GitPanelError('saveFirst');
+            });
+            if (operation.kind === 'commit') setMessage('');
+            const snapshot = await repository.read(current.current.project ?? '');
+            return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null, notice};
+        });
+    };
     const focusTrap = (event: React.KeyboardEvent<HTMLDivElement>) => {
         if (event.key === 'Escape') {event.stopPropagation(); closePanel(); return;}
         if (event.key !== 'Tab') return;
@@ -352,6 +375,11 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
     if (!shown) return null;
     const groups: ChangeGroup[] = state.commit ? ['commit'] : ['staged', 'unstaged', 'untracked'];
+    // Writing works on the current changes, not on a record from the history, and only on a branch.
+    const writable = !!host.localWrite && !state.commit && !!state.snapshot?.branch;
+    const unrecorded = [...new Set(state.changes.filter(change => change.group === 'unstaged' || change.group === 'untracked')
+        .map(change => change.path))];
+    const staged = state.changes.some(change => change.group === 'staged');
     const projectList = typeof projectChanges === 'object' ? projectChanges : null;
     // The open project matches the working tree, so only the working-tree side of its project file can be located.
     const projectFile = state.project === null ? null : [state.project, 'project.source.json'].filter(Boolean).join('/');
@@ -423,6 +451,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                     aria-pressed={state.selected === change} onClick={() => openFile(change)}>
                                     <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small> {change.path}
                                 </button>
+                                {writable && <button type="button" className="twgit-stage" disabled={state.busy}
+                                    aria-label={`${group === 'staged' ? labels.unstage : labels.stage}: ${change.path}`}
+                                    onClick={() => void localOperation({kind: group === 'staged' ? 'unstage' : 'stage', paths: [change.path]})}>
+                                    {group === 'staged' ? labels.unstage : labels.stage}</button>}
                             </li>)}</ul>
                         </section>);
                         return projectList ? <ProjectChangeListView changes={projectList} selected={selection ? element : null}
@@ -430,6 +462,15 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             fileListOpen={fileListOpen} setFileListOpen={setFileListOpen}/> : fileList;
                     })()}
                     {!state.changes.length && <p>{labels.clean}</p>}
+                    {writable && <section className="twgit-commit" aria-label={labels.commitButton}>
+                        <button type="button" disabled={state.busy || !unrecorded.length}
+                            onClick={() => void localOperation({kind: 'stage', paths: unrecorded})}>{labels.stageAll}</button>
+                        <label>{labels.commitLabel}
+                            <textarea value={message} rows={3} disabled={state.busy} onChange={event => setMessage(event.currentTarget.value)}/></label>
+                        <button type="button" disabled={state.busy || !staged || !message.trim()}
+                            onClick={() => void localOperation({kind: 'commit', message, author: host.localWrite?.author?.()},
+                                labels.committed)}>{labels.commitButton}</button>
+                    </section>}
                     <h3>{labels.history}</h3>
                     <ol className="twgit-history">{state.snapshot?.commits.map(commit => <li key={commit.oid}>
                         <button disabled={state.busy} aria-pressed={state.commit === commit.oid} title={commit.oid}

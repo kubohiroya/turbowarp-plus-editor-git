@@ -1,6 +1,7 @@
 export class GitPanelError extends Error {
     constructor(public code: 'invalid' | 'changed' | 'large' | 'unsupported' | 'pullUnsafe' | 'diverged' |
-        'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed', message: string = code) {
+        'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed' |
+        'saveFirst' | 'author' | 'nothingStaged' | 'commitMessage', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }
