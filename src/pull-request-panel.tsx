@@ -8,7 +8,7 @@ import type {ProjectBlockLocator} from './block-diff-location.js';
 import {readProjectSourceDiff} from './project-source-patch.js';
 import type {ProjectSourceTabsFile} from './project-source-tabs.js';
 
-type OpenTabs = (key: string, files: readonly ProjectSourceTabsFile[]) => number;
+type OpenTabs = (key: string, files: readonly ProjectSourceTabsFile[], rememberAs?: string) => number;
 
 const en = {
     title: 'Pull requests', number: 'Pull request number', openNumber: 'Open pull request',
@@ -127,7 +127,7 @@ function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs}: 
                             }
                             return projects ? [{path: file.path, before: projects[0], after: projects[1], loadAsset: file.loadAsset,
                                 locateBlock: locateFor?.(file.path, pr.head.sha)}] : [];
-                        }))}>{labels.openTabs}</button>}
+                        }), `${name}#${pr.number}`)}>{labels.openTabs}</button>}
                 </p>
                 <ProjectSourceReview title={pr.title} description={pr.description} files={locateFor ? pr.files.map(file => 'patch' in file ? {...file, locateBlock: locateFor(file.path, pr.head.sha)} : file) : pr.files}
                     renderBlock={renderBlock} locale={locale} rememberAs={`${name}#${pr.number}`}/>
