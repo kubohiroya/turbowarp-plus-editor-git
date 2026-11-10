@@ -14,6 +14,9 @@ import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
 import type {GitAuthor, LocalOperation} from './local-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
+import {openProjectSourceTabs} from './project-source-tabs.js';
+import type {ProjectSourceTabsFile} from './project-source-tabs.js';
+import {parseProjectSource} from './project-source-patch.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ScratchBlockLocationWorkspace} from './block-diff-location.js';
 export {createScratchBlocksDiffLocator} from './block-diff-location.js';
@@ -26,6 +29,8 @@ export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch
 
 export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
 export {openProjectComparison} from './project-comparison.js';
+export {openProjectSourceTabs} from './project-source-tabs.js';
+export type {ProjectSourceTabsFile, ProjectSourceTabsOptions} from './project-source-tabs.js';
 export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
 export type {Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
 export {HistoryGraph, laneColors} from './history-graph-view.js';
@@ -61,6 +66,12 @@ export interface GitPanelRequest {
     filename: string;
     title?: string;
     transient?: boolean;
+    /** Tabs of one area share a split panel of the host's layout. */
+    area?: string;
+    /** Gathers the tab with the others of the same `id` under a labelled chip; `color` is a palette id such as `'green'`. */
+    tabGroup?: {id: string; label: string; color?: string; collapsed?: boolean};
+    /** Opens the tab behind the active one. */
+    inactive?: boolean;
     mount(element: HTMLElement, close: () => void): {requestClose(): void; dispose(): void};
 }
 interface Controller {open(locale: string): void; refresh(automatic?: boolean): Promise<void>}
@@ -452,6 +463,20 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const reviewLocator = (path: string, headSha: string) => locator && path === projectFile && state.snapshot?.head === headSha &&
         !state.changes.length ? locator : undefined;
     const selection = projectList && !state.selected ? findElement(projectList.list, element) : null;
+    // Only a tab leaves room for more tabs beside it; the modal dialog keeps its comparisons inside.
+    const openTabs = slot && host.openPanel && host.renderReviewBlock ?
+        (key: string, files: readonly ProjectSourceTabsFile[]) =>
+            openProjectSourceTabs(host.openPanel, {key, files, renderBlock: host.renderReviewBlock!, locale}) : undefined;
+    const openFileTabs = (change: FileChange) => openTabs && ((before: string | null, after: string | null) => {
+        let files: ProjectSourceTabsFile[];
+        try {
+            files = [{path: change.path, before: parseProjectSource(before), after: parseProjectSource(after),
+                loadAsset: loadAsset ?? undefined, locateBlock: fileLocator(change)}];
+        } catch {
+            return;
+        }
+        openTabs(`${state.commit ?? change.group}:${change.path}`, files);
+    });
     const content = <>
             <header>
                 <h2>{labels.title}</h2>
@@ -491,7 +516,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             {!state.repository && <p>{labels.empty}</p>}
             {review && state.repository && host.renderReviewBlock &&
                 <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}
-                    locateFor={reviewLocator}/>}
+                    locateFor={reviewLocator} openTabs={openTabs}/>}
             {!review && state.repository && <div className="twgit-content">
                 <aside>
                     {state.browser && <details>
@@ -577,7 +602,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         locateBlock={state.commit ? undefined : locator}
                         renderBlock={host.renderReviewBlock} onSelectFile={openFile}/> :
                         state.selected ? <FileDiffView change={state.selected} diff={state.diff} labels={labels} locale={locale}
-                            locateBlock={fileLocator(state.selected)}
+                            locateBlock={fileLocator(state.selected)} onOpenTabs={openFileTabs(state.selected)}
                             renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> : <p>{labels.select}</p>}
                 </main>
             </div>}
