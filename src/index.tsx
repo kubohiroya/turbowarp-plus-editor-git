@@ -436,32 +436,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     <div className="twgit-connection-body">
                         <p>{labels.branch} · <strong>{state.snapshot.branch || (state.snapshot.head ? labels.detached : labels.unborn)}</strong></p>
                         <p>{labels.head} · <code>{state.snapshot.head?.slice(0, 12) ?? '—'}</code></p>
-                        {!branching && <p>{labels.branches} · {state.snapshot.branches.join(', ') || '—'}</p>}
-                        {branching && <section className="twgit-branches" aria-label={labels.branches}>
-                            <p>{labels.branches}</p>
-                            <ul>{state.snapshot.branches.map(name => <li key={name}><code>{name}</code>
-                                {name === state.snapshot!.branch ? <small> · {labels.currentBranch}</small> :
-                                    <button type="button" disabled={state.busy} aria-label={`${labels.switchTo}: ${name}`}
-                                        onClick={() => void changeBranch({kind: 'switchBranch', name})}>{labels.switchTo}</button>}
-                            </li>)}</ul>
-                            {state.snapshot.head && <form onSubmit={event => {
-                                event.preventDefault();
-                                if (newBranch.trim()) void changeBranch({kind: 'createBranch', name: newBranch.trim(), checkout: switchAfterCreate});
-                            }}>
-                                <label>{labels.newBranch} <input value={newBranch} disabled={state.busy}
-                                    onChange={event => setNewBranch(event.currentTarget.value)}/></label>
-                                <label><input type="checkbox" checked={switchAfterCreate} disabled={state.busy}
-                                    onChange={event => setSwitchAfterCreate(event.currentTarget.checked)}/> {labels.switchAfterCreate}</label>
-                                <button type="submit" disabled={state.busy || !newBranch.trim()}>{labels.createBranch}</button>
-                            </form>}
-                            {state.snapshot.remoteBranches.length > 0 && <>
-                                <p>{labels.remoteBranches}</p>
-                                <ul>{state.snapshot.remoteBranches.map(name => <li key={name}><code>origin/{name}</code>
-                                    <button type="button" disabled={state.busy} aria-label={`${labels.createFromRemote}: origin/${name}`}
-                                        onClick={() => void changeBranch({kind: 'createBranch', name, fromRemote: true, checkout: true})}>
-                                        {labels.createFromRemote}</button></li>)}</ul>
-                            </>}
-                        </section>}
+                        <p>{labels.branches} · {state.snapshot.branches.join(', ') || '—'}</p>
                         <p>{labels.groups} · {labels.gitStaged} = {labels.staged} / {labels.gitUnstaged} = {labels.unstaged} / {labels.gitUntracked} = {labels.untracked}</p>
                         <p>{labels.permissions}</p>
                     </div>
@@ -514,6 +489,31 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         <button type="button" disabled={state.busy || !staged || !message.trim()}
                             onClick={() => void localOperation({kind: 'commit', message, author: host.localWrite?.author?.()},
                                 labels.committed)}>{labels.commitButton}</button>
+                    </section>}
+                    {branching && state.snapshot && <section className="twgit-branches" aria-label={labels.branches}>
+                        <h3>{labels.branches}</h3>
+                        <ul>{state.snapshot.branches.map(name => <li key={name}><code>{name}</code>
+                            {name === state.snapshot!.branch ? <small> · {labels.currentBranch}</small> :
+                                <button type="button" disabled={state.busy} aria-label={`${labels.switchTo}: ${name}`}
+                                    onClick={() => void changeBranch({kind: 'switchBranch', name})}>{labels.switchTo}</button>}
+                        </li>)}</ul>
+                        {state.snapshot.head && <form onSubmit={event => {
+                            event.preventDefault();
+                            if (newBranch.trim()) void changeBranch({kind: 'createBranch', name: newBranch.trim(), checkout: switchAfterCreate});
+                        }}>
+                            <label>{labels.newBranch} <input value={newBranch} disabled={state.busy}
+                                onChange={event => setNewBranch(event.currentTarget.value)}/></label>
+                            <label><input type="checkbox" checked={switchAfterCreate} disabled={state.busy}
+                                onChange={event => setSwitchAfterCreate(event.currentTarget.checked)}/> {labels.switchAfterCreate}</label>
+                            <button type="submit" disabled={state.busy || !newBranch.trim()}>{labels.createBranch}</button>
+                        </form>}
+                        {state.snapshot.remoteBranches.length > 0 && <>
+                            <p>{labels.remoteBranches}</p>
+                            <ul>{state.snapshot.remoteBranches.map(name => <li key={name}><code>origin/{name}</code>
+                                <button type="button" disabled={state.busy} aria-label={`${labels.createFromRemote}: origin/${name}`}
+                                    onClick={() => void changeBranch({kind: 'createBranch', name, fromRemote: true, checkout: true})}>
+                                    {labels.createFromRemote}</button></li>)}</ul>
+                        </>}
                     </section>}
                     <h3>{labels.history}</h3>
                     <ol className="twgit-history">{state.snapshot?.commits.map(commit => <li key={commit.oid}>
