@@ -112,3 +112,40 @@ test('a stopped switch leaves HEAD, the index and the work tree as they were', a
     assert.equal(await fs.readFile(path.join(root, 'notes.txt'), 'utf8'), 'main\n');
     await assert.rejects(fs.access(path.join(root, 'projects/other')));
 });
+
+test('creates a branch at a commit from the history, with or without switching, as git branch <name> <commit> does', async t => {
+    const {root, git, write, commit, repository} = await fixture(t);
+    const initial = git('rev-parse', 'main');
+    await write('notes.txt', 'second\n');
+    git('add', '.');
+    commit('second');
+    const config = await fs.readFile(path.join(root, '.git/config'));
+    await run(repository, {kind: 'createBranch', name: 'from-history', at: initial, checkout: false});
+    assert.equal(git('rev-parse', 'from-history'), initial);
+    assert.equal(git('branch', '--show-current'), 'main');
+    assert.equal(git('status', '--porcelain'), '');
+    // A commit on another branch, switched to: HEAD, the index and the work tree match git switch.
+    const feature = git('rev-parse', 'feature');
+    assert.equal(await repository.hasFolder(feature, 'projects/other', 'commit'), true);
+    await run(repository, {kind: 'createBranch', name: 'from-feature', at: feature, checkout: true});
+    assert.equal(git('branch', '--show-current'), 'from-feature');
+    assert.equal(git('rev-parse', 'HEAD'), feature);
+    assert.equal(git('status', '--porcelain'), '');
+    await assert.rejects(fs.access(path.join(root, 'notes.txt')));
+    assert.deepEqual(await fs.readFile(path.join(root, '.git/config')), config);
+    const ours = state(git);
+    git('switch', '-q', 'main');
+    git('switch', '-q', 'from-feature');
+    assert.deepEqual(state(git), ours);
+    // A name in use, an unknown commit, a tree instead of a commit, or `at` with `fromRemote` change nothing.
+    const refs = git('for-each-ref', '--format=%(refname) %(objectname)');
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'main', at: initial, checkout: false}), {code: 'branchExists'});
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'x', at: '0'.repeat(40), checkout: false}), {code: 'invalid'});
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'x', at: git('rev-parse', 'HEAD^{tree}'), checkout: false}),
+        {code: 'invalid'});
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'x', at: 'main', checkout: false}), {code: 'invalid'});
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'x', at: initial, fromRemote: true, checkout: false}),
+        {code: 'invalid'});
+    assert.equal(git('for-each-ref', '--format=%(refname) %(objectname)'), refs);
+    git('fsck', '--no-progress');
+});

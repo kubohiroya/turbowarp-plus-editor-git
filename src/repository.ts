@@ -35,6 +35,33 @@ type Source = {kind: 'tree'; ref: string} | {kind: 'index'} | {kind: 'worktree'}
  * across the index and the working tree read as one; or one commit and its first parent.
  */
 export type ProjectComparison = {kind: 'worktree'} | {kind: 'commit'; commit: string};
+/** A ref drawn next to a commit in the history: a local branch, `origin/<name>`, or HEAD when it is detached. */
+export interface HistoryRef {
+    kind: 'branch' | 'remote' | 'head';
+    /** The branch name; `origin/<name>` for remote branches; `HEAD` for a detached HEAD. */
+    name: string;
+    /** The branch HEAD is on, or the detached HEAD. */
+    current: boolean;
+}
+export interface HistoryCommit {
+    oid: string;
+    parents: string[];
+    /** The first line of the message. */
+    message: string;
+    author: string;
+    /** Author time in seconds. */
+    timestamp: number;
+    refs: HistoryRef[];
+}
+/** Where `history` continues. It only works with the repository that returned it. */
+export type HistoryCursor = {readonly continues: 'history'};
+export interface HistoryPage {
+    commits: HistoryCommit[];
+    /** Pass as `after` to read the next page; `null` when every commit has been read. */
+    cursor: HistoryCursor | null;
+}
+/** Commits read per history page unless asked otherwise. */
+export const historyPageSize = 50;
 const projectSourceLimit = 16 * 1024 * 1024;
 type Metadata = Map<string, Uint8Array | null>;
 export interface Snapshot {
@@ -292,6 +319,109 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         return {branch: branch || undefined, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
             upstream};
     };
+    interface HistoryNode {commit: HistoryCommit; time: number; children: number; expanded: boolean}
+    interface HistoryWalk {nodes: Map<string, HistoryNode>; pending: Set<HistoryNode>; frontier: Set<HistoryNode>}
+    const walks = new WeakMap<HistoryCursor, HistoryWalk>();
+    /**
+     * Reads commits reachable from the local branches, `origin/*` and HEAD, newest committer time first, like
+     * `git log --all --date-order` limited to those refs. A commit is listed only after every child read so far, and
+     * only once no commit still to be read is newer, keeping a page's worth read ahead, so a child stays above its
+     * parents unless committer times run backwards by more than that.
+     */
+    const history = async ({limit = historyPageSize, after}: {limit?: number; after?: HistoryCursor | null} = {}): Promise<HistoryPage> => {
+        fs.clearReads();
+        if (!(limit >= 1)) limit = historyPageSize;
+        let walk = after ? walks.get(after) : undefined;
+        // Each cursor continues once; the walk it names moves on.
+        if (after && !walk) throw new GitPanelError('changed');
+        if (after) walks.delete(after);
+        const readNode = async (oid: string): Promise<HistoryNode | null> => {
+            try {
+                const {commit} = await git.readCommit({...options, cache, oid});
+                return {commit: {oid, parents: commit.parent, message: commit.message.split('\n')[0], author: commit.author.name,
+                    timestamp: commit.author.timestamp, refs: []}, time: commit.committer.timestamp, children: 0, expanded: false};
+            } catch (error) {
+                // A shallow clone stops before the parents it does not have.
+                if (errorCode(error) === 'NotFoundError') return null;
+                throw error;
+            }
+        };
+        if (!walk) {
+            walk = {nodes: new Map(), pending: new Set(), frontier: new Set()};
+            const tips: {ref: string; label: HistoryRef}[] = [];
+            const branch = await git.currentBranch(options);
+            for (const name of (await git.listBranches(options)).sort()) {
+                tips.push({ref: `refs/heads/${name}`, label: {kind: 'branch', name, current: name === branch}});
+            }
+            for (const name of (await git.listBranches({...options, remote: 'origin'})).sort()) {
+                if (name !== 'HEAD') tips.push({ref: `refs/remotes/origin/${name}`, label: {kind: 'remote', name: `origin/${name}`, current: false}});
+            }
+            if (!branch) tips.push({ref: 'HEAD', label: {kind: 'head', name: 'HEAD', current: true}});
+            for (const {ref, label} of tips) {
+                let oid: string;
+                try {oid = await git.resolveRef({...options, ref});} catch (error) {
+                    if (errorCode(error) === 'NotFoundError') continue;
+                    throw error;
+                }
+                let node = walk.nodes.get(oid);
+                if (!node) {
+                    const read = await readNode(oid);
+                    if (!read) continue;
+                    node = read;
+                    walk.nodes.set(oid, node);
+                    walk.pending.add(node);
+                    walk.frontier.add(node);
+                }
+                node.commit.refs.push(label);
+            }
+        }
+        const {nodes, pending, frontier} = walk;
+        const expand = async (node: HistoryNode) => {
+            frontier.delete(node);
+            node.expanded = true;
+            for (const parent of new Set(node.commit.parents)) {
+                let next = nodes.get(parent);
+                if (!next) {
+                    const read = await readNode(parent);
+                    if (!read) continue;
+                    next = read;
+                    nodes.set(parent, next);
+                    pending.add(next);
+                    frontier.add(next);
+                }
+                if (pending.has(node) && pending.has(next)) next.children++;
+            }
+        };
+        const newer = (a: HistoryNode, b: HistoryNode) => a.time !== b.time ? a.time > b.time : a.commit.oid > b.commit.oid;
+        const pick = (items: Iterable<HistoryNode>, accept: (node: HistoryNode) => boolean) => {
+            let best: HistoryNode | null = null;
+            for (const node of items) if (accept(node) && (!best || newer(node, best))) best = node;
+            return best;
+        };
+        const commits: HistoryCommit[] = [];
+        while (commits.length < limit) {
+            let ready = pick(pending, node => node.children === 0);
+            let latest = pick(frontier, () => true);
+            // Read on while something unread may be newer than the next commit, keeping a page read ahead.
+            while (latest && (!ready || !ready.expanded || latest.time >= ready.time || pending.size < limit * 2)) {
+                await expand(latest);
+                ready = pick(pending, node => node.children === 0);
+                latest = pick(frontier, () => true);
+            }
+            if (!ready) break;
+            pending.delete(ready);
+            for (const parent of new Set(ready.commit.parents)) {
+                const node = nodes.get(parent);
+                if (node && pending.has(node) && ready.expanded) node.children--;
+            }
+            commits.push(ready.commit);
+        }
+        await fs.checkReads();
+        if (!pending.size) return {commits, cursor: null};
+        const cursor: HistoryCursor = Object.freeze({continues: 'history' as const});
+        walks.set(cursor, walk);
+        return {commits, cursor};
+    };
     const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
         fs.clearReads();
         await assertSnapshot(snapshot);
@@ -468,9 +598,12 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         /** Stages, unstages or commits; see `runLocalOperation`. `guard` throws to stop before each write. */
         localOperation: (operation: LocalOperation, guard: () => void) =>
             serial(() => runLocalOperation(root, operation, guard)),
-        /** Whether a local branch, or `origin/<name>` with `remote`, has the folder `path` (the root always exists). */
-        hasFolder: (name: string, path: string, remote = false) => serial(async () => {
-            const ref = remote ? `refs/remotes/origin/${name}` : `refs/heads/${name}`;
+        /**
+         * Whether a local branch, `origin/<name>` with `remote`, or the commit `name` with `remote` set to `'commit'`,
+         * has the folder `path` (the root always exists).
+         */
+        hasFolder: (name: string, path: string, remote: boolean | 'commit' = false) => serial(async () => {
+            const ref = remote === 'commit' ? name : remote ? `refs/remotes/origin/${name}` : `refs/heads/${name}`;
             if (!path) return true;
             try {
                 const {tree} = await git.readTree({...options, oid: await git.resolveRef({...options, ref}), filepath: path});
@@ -482,6 +615,11 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         read: (scope?: string) => serial(() => read(scope)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
+        /**
+         * Reads one page of the commits reachable from the local branches, `origin/*` and a detached HEAD, newest first
+         * with each child above its parents, and the refs at each. Pass the returned `cursor` as `after` for the next page.
+         */
+        history: (options?: {limit?: number; after?: HistoryCursor | null}) => serial(() => history(options)),
         /**
          * Reads the assets of both versions of a selected project file, for thumbnails. Staged changes compare HEAD with
          * the index, unstaged ones the index with the working tree, untracked ones nothing with the working tree, and

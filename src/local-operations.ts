@@ -8,8 +8,11 @@ export type LocalOperation =
     | {kind: 'stage'; paths: readonly string[]}
     | {kind: 'unstage'; paths: readonly string[]}
     | {kind: 'commit'; message: string; author?: GitAuthor}
-    /** Creates `name` at HEAD, or at `origin/<name>` with `fromRemote`, and switches to it with `checkout`. */
-    | {kind: 'createBranch'; name: string; fromRemote?: boolean; checkout: boolean}
+    /**
+     * Creates `name` at HEAD, at the commit `at`, or at `origin/<name>` with `fromRemote`, and switches to it with
+     * `checkout`.
+     */
+    | {kind: 'createBranch'; name: string; fromRemote?: boolean; at?: string; checkout: boolean}
     | {kind: 'switchBranch'; name: string};
 
 const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'NotFoundError'].includes(errorCode(error) ?? '');
@@ -50,7 +53,11 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
             }
             if (operation.kind === 'createBranch') {
                 let object: string;
-                if (operation.fromRemote) {
+                if (operation.at !== undefined) {
+                    if (operation.fromRemote || !/^[0-9a-f]{40}$/.test(operation.at)) throw new GitPanelError('invalid');
+                    object = await git.readCommit({...options, oid: operation.at})
+                        .then(() => operation.at!, () => {throw new GitPanelError('invalid');});
+                } else if (operation.fromRemote) {
                     try {
                         object = await git.resolveRef({...options, ref: `refs/remotes/origin/${name}`});
                     } catch {
