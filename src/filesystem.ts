@@ -2,7 +2,7 @@ export class GitPanelError extends Error {
     constructor(public code: 'invalid' | 'changed' | 'large' | 'unsupported' | 'pullUnsafe' | 'diverged' |
         'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed' |
         'saveFirst' | 'author' | 'nothingStaged' | 'commitMessage' |
-        'switchUnsafe' | 'branchExists' | 'branchName', message: string = code) {
+        'switchUnsafe' | 'branchExists' | 'branchName' | 'locked', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }

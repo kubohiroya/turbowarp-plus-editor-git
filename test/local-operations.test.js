@@ -70,8 +70,12 @@ test('refuses an empty message, nothing staged, executable files and a held inde
     await assert.rejects(run(repository, {kind: 'stage', paths: ['run.sh']}), {code: 'unsupported'});
     assert.equal(git('ls-files', '-s', 'run.sh').split(' ')[0], '100755');
     await fs.writeFile(path.join(root, '.git/index.lock'), '');
-    await assert.rejects(run(repository, {kind: 'commit', message: 'Locked'}), {code: 'changed'});
+    await assert.rejects(run(repository, {kind: 'commit', message: 'Locked'}), {code: 'locked'});
     await fs.rm(path.join(root, '.git/index.lock'));
+    // A merge in progress belongs to the tool that started it.
+    await fs.writeFile(path.join(root, '.git/MERGE_HEAD'), git('rev-parse', 'HEAD') + '\n');
+    await assert.rejects(run(repository, {kind: 'stage', paths: ['notes.txt']}), {code: 'locked'});
+    await fs.rm(path.join(root, '.git/MERGE_HEAD'));
     await run(repository, {kind: 'commit', message: 'Unlocked'});
     assert.equal(git('log', '-1', '--format=%s'), 'Unlocked');
 });
