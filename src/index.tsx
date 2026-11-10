@@ -465,7 +465,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     {(() => {
                         const fileList = groups.map(group => <section key={group}>
                             <h3>{labels[group]} · {state.changes.filter(change => change.group === group).length}</h3>
-                            <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}>
+                            <ul>{state.changes.filter(change => change.group === group).map(change => <li key={change.path}
+                                className={writable ? 'twgit-file-row' : undefined}>
                                 <button className="twgit-file" data-git-group={group} disabled={state.busy}
                                     aria-pressed={state.selected === change} onClick={() => openFile(change)}>
                                     <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small> {change.path}
@@ -508,7 +509,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             <button type="submit" disabled={state.busy || !newBranch.trim()}>{labels.createBranch}</button>
                         </form>}
                         {state.snapshot.remoteBranches.length > 0 && <>
-                            <p>{labels.remoteBranches}</p>
+                            <h3>{labels.remoteBranches}</h3>
                             <ul>{state.snapshot.remoteBranches.map(name => <li key={name}><code>origin/{name}</code>
                                 <button type="button" disabled={state.busy} aria-label={`${labels.createFromRemote}: origin/${name}`}
                                     onClick={() => void changeBranch({kind: 'createBranch', name, fromRemote: true, checkout: true})}>
