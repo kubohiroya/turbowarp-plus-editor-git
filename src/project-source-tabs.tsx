@@ -28,6 +28,11 @@ export interface ProjectSourceTabsOptions {
     files: readonly ProjectSourceTabsFile[];
     renderBlock: ProjectBlockRenderer;
     locale?: string;
+    /**
+     * Shares the reviewed marks of the script tabs with the review of this name, such as `owner/repo#42`, and keeps
+     * them in the browser. Without it, the marks are kept for this comparison while the page is open.
+     */
+    rememberAs?: string;
 }
 
 const providerId = 'turbowarp-plus-git';
@@ -60,7 +65,7 @@ function WhenShown({children}: {children: React.ReactNode}) {
  * Returns how many tabs were asked for, or `0` when the host has no workspace to take them.
  */
 export function openProjectSourceTabs(openPanel: ((request: GitPanelRequest) => boolean) | undefined,
-    {key, files, renderBlock, locale = 'en'}: ProjectSourceTabsOptions): number {
+    {key, files, renderBlock, locale = 'en', rememberAs}: ProjectSourceTabsOptions): number {
     if (!openPanel) return 0;
     const words = reviewTabWords(locale);
     const area = `${providerId}:diff:${key}`;
@@ -99,7 +104,8 @@ export function openProjectSourceTabs(openPanel: ((request: GitPanelRequest) => 
             for (const script of target.scripts) {
                 requests.push(tab(`${targetKey}:${script.id}`, words.script(script),
                     () => <ScriptReviewTab comparison={comparison} script={script} renderBlock={renderBlock} locale={locale}
-                        loadAsset={file.loadAsset} locateBlock={file.locateBlock}/>, tabGroup));
+                        loadAsset={file.loadAsset} locateBlock={file.locateBlock}
+                        mark={{name: rememberAs ?? area, remember: !!rememberAs, file: file.path, target}}/>, tabGroup));
             }
         }
     }

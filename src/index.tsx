@@ -465,8 +465,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const selection = projectList && !state.selected ? findElement(projectList.list, element) : null;
     // Only a tab leaves room for more tabs beside it; the modal dialog keeps its comparisons inside.
     const openTabs = slot && host.openPanel && host.renderReviewBlock ?
-        (key: string, files: readonly ProjectSourceTabsFile[]) =>
-            openProjectSourceTabs(host.openPanel, {key, files, renderBlock: host.renderReviewBlock!, locale}) : undefined;
+        (key: string, files: readonly ProjectSourceTabsFile[], rememberAs?: string) =>
+            openProjectSourceTabs(host.openPanel, {key, files, renderBlock: host.renderReviewBlock!, locale, rememberAs}) : undefined;
     const openFileTabs = (change: FileChange) => openTabs && ((before: string | null, after: string | null) => {
         let files: ProjectSourceTabsFile[];
         try {
