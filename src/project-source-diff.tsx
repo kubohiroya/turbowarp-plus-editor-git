@@ -8,6 +8,12 @@ import type {LocationStatus} from './block-diff-preview.js';
 import './project-source-diff.css';
 
 export {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
+export {createGitHubReviewApi, GitHubReviewError, isReviewThreadPath} from './github-review-api.js';
+export type {GitHubReviewApi, GitHubReviewApiOptions, GitHubReviewErrorCode, ReviewContext, ReviewEvent} from './github-review-api.js';
+export {checkReview, discardReview, emptyReviewDraft, forgetReviewSubmission, planReview, probeReviewRoutes, readReviewDraft,
+    reviewBody, reviewProblem, reviewRoute, sendReview, subscribeReviewDraft, writeReviewDraft} from './review-submit.js';
+export {PullRequestReviewComposer} from './review-composer.js';
+export type {ReviewComment, ReviewDraft, ReviewPlan, ReviewProblem, ReviewResult, ReviewSubmission, ReviewTarget} from './review-submit.js';
 export {ProjectSourceComparison, ProjectSourceReview} from './project-source-review.js';
 export {ProjectComparisonDialog, openProjectComparison} from './project-comparison.js';
 export {openProjectSourceTabs} from './project-source-tabs.js';

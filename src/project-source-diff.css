@@ -120,3 +120,13 @@
 .twgit-review-target-status { font-weight: 600; }
 .twgit-review-asset { display: flex; align-items: center; gap: 8px; }
 .twgit-review-asset img { width: 32px; height: 32px; object-fit: contain; }
+.twgit-review-field { display: grid; gap: 4px; }
+.twgit-review-field textarea { font: inherit; resize: vertical; min-height: 3em; }
+.twgit-review-comment { padding: 0 12px 10px; }
+.twgit-review-composer { display: grid; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--twgit-review-line, color-mix(in srgb, CanvasText 18%, Canvas)); border-radius: 8px; }
+.twgit-review-composer h3 { margin: 0; }
+.twgit-review-events { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; padding: 6px 10px; border: 1px solid var(--twgit-review-line, color-mix(in srgb, CanvasText 18%, Canvas)); border-radius: 6px; }
+.twgit-review-summary, .twgit-review-note, .twgit-review-state { margin: 0; }
+.twgit-review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.twgit-review-result { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin: 0; }
+.twgit-review-result p { margin: 0; }

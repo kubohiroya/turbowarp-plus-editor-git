@@ -43,7 +43,7 @@ export class GitSmartHttpError extends Error {
     }
 }
 
-function remoteUrl(remote: string) {
+export function remoteUrl(remote: string) {
     // Validate the raw URL before a URL parser can discard dot segments, whitespace, or a default port.
     const match = /^https:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/u.exec(remote);
     if (!match || match[0] !== remote || ['.', '..', '.git'].includes(match[2].toLowerCase())) {
@@ -52,7 +52,7 @@ function remoteUrl(remote: string) {
     return `https://github.com/${match[1]}/${match[2]}.git`;
 }
 
-function checkConnection({mode, proxyOrigin}: GitProxyConnection) {
+export function checkConnection({mode, proxyOrigin}: GitProxyConnection) {
     const url = URL.parse(proxyOrigin);
     if (!url || url.origin !== proxyOrigin ||
         (mode === 'desktop' ? !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(proxyOrigin) :

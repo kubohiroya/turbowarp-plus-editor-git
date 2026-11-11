@@ -11,6 +11,8 @@ import {currentCostume, useAssetImage, useCostumeImage} from './project-assets.j
 import {assetFileName, projectPropertyLabel} from './project-change-model.js';
 import {hatName, legend, summaryPhrase} from './review-words.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
+import {changeReviewDraft, useReviewDraft} from './review-composer.js';
+import {reviewLabelsFor} from './messages.js';
 
 type Comparison = ReturnType<typeof compareProjectForReview>;
 
@@ -35,6 +37,11 @@ export interface ProjectSourceReviewProps {
      * the content of each script, so a mark stays until that script changes. Without it, marks last while the review is open.
      */
     rememberAs?: string;
+    /**
+     * Offers a comment field under each code change, kept in the review draft of this name (such as `owner/repo#42`) and
+     * sent with the review.
+     */
+    commentAs?: string;
 }
 
 // Like the Editor's Code tab, a connected group of blocks is called code, and each item is named by its hat block.
@@ -131,8 +138,12 @@ function scriptReviewTitle(script: ScriptReview, labels: typeof ja) {
     return beforeTitle && afterTitle && beforeTitle !== afterTitle ? beforeTitle + ' → ' + afterTitle : afterTitle ?? beforeTitle;
 }
 
-function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location, expanded = false}: {
+type ScriptCommentField = {value: string; set(value: string, heading: string): void};
+
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location, expanded = false, comment, target}: {
     script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
+    /** The person's comment on this code, sent with the review. */
+    comment?: ScriptCommentField; target?: TargetReview;
     renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; location?: BlockLocation;
     /** Starts open, as in a tab that holds this one script. */
     expanded?: boolean;
@@ -151,6 +162,7 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
             {status === 'reorganized' && <small>{script.before.length} → {script.after.length}</small>}
             {summary && <small className="twgit-review-summary">{summary}</small>}
             {reviewed && <small>{labels.reviewed}</small>}
+            {comment?.value && <small data-git-review-commented="">{reviewLabelsFor(locale).commented}</small>}
         </summary>
         {open && <>
             <div className="twgit-block-diff-sides">
@@ -167,6 +179,9 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
             {toggle}
             {setReviewed && <label className="twgit-review-checked"><input type="checkbox" checked={reviewed}
                 onChange={event => setReviewed(event.currentTarget.checked)}/> {labels.reviewed}</label>}
+            {comment && <label className="twgit-review-field twgit-review-comment">{reviewLabelsFor(locale).scriptComment}
+                <textarea rows={3} value={comment.value} onChange={event => comment.set(event.currentTarget.value,
+                    `${target?.isStage ? labels.stage : target?.name ?? ''} · ${title} · ${script.id}`)}/></label>}
         </>}
     </details>;
 }
@@ -208,7 +223,8 @@ function TargetThumbnails({target, labels, loadAsset}: {target: TargetReview; la
 function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBlock, review}: {
     comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
     locateBlock?: ProjectBlockLocator;
-    review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void};
+    review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void;
+        comments?: {get(key: string): string; set(key: string, value: string, heading: string): void}};
 }) {
     const location = useBlockLocation(comparison, locateBlock);
     return <>
@@ -222,8 +238,10 @@ function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBl
             {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
             {target.scripts.map(script => {
                 const key = reviewKey(review?.file, target, script);
+                const comments = review?.comments;
                 return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
-                    location={location} reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}/>;
+                    location={location} reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}
+                    target={target} comment={comments && {value: comments.get(key), set: (value, heading) => comments.set(key, value, heading)}}/>;
             })}
         </section>)}
     </>;
@@ -383,8 +401,18 @@ const writeMarks = (name: string, marks: Record<string, string>, remember = true
     markListeners.get(name)?.forEach(listener => listener());
 };
 
-export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en', rememberAs}: ProjectSourceReviewProps) {
+export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en', rememberAs, commentAs}: ProjectSourceReviewProps) {
     const labels = locale.startsWith('ja') ? ja : en;
+    const draft = useReviewDraft(commentAs);
+    const commentsFor = (file: string) => commentAs && draft ? {
+        get: (key: string) => draft.comments[key]?.body ?? '',
+        set: (key: string, body: string, heading: string) => changeReviewDraft(commentAs, current => {
+            const comments = {...current.comments};
+            if (body) comments[key] = {file, heading, body};
+            else delete comments[key];
+            return {...current, comments};
+        })
+    } : undefined;
     const entries = useMemo(() => files.map(file => {
         if (!('patch' in file)) return {file};
         try {
@@ -457,7 +485,7 @@ export function ProjectSourceReview({title, description, verification, files, re
             {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
                 loadAsset={'loadAsset' in file ? file.loadAsset : undefined}
                 locateBlock={'locateBlock' in file ? file.locateBlock : undefined}
-                review={{file: file.path, keys: reviewed, set: setReviewed}}/>}
+                review={{file: file.path, keys: reviewed, set: setReviewed, comments: commentsFor(file.path)}}/>}
         </section>)}
     </section>;
 }
