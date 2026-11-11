@@ -92,3 +92,44 @@
 .twgit-graph-status { margin: 4px 0; font-size: 11px; min-height: 1em; }
 .twgit-panel .twgit-graph-popup [role="menuitem"]:focus-visible, .twgit-graph-popup [role="menuitem"]:focus-visible { outline-offset: -2px; }
 .twgit-graph-form-error { margin: 0; color: #a11919; overflow-wrap: anywhere; }
+/* The branch button sits in the host's menu bar and takes its text color; its menu uses the host's menu colors. */
+.twgit-branch-entry { position: relative; flex: 0 1 auto; align-self: center; display: flex; min-width: 0; font: inherit; }
+.twgit-branch-button { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 16rem; min-height: 2rem; padding: 0 8px;
+    color: inherit; background: transparent; border: 0; border-radius: 4px; font: inherit; white-space: nowrap; cursor: pointer; }
+.twgit-branch-button:hover, .twgit-branch-button[aria-expanded="true"] { background: color-mix(in srgb, currentColor 15%, transparent); }
+.twgit-branch-button:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+.twgit-branch-icon { flex: none; }
+.twgit-branch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.twgit-branch-unborn { flex: none; font-size: 11px; opacity: .85; }
+.twgit-branch-caret { flex: none; font-size: 10px; }
+.twgit-branch-popup { position: absolute; z-index: 510; top: calc(100% + 4px); right: 0; display: grid; gap: 2px; min-width: 220px;
+    max-width: min(360px, 90vw); max-height: 70vh; overflow: auto; box-sizing: border-box; padding: 4px;
+    color: var(--text-primary, CanvasText); background: var(--ui-white, Canvas); border: 1px solid var(--ui-black-transparent, GrayText);
+    border-radius: 6px; box-shadow: 0 8px 24px #0004; font: 14px/1.5 system-ui, sans-serif; white-space: normal; }
+.twgit-branch-popup [role^="menuitem"] { display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 10px; color: inherit;
+    background: transparent; border: 0; border-radius: 4px; font: inherit; text-align: start; overflow-wrap: anywhere; cursor: pointer; }
+.twgit-branch-popup [role^="menuitem"]:hover, .twgit-branch-popup [role^="menuitem"]:focus-visible {
+    background: color-mix(in srgb, currentColor 12%, transparent); }
+.twgit-branch-popup [role^="menuitem"]:focus-visible { outline: 2px solid var(--looks-secondary, Highlight); outline-offset: -2px; }
+.twgit-branch-popup [aria-disabled="true"]:not([aria-checked="true"]) { opacity: .55; cursor: default; }
+.twgit-branch-popup [aria-checked="true"] { font-weight: 600; }
+.twgit-branch-popup [data-separator-before="true"] { margin-top: 3px; box-shadow: 0 -3px 0 -2px color-mix(in srgb, currentColor 25%, transparent); }
+.twgit-branch-check { flex: none; width: 1em; text-align: center; }
+.twgit-branch-popup form { display: grid; gap: 6px; padding: 6px; font-size: 12px; }
+.twgit-branch-popup form label { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.twgit-branch-popup form input:not([type]) { flex: 1; min-width: 10em; font: inherit; }
+.twgit-branch-popup form button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+.twgit-branch-popup form button:disabled { opacity: .5; cursor: default; }
+/* The branch button's result, at the bottom of the window, in the project folder status's look. */
+.twgit-snackbar { position: fixed; z-index: 1000; bottom: 1rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 10px; box-sizing: border-box; max-width: min(32rem, calc(100vw - 2rem)); padding: .5rem .5rem .5rem .85rem; background: Canvas;
+    color: CanvasText; border: 1px solid currentColor; border-radius: .4rem; box-shadow: 0 4px 16px #0003; font: 14px/1.5 system-ui, sans-serif; }
+.twgit-snackbar > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.twgit-snackbar button { flex: none; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px;
+    padding: 2px 8px; font: inherit; cursor: pointer; }
+.twgit-snackbar button.twgit-close { border-color: transparent; padding: 0; }
+.twgit-snackbar button:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+/* The history in a side panel of the host. */
+.twgit-history-view { box-sizing: border-box; padding: 8px; font: 13px/1.5 system-ui, sans-serif; }
+.twgit-history-view > p { margin: 0 0 8px; }
+.twgit-history-view > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }

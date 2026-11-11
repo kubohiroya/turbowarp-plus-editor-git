@@ -1,7 +1,7 @@
 export const messages = {
     en: {
         pullRequests: 'Pull requests', localChanges: 'Local changes',
-        title: 'Local Git', menu: 'Local Git…', close: 'Close', choose: 'Choose Repository…', refresh: 'Refresh',
+        title: 'Local Git', close: 'Close', choose: 'Choose Repository…', refresh: 'Refresh',
         empty: 'Choose an existing Git repository to inspect its files and history.',
         repository: 'Repository', project: 'Project folder', none: 'No project selected', root: 'Repository root',
         open: 'Open This Project', reload: 'Reload Project', up: 'Parent folder', browse: 'Choose a project inside this repository',
@@ -54,11 +54,13 @@ export const messages = {
         historyMore: 'Show more', historyLoading: 'Reading records…', historyFailed: 'Could not read the records.',
         historyActions: 'Actions', historyCreateHere: 'Create branch here…', historySwitch: 'Switch to {name}',
         historyCreateFromRemote: 'Create and switch to {name}', historyCopy: 'Copy commit ID', historyCopied: 'Copied the commit ID.',
-        historyCopyFailed: 'Could not copy the commit ID.', historyRefs: 'Branches', cancel: 'Cancel'
+        historyCopyFailed: 'Could not copy the commit ID.', historyRefs: 'Branches', cancel: 'Cancel',
+        branchMenu: 'Branches', openPanel: 'Open Local Git', newBranchItem: 'New Branch…', newBranchTitle: 'New Branch',
+        switchedShort: 'Switched branches.', historyViewEmpty: 'Choose a Git repository to show its history here.'
     },
     ja: {
         pullRequests: 'プルリクエスト', localChanges: 'ローカルの変更',
-        title: 'ローカル Git', menu: 'ローカル Git…', close: '閉じる', choose: 'リポジトリを選択…', refresh: '再取得',
+        title: 'ローカル Git', close: '閉じる', choose: 'リポジトリを選択…', refresh: '再取得',
         empty: '既存の Git リポジトリを選び、ファイルの状態と履歴を確認できます。',
         repository: 'リポジトリ', project: '作品フォルダ', none: '作品は未選択', root: 'リポジトリルート',
         open: 'この作品を開く', reload: '作品を再読込', up: '上のフォルダ', browse: 'リポジトリ内の作品を選択',
@@ -111,7 +113,9 @@ export const messages = {
         historyMore: 'さらに表示', historyLoading: '記録を読込中…', historyFailed: '記録を読み込めませんでした。',
         historyActions: '操作', historyCreateHere: 'ここからブランチを作る…', historySwitch: '{name} に切り替える',
         historyCreateFromRemote: '{name} を作って切り替える', historyCopy: 'コミットの ID をコピー', historyCopied: 'コミットの ID をコピーしました。',
-        historyCopyFailed: 'コミットの ID をコピーできませんでした。', historyRefs: 'ブランチ', cancel: 'キャンセル'
+        historyCopyFailed: 'コミットの ID をコピーできませんでした。', historyRefs: 'ブランチ', cancel: 'キャンセル',
+        branchMenu: 'ブランチ', openPanel: 'ローカル Git を開く', newBranchItem: '新しいブランチ…', newBranchTitle: '新しいブランチ',
+        switchedShort: 'ブランチを切り替えました。', historyViewEmpty: 'Git リポジトリを選ぶと、ここに履歴を表示します。'
     }
 };
 export type Labels = typeof messages.en;
