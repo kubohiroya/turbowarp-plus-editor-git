@@ -149,3 +149,18 @@ test('creates a branch at a commit from the history, with or without switching, 
     assert.equal(git('for-each-ref', '--format=%(refname) %(objectname)'), refs);
     git('fsck', '--no-progress');
 });
+
+test('refuses a name that clashes with an existing branch under refs/heads, before writing anything', async t => {
+    const {root, git, repository} = await fixture(t);
+    git('branch', 'pr');
+    git('branch', 'topic/one');
+    const before = {refs: git('for-each-ref'), head: await fs.readFile(path.join(root, '.git/HEAD'), 'utf8'), ...state(git)};
+    // Under an existing branch, as the pull request branch pr/<n> would be next to a branch pr; and the reverse.
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'pr/7', at: git('rev-parse', 'feature'), checkout: true, reuse: true}),
+        {code: 'branchConflict'});
+    await assert.rejects(run(repository, {kind: 'createBranch', name: 'topic', checkout: false}), {code: 'branchConflict'});
+    assert.deepEqual({refs: git('for-each-ref'), head: await fs.readFile(path.join(root, '.git/HEAD'), 'utf8'), ...state(git)}, before);
+    // A shared prefix without the slash is no clash.
+    await run(repository, {kind: 'createBranch', name: 'prize', checkout: false});
+    assert.equal(git('rev-parse', 'prize'), git('rev-parse', 'main'));
+});

@@ -80,6 +80,12 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
                     // Never move a branch the person may have recorded on: only the same commit is reused.
                     if (existing !== object) throw new GitPanelError('pullRequestBranch');
                 }
+                if (existing === undefined) {
+                    // Git keeps branches as files under refs/heads, so `pr` and `pr/7` cannot both exist.
+                    const conflict = (await git.listBranches(options)).some(branch =>
+                        branch !== name && (name.startsWith(`${branch}/`) || branch.startsWith(`${name}/`)));
+                    if (conflict) throw new GitPanelError('branchConflict');
+                }
                 if (existing === undefined) try {
                     // The ref first: isomorphic-git's checkout of a missing branch would write tracking config.
                     await git.branch({...options, ref: name, object, checkout: false});
