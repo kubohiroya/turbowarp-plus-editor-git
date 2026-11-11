@@ -127,7 +127,7 @@ export const reviewMessages = {
         composer: 'Send a review', overall: 'Overall comment', event: 'Result',
         COMMENT: 'Comment', APPROVE: 'Approve', REQUEST_CHANGES: 'Request changes',
         scriptComment: 'Comment on this code', commented: 'Commented',
-        summaryThreads: '{threads} code comments go to their project.source.json as threads, and {body} go in the review body.',
+        summaryThreads: 'Code comments sent as threads on their project.source.json: {threads}. Code comments in the review body: {body}.',
         summaryBody: 'This connection sends only the review body: {body} code comments go in it.',
         summaryNone: 'No code comments yet. Write them under each code change.',
         send: 'Send Review', sending: 'Sending the review…', checking: 'Checking GitHub…',

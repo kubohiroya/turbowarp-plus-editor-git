@@ -45,7 +45,7 @@ test('writes an overall and a code comment, shows where they go and sends them a
     await composer.getByRole('textbox', {name: 'Overall comment'}).fill('Thanks! One question about the turn.');
     await composer.getByRole('radio', {name: 'Request changes'}).check();
     const summary = composer.locator('[data-git-review-summary]');
-    assert.equal(await summary.textContent(), '1 code comments go to their project.source.json as threads, and 0 go in the review body.');
+    assert.equal(await summary.textContent(), 'Code comments sent as threads on their project.source.json: 1. Code comments in the review body: 0.');
     assert.match(await script.locator('summary').textContent(), /Commented/u);
     // The draft is kept in the browser without the connection's secrets.
     const stored = await page.evaluate(() => localStorage.getItem('turbowarp-plus-git:review-draft:fixture/work#7'));
