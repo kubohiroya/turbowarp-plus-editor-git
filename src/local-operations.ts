@@ -10,10 +10,17 @@ export type LocalOperation =
     | {kind: 'commit'; message: string; author?: GitAuthor}
     /**
      * Creates `name` at HEAD, at the commit `at`, or at `origin/<name>` with `fromRemote`, and switches to it with
-     * `checkout`.
+     * `checkout`. With `reuse` (only with `at`), a branch `name` that already points at `at` is switched to instead of
+     * failing, and one that points elsewhere fails with `pullRequestBranch` and is never moved.
      */
-    | {kind: 'createBranch'; name: string; fromRemote?: boolean; at?: string; checkout: boolean}
+    | {kind: 'createBranch'; name: string; fromRemote?: boolean; at?: string; checkout: boolean; reuse?: boolean}
     | {kind: 'switchBranch'; name: string};
+
+/**
+ * The local branch a pull request is opened on: `pr/<number>`, a name `git check-ref-format --branch` accepts. It is
+ * created at the fetched head (`pullRequestRef(number)`) and is an ordinary branch afterwards.
+ */
+export const pullRequestBranch = (number: number) => `pr/${number}`;
 
 const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'NotFoundError'].includes(errorCode(error) ?? '');
 
@@ -53,6 +60,7 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
             }
             if (operation.kind === 'createBranch') {
                 let object: string;
+                if (operation.reuse && operation.at === undefined) throw new GitPanelError('invalid');
                 if (operation.at !== undefined) {
                     if (operation.fromRemote || !/^[0-9a-f]{40}$/.test(operation.at)) throw new GitPanelError('invalid');
                     object = await git.readCommit({...options, oid: operation.at})
@@ -66,7 +74,13 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
                 } else {
                     object = await git.resolveRef({...options, ref: 'HEAD'}).catch(() => {throw new GitPanelError('unsupported');});
                 }
-                try {
+                let existing: string | undefined;
+                if (operation.reuse && (await git.listBranches(options)).includes(name)) {
+                    existing = await git.resolveRef({...options, ref: local});
+                    // Never move a branch the person may have recorded on: only the same commit is reused.
+                    if (existing !== object) throw new GitPanelError('pullRequestBranch');
+                }
+                if (existing === undefined) try {
                     // The ref first: isomorphic-git's checkout of a missing branch would write tracking config.
                     await git.branch({...options, ref: name, object, checkout: false});
                 } catch (error) {

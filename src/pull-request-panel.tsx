@@ -10,6 +10,7 @@ import type {ProjectSourceTabsFile} from './project-source-tabs.js';
 import {GitPanelError} from './filesystem.js';
 import type {GetRemoteSession} from './remote-operations.js';
 import type {ProjectSourceReviewFile} from './project-source-review.js';
+import {pullRequestBranch} from './local-operations.js';
 
 type OpenTabs = (key: string, files: readonly ProjectSourceTabsFile[], rememberAs?: string) => number;
 
@@ -33,7 +34,9 @@ const en = {
     viaConnection: 'Read through the GitHub connection.',
     listPrivate: 'The list uses the public GitHub API. Enter a pull request number to read it through the connection.',
     noMetadata: 'The title and base branch are not available without the public GitHub API. Choose the base branch to compare with.',
-    base: 'Base branch', pullRequest: 'Pull request'
+    base: 'Base branch', pullRequest: 'Pull request',
+    openLocally: 'Open here as {branch}',
+    openLocallyHint: 'Creates the local branch {branch} at this version, switches to it and opens the project, so it can be run. Unsaved edits and unrecorded changes stop it. Switch back in Local changes.'
 };
 const ja: typeof en = {
     title: 'プルリクエスト', number: 'プルリクエスト番号', openNumber: 'PR を開く',
@@ -56,7 +59,9 @@ const ja: typeof en = {
     viaConnection: 'GitHub 接続で取得しました。',
     listPrivate: '一覧は公開 GitHub API を使います。番号を入れると、GitHub 接続で読みます。',
     noMetadata: '公開 GitHub API を使えないため、題名とベースのブランチがわかりません。比べるベースのブランチを選んでください。',
-    base: 'ベースのブランチ', pullRequest: 'プルリクエスト'
+    base: 'ベースのブランチ', pullRequest: 'プルリクエスト',
+    openLocally: '{branch} として手元で開く',
+    openLocallyHint: 'この版にローカルブランチ {branch} を作って切り替え、作品を開き直して実行できるようにします。保存していない編集や記録していない変更があるときは行いません。元に戻すときは「ローカルの変更」で切り替えてください。'
 };
 
 const gitErrors = ['session', 'forbidden', 'pullRequestNotFound', 'network', 'remoteFailed', 'baseMissing', 'changed'] as const;
@@ -67,6 +72,15 @@ function errorMessage(error: unknown, labels: typeof en) {
         return code ? labels[code] : labels.failed;
     }
     return labels.failed;
+}
+
+/**
+ * Opens a pull request version fetched over the connection in the work tree: the host creates (or reuses) the local
+ * branch `pullRequestBranch(number)` at `head` and switches to it. `busy` disables the button.
+ */
+export interface PullRequestOpenLocally {
+    open(number: number, head: string): unknown;
+    busy: boolean;
 }
 
 /** The person's GitHub connection: while it is connected, pull request contents are read over Git Smart HTTP. */
@@ -87,10 +101,10 @@ type Pull = {
     git?: {branches: readonly string[] | null};
 };
 
-function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, repository, connection}: {
+function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, repository, connection, openLocally}: {
     name: string; labels: typeof en; locale: string; renderBlock: ProjectBlockRenderer;
     locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
-    openTabs?: OpenTabs; repository: Repository; connection?: PullRequestConnection;
+    openTabs?: OpenTabs; repository: Repository; connection?: PullRequestConnection; openLocally?: PullRequestOpenLocally;
 }) {
     const client = useMemo(() => createGitHubPullRequests(name), [name]);
     const [page, setPage] = useState(1);
@@ -209,6 +223,10 @@ function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, r
                             return projects ? [{path: file.path, before: projects[0], after: projects[1], loadAsset: file.loadAsset,
                                 locateBlock: locateFor?.(file.path, pr.head.sha)}] : [];
                         }), `${name}#${pr.number}`)}>{labels.openTabs}</button>}
+                    {pr.git && openLocally && <button type="button" data-git-open-pr-locally="" disabled={openLocally.busy}
+                        title={labels.openLocallyHint.replace('{branch}', pullRequestBranch(pr.number))}
+                        onClick={() => void openLocally.open(pr.number, pr.head.sha)}>
+                        {labels.openLocally.replace('{branch}', pullRequestBranch(pr.number))}</button>}
                 </p>
                 {pr.git && <p className="twgit-context" role="status">{labels.viaConnection}{pr.git.branches && <> {labels.noMetadata}</>}</p>}
                 <ProjectSourceReview title={pr.title} description={pr.description} files={locateFor ? pr.files.map(file => 'patch' in file ? {...file, locateBlock: locateFor(file.path, pr.head.sha)} : file) : pr.files}
@@ -218,13 +236,18 @@ function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, r
     </div>;
 }
 
-export function PullRequestReviewPanel({repository, locale, renderBlock, locateFor, openTabs, connection}: {
+export function PullRequestReviewPanel({repository, locale, renderBlock, locateFor, openTabs, connection, openLocally}: {
     repository: Repository; locale: string; renderBlock: ProjectBlockRenderer;
     /**
      * While connected, pull request contents are fetched over Git Smart HTTP (`refs/pull/<number>/head`) and compared
      * from local Git objects, so private repositories can be reviewed. Without it, the public GitHub API is read.
      */
     connection?: PullRequestConnection;
+    /**
+     * Offers to open a pull request read over the connection in the work tree, on the branch `pr/<number>`. Pull
+     * requests read from the public API have no local objects, so the button is not shown for them.
+     */
+    openLocally?: PullRequestOpenLocally;
     /** Opens a pull request's project changes as tabs of the host's layout. */
     openTabs?: OpenTabs;
     /** Returns a locator for a project file whose PR head matches the open project, or `undefined`. */
@@ -244,5 +267,5 @@ export function PullRequestReviewPanel({repository, locale, renderBlock, locateF
     if (origin?.repository !== repository) return <p role="status" className="twgit-context">{labels.loading}</p>;
     if (!origin.name) return <p className="twgit-context" role="status">{origin.failed ? labels.failed : labels.noOrigin}</p>;
     return <PullRequests key={origin.name} name={origin.name} labels={labels} locale={locale} renderBlock={renderBlock} locateFor={locateFor} openTabs={openTabs}
-        repository={repository} connection={connection}/>;
+        repository={repository} connection={connection} openLocally={openLocally}/>;
 }

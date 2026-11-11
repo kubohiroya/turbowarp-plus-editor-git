@@ -1,8 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir, readFile, readdir, rename, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, readdir, rename, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {openRepository, pullRequestRef} from '../dist/repository.js';
+import {GitPanelError, openRepository, pullRequestRef} from '../dist/repository.js';
+import {pullRequestBranch} from '../dist/index.js';
 import {directoryHandle} from './directory.js';
 import {commit, git, publishPullRequest, remote, startFixture} from './smart-http-fixture.js';
 
@@ -181,4 +182,96 @@ test('fetching a pull request reports the connection, access, a missing number a
     assert.deepEqual(await packs(), packsBefore);
     await repository.fetchPullRequest(5, sessionFor(fixture), () => {});
     assert.notEqual(refs(), before.refs);
+});
+
+/** Fetches pull request 7 from a fork that changes the game, and returns the repository and the fetched head. */
+async function fetchedPullRequest(t) {
+    const fixture = await startFixture(t);
+    const {client} = fixture;
+    withOrigin(t);
+    await seedProject(fixture);
+    git(client, 'pull', '-q', '--ff-only', fixture.bare, 'main');
+    const {head} = await publishPullRequest(fixture, 7, {fork: true, edit: async dir => {
+        await writeFile(join(dir, 'game/project.source.json'), project(25));
+        await writeFile(join(dir, 'game/assets', asset), svg('blue'));
+        await writeFile(join(dir, 'added.txt'), 'added\n');
+    }});
+    const repository = await openRepository(directoryHandle(client));
+    assert.equal((await repository.fetchPullRequest(7, sessionFor(fixture), () => {})).head, head);
+    return {fixture, client, repository, head};
+}
+const openPullRequest = (repository, head, guard = () => {}) => repository.localOperation(
+    {kind: 'createBranch', name: pullRequestBranch(7), at: head, checkout: true, reuse: true}, guard);
+const everything = async client => ({refs: git(client, 'for-each-ref'), state: await localState(client)});
+
+test('a fetched pull request opens on the branch pr/<n> at its head, and the previous branch stays to switch back', async t => {
+    const {client, repository, head} = await fetchedPullRequest(t);
+    assert.equal(pullRequestBranch(7), 'pr/7');
+    git(client, 'check-ref-format', '--branch', pullRequestBranch(7));
+    const main = git(client, 'rev-parse', 'main');
+    const before = await localState(client);
+    await openPullRequest(repository, head);
+    assert.equal(git(client, 'branch', '--show-current'), 'pr/7');
+    assert.equal(git(client, 'rev-parse', 'HEAD'), head);
+    assert.equal(git(client, 'status', '--porcelain'), '');
+    assert.equal(await readFile(join(client, 'game/project.source.json'), 'utf8'), project(25));
+    assert.equal(await readFile(join(client, 'game/assets', asset), 'utf8'), svg('blue'));
+    assert.equal(await readFile(join(client, 'added.txt'), 'utf8'), 'added\n');
+    // An ordinary branch without tracking config; main is untouched and still listed.
+    assert.equal(await readFile(join(client, '.git/config'), 'utf8'), before.config);
+    assert.equal(git(client, 'rev-parse', 'main'), main);
+    assert.deepEqual((await repository.read()).branches.sort(), ['main', 'pr/7']);
+    git(client, 'fsck', '--no-progress');
+
+    await repository.localOperation({kind: 'switchBranch', name: 'main'}, () => {});
+    assert.deepEqual({...await localState(client), branches: undefined, index: undefined},
+        {...before, branches: undefined, index: undefined});
+    assert.equal(git(client, 'status', '--porcelain'), '');
+});
+
+test('opening a pull request again reuses pr/<n> at the same commit, and refuses one at another commit untouched', async t => {
+    const {client, repository, head} = await fetchedPullRequest(t);
+    await openPullRequest(repository, head);
+    await repository.localOperation({kind: 'switchBranch', name: 'main'}, () => {});
+    await openPullRequest(repository, head);
+    assert.equal(git(client, 'branch', '--show-current'), 'pr/7');
+    assert.equal(git(client, 'rev-parse', 'pr/7'), head);
+    // Opening it while already on it is the same switch.
+    await openPullRequest(repository, head);
+    assert.equal(git(client, 'branch', '--show-current'), 'pr/7');
+
+    // The person recorded on pr/7 (or the pull request moved): the branch is never moved, nothing is written.
+    await repository.localOperation({kind: 'switchBranch', name: 'main'}, () => {});
+    git(client, 'branch', '-f', 'pr/7', 'main');
+    const before = await everything(client);
+    await assert.rejects(openPullRequest(repository, head), {code: 'pullRequestBranch'});
+    assert.deepEqual(await everything(client), before);
+    assert.equal(git(client, 'rev-parse', 'pr/7'), git(client, 'rev-parse', 'main'));
+    // Without reuse an existing name is still refused as before, and reuse needs a commit.
+    await assert.rejects(repository.localOperation({kind: 'createBranch', name: 'pr/7', at: head, checkout: true}, () => {}),
+        {code: 'branchExists'});
+    await assert.rejects(repository.localOperation({kind: 'createBranch', name: 'pr/9', checkout: true, reuse: true}, () => {}),
+        {code: 'invalid'});
+    assert.deepEqual(await everything(client), before);
+});
+
+test('opening a pull request with work-tree changes or unsaved edits is refused and leaves everything byte-identical', async t => {
+    const {client, repository, head} = await fetchedPullRequest(t);
+    await writeFile(join(client, 'notes.txt'), 'edited, not recorded\n');
+    let before = await everything(client);
+    await assert.rejects(openPullRequest(repository, head), {code: 'switchUnsafe'});
+    assert.deepEqual(await everything(client), before);
+    git(client, 'checkout', '--', 'notes.txt');
+
+    await writeFile(join(client, 'untracked.txt'), 'new\n');
+    before = await everything(client);
+    await assert.rejects(openPullRequest(repository, head), {code: 'switchUnsafe'});
+    assert.deepEqual(await everything(client), before);
+    await rm(join(client, 'untracked.txt'));
+
+    // The Editor's unsaved edits stop it through the guard, as for any switch.
+    before = await everything(client);
+    await assert.rejects(openPullRequest(repository, head, () => {throw new GitPanelError('switchUnsafe');}), {code: 'switchUnsafe'});
+    assert.deepEqual(await everything(client), before);
+    assert.doesNotMatch(git(client, 'branch'), /pr\/7/);
 });
