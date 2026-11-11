@@ -1,7 +1,9 @@
 import * as git from 'isomorphic-git';
 import {createTwoFilesPatch} from 'diff';
 import {createReadOnlyFs, errorCode, GitPanelError, pathParts, readOptional, sameBytes} from './filesystem.js';
-import {runRemoteOperation} from './remote-operations.js';
+import {runPullRequestFetch, runRemoteOperation} from './remote-operations.js';
+import {createProjectSourceDiff} from './project-source-patch.js';
+import type {ProjectSourceReviewFile} from './project-source-review.js';
 import {runLocalOperation} from './local-operations.js';
 import type {LocalOperation} from './local-operations.js';
 import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
@@ -9,6 +11,8 @@ import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
+export {pullRequestRef} from './remote-operations.js';
+export type {PullRequestFetch} from './remote-operations.js';
 export type ChangeGroup = 'staged' | 'unstaged' | 'untracked' | 'commit';
 export interface FileChange {
     path: string;
@@ -20,6 +24,22 @@ export interface FileChange {
     newMode: number | null;
     /** For `commit` changes, the commit compared with its first parent. */
     commit?: string;
+}
+/** A version of the pull request's base to compare with: GitHub's base commit when known, else a branch on origin. */
+export interface PullRequestBase {
+    /** The base commit GitHub reported, used when the fetch brought it. */
+    sha?: string;
+    /** The base branch, read from `refs/remotes/origin/<branch>` when `sha` is missing or not local. */
+    branch?: string;
+}
+export interface PullRequestFiles {
+    /** The base that was compared: the branch it was named by, if any, and its commit. */
+    base: {ref: string | null; sha: string};
+    head: string;
+    /** The merge base of `base.sha` and `head`, like GitHub's three-dot comparison; `null` for unrelated histories. */
+    mergeBase: string | null;
+    /** Every changed path from the merge base to the head, with project data as a project-source diff. */
+    files: ProjectSourceReviewFile[];
 }
 export interface Commit {
     oid: string;
@@ -107,6 +127,9 @@ export interface FileDiff {
     tooLarge: boolean;
 }
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+const isSha = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
+const validBranch = (name: string) => /^[^\s~^:?*[\\]+$/u.test(name) && !name.startsWith('/') && !name.endsWith('/') &&
+    !name.endsWith('.lock') && !name.includes('..') && !name.includes('//') && !name.includes('@{');
 const textLimit = 1024 * 1024;
 const inScope = (path: string, scope: string) => !scope || path === scope || path.startsWith(scope + '/');
 // Above this many work-tree files, probes only watch Git metadata. Edits then need a manual refresh.
@@ -557,6 +580,100 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         await fs.checkReads();
         return {before: before.source, after: after.source, assetsDirectory: {before: before.assetsDirectory, after: after.assetsDirectory}};
     };
+    const hasCommit = async (oid: string) => {
+        try {
+            await git.readCommit({...options, cache, oid});
+            return true;
+        } catch {
+            return false;
+        }
+    };
+    type TreeChange = {path: string; before: Entry | null; after: Entry | null};
+    /** Lists the paths that differ between two trees, skipping subtrees with the same object. */
+    const treeChanges = async (before: string, after: string): Promise<TreeChange[]> => {
+        const file = async (entry: git.WalkerEntry | null) => entry && await entry.type() !== 'tree' ?
+            {oid: await entry.oid(), mode: await entry.mode()} : null;
+        const changes = await git.walk({...options, cache, trees: [git.TREE({ref: before}), git.TREE({ref: after})],
+            map: async (path, [a, b]) => {
+                if (path === '.') return;
+                if (a && b && await a.oid() === await b.oid() && await a.mode() === await b.mode()) return null;
+                const change = {path, before: await file(a), after: await file(b)};
+                // A tree on either side is walked on; a file on the other side is a change of its own.
+                return change.before || change.after ? change : undefined;
+            }}) as TreeChange[];
+        return changes.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+    };
+    const readBlobText = async (entry: Entry | null) => {
+        if (!entry) return '{"targets":[]}\n';
+        if (entry.mode !== 0o100644 && entry.mode !== 0o100755) throw new GitPanelError('unsupported');
+        const {blob} = await git.readBlob({...options, cache, oid: entry.oid});
+        if (blob.byteLength > projectSourceLimit) throw new GitPanelError('large');
+        return new TextDecoder('utf-8', {fatal: true}).decode(blob);
+    };
+    const readTreeAsset = async (ref: string, folder: string[], md5ext: string, signal: AbortSignal) => {
+        if (signal.aborted) return null;
+        const source: Source = {kind: 'tree', ref};
+        const settings = await readVersion(source, [...folder, 'sb3-source.json'].join('/'), folderSettingsLimit);
+        const directory = assetsDirectoryParts(settings && new TextDecoder().decode(settings));
+        if (!directory || signal.aborted) return null;
+        const bytes = await readVersion(source, [...folder, ...directory, md5ext].join('/'), assetLimit);
+        return bytes && !signal.aborted ? new Blob([bytes as Uint8Array<ArrayBuffer>]) : null;
+    };
+    const pullRequestAssets = (versions: Record<ProjectVersion, {ref: string; path: string} | null>): ProjectAssetLoader =>
+        ({version, md5ext, signal}) => {
+            const location = versions[version];
+            if (!location || !isAssetName(md5ext) || signal.aborted) return Promise.resolve(null);
+            return serial(() => readTreeAsset(location.ref, pathParts(location.path).slice(0, -1), md5ext, signal)).catch(() => null);
+        };
+    /** Compares a fetched pull request head with its merge base, from local Git objects only. */
+    const readPullRequest = async (head: string, base: PullRequestBase): Promise<PullRequestFiles> => {
+        if (!isSha(head) || !await hasCommit(head)) throw new GitPanelError('pullRequestNotFound');
+        let sha: string | undefined;
+        if (isSha(base.sha) && await hasCommit(base.sha)) sha = base.sha;
+        else if (base.branch !== undefined && validBranch(base.branch)) {
+            try {
+                sha = await git.resolveRef({...options, ref: 'refs/remotes/origin/' + base.branch});
+            } catch {
+                // Reported below.
+            }
+        }
+        if (!sha || !await hasCommit(sha)) throw new GitPanelError('baseMissing');
+        const [mergeBase = null] = await git.findMergeBase({...options, cache, oids: [sha, head]}) as string[];
+        const changes = await treeChanges(mergeBase ?? emptyTree, head);
+        // Pair a removed and an added file with the same content as a rename, like GitHub's exact renames.
+        const added = new Map<string, TreeChange[]>();
+        for (const change of changes) if (!change.before && change.after) added.set(change.after.oid, [...added.get(change.after.oid) ?? [], change]);
+        const renamed = new Map<TreeChange, TreeChange>();
+        for (const change of changes) {
+            const candidates = change.before && !change.after ? added.get(change.before.oid) : undefined;
+            const target = candidates?.find(candidate => !renamed.has(candidate));
+            if (target) renamed.set(target, change);
+        }
+        const removedByRename = new Set(renamed.values());
+        const files: ProjectSourceReviewFile[] = [];
+        for (const change of changes) {
+            if (removedByRename.has(change)) continue;
+            const from = renamed.get(change);
+            const before = from?.before ?? change.before;
+            const previousPath = from?.path;
+            const status = !before ? 'added' : !change.after ? 'removed' : 'updated';
+            if (change.path.split('/').pop() !== 'project.source.json') {
+                files.push({path: change.path, previousPath, status});
+                continue;
+            }
+            try {
+                const patch = createProjectSourceDiff(await readBlobText(before), await readBlobText(change.after));
+                const loadAsset = pullRequestAssets({
+                    before: before && mergeBase ? {ref: mergeBase, path: previousPath ?? change.path} : null,
+                    after: change.after ? {ref: head, path: change.path} : null
+                });
+                files.push({path: change.path, previousPath, patch, loadAsset});
+            } catch {
+                files.push({path: change.path, previousPath, status, unavailable: true});
+            }
+        }
+        return {base: {ref: base.branch ?? null, sha}, head, mergeBase, files};
+    };
     const directoryAt = async (path: string) => {
         let directory = root;
         for (const part of pathParts(path)) directory = await directory.getDirectoryHandle(part);
@@ -601,6 +718,21 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                     throw error;
                 }
             }),
+        /**
+         * Fetches a pull request's head (`refs/pull/<number>/head`, which also covers pull requests from forks) and every
+         * branch over the connection; see `runPullRequestFetch`. Only Git objects and refs are written.
+         */
+        fetchPullRequest: (number: number, getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal) =>
+            serial(async () => {
+                const result = await runPullRequestFetch(root, number, getSession, guard, signal);
+                cache = {};
+                return result;
+            }),
+        /**
+         * Reads the changes of a fetched pull request head against a base, from local Git objects: the changed paths
+         * from the merge base to the head, and each project file's diff with assets read from the same commits.
+         */
+        readPullRequest: (head: string, base: PullRequestBase) => serial(() => readPullRequest(head, base)),
         /** Stages, unstages or commits; see `runLocalOperation`. `guard` throws to stop before each write. */
         localOperation: (operation: LocalOperation, guard: () => void) =>
             serial(() => runLocalOperation(root, operation, guard)),
