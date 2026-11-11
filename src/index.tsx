@@ -464,7 +464,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const pullRequestConnection = useMemo(() => {
         const settings = host.connectionSettings;
         const getSession = settings?.getSession;
-        return getSession ? {getSession, connected: () => settings.getView().state.status === 'connected'} : undefined;
+        return getSession ? {getSession, connected: () => settings.getView().state.status === 'connected',
+            reviewGranted: () => settings.getView().review === true} : undefined;
     }, [host]);
     const [message, setMessage] = useState('');
     const localOperation = (operation: LocalOperation, notice?: string) => {

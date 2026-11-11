@@ -120,3 +120,75 @@ export const messages = {
 };
 export type Labels = typeof messages.en;
 export const labelsFor = (locale: string): Labels => locale.startsWith('ja') ? messages.ja : messages.en;
+
+/** The words of sending a pull request review through the GitHub connection. */
+export const reviewMessages = {
+    en: {
+        composer: 'Send a review', overall: 'Overall comment', event: 'Result',
+        COMMENT: 'Comment', APPROVE: 'Approve', REQUEST_CHANGES: 'Request changes',
+        scriptComment: 'Comment on this code', commented: 'Commented',
+        summaryThreads: '{threads} code comments go to their project.source.json as threads, and {body} go in the review body.',
+        summaryBody: 'This connection sends only the review body: {body} code comments go in it.',
+        summaryNone: 'No code comments yet. Write them under each code change.',
+        send: 'Send Review', sending: 'Sending the review…', checking: 'Checking GitHub…',
+        sendAgain: 'Send Again', check: 'Check Whether It Was Sent', discard: 'Discard the Pending Review',
+        forget: 'Stop Tracking This Submission', useVersion: 'Review This Version',
+        sent: 'Sent the review.', openReview: 'Open the review on GitHub', openPullRequest: 'Open the pull request on GitHub',
+        dismiss: 'Dismiss', discarded: 'Discarded the pending review. Your words are kept.',
+        notStored: 'Browser storage is unavailable, so this draft is kept only while the panel is open.',
+        headChanged: 'The pull request changed after you started this review. The review is sent for the version shown.',
+        unsupported: 'This GitHub connection cannot send reviews.',
+        needsGrant: 'To send a review, disconnect and connect again with “Allow sending reviews”.',
+        allowReview: 'Allow sending reviews',
+        PENDING_REVIEW_EXISTS: 'You already have a pending review on this pull request on GitHub. Submit or discard it on GitHub, then send again.',
+        PENDING_REVIEW_LEFT: 'A pending review remains on GitHub. Only you can see it. Discard it here, or on GitHub with “Finish your review”.',
+        REVIEW_OUTCOME_UNKNOWN: 'It is unknown whether GitHub received the review. Check before sending again.',
+        pending: 'The review waits on GitHub with its code comments but is not published. Change it and send again, or discard it.',
+        REVIEW_REJECTED: 'GitHub refused the review, for example an approval of your own pull request.',
+        REVIEW_THREAD_REJECTED: 'GitHub refused a comment on a project file, so nothing was published. Comments on that file now go in the review body. Send again.',
+        RATE_LIMITED: 'The GitHub rate limit was reached. Try again in {seconds} seconds.',
+        EMPTY_REVIEW: 'Write an overall comment (needed to request changes) or a comment on the code.',
+        TOO_LONG: 'The review is longer than GitHub accepts (65,536 characters).',
+        closed: 'GitHub has no such review: it was not published, or it was discarded. You can send it again.',
+        lost: 'The connection no longer knows this submission. Check on GitHub whether the review was published ({count} of your reviews on this version found).',
+        session: 'Connect to GitHub again to send the review.',
+        FORBIDDEN: 'The GitHub connection is not allowed to send reviews to this repository.',
+        GITHUB_API_UNAVAILABLE: 'The connection cannot add code comments as threads. They now go in the review body: check the summary and send again.',
+        failed: 'Could not send the review. Nothing was published. Try again.'
+    },
+    ja: {
+        composer: 'レビューを送る', overall: '全体のコメント', event: '結果',
+        COMMENT: 'コメント', APPROVE: '承認', REQUEST_CHANGES: '修正を依頼',
+        scriptComment: 'このコードへのコメント', commented: 'コメントあり',
+        summaryThreads: 'コードへのコメントのうち {threads} 件をその project.source.json へのスレッドとして、{body} 件をレビュー本文に入れて送ります。',
+        summaryBody: 'この接続ではレビュー本文だけを送れます。コードへのコメント {body} 件を本文に入れます。',
+        summaryNone: 'コードへのコメントはまだありません。各コードの変更の下に書けます。',
+        send: 'レビューを送信', sending: 'レビューを送信中…', checking: 'GitHub で確かめています…',
+        sendAgain: 'もう一度送る', check: '送信されたか確かめる', discard: '保留中のレビューを破棄',
+        forget: 'この送信の記録を消す', useVersion: 'この版をレビューする',
+        sent: 'レビューを送りました。', openReview: 'GitHub でレビューを開く', openPullRequest: 'GitHub で PR を開く',
+        dismiss: '閉じる', discarded: '保留中のレビューを破棄しました。書いた内容は残っています。',
+        notStored: 'ブラウザーのストレージを使えないため、この下書きはパネルを開いている間だけ残ります。',
+        headChanged: 'レビューを書き始めた後に PR が更新されました。レビューは表示中の版に対して送ります。',
+        unsupported: 'この GitHub 接続ではレビューを送れません。',
+        needsGrant: 'レビューを送るには、切断して「レビューの送信を許可する」を付けて接続し直してください。',
+        allowReview: 'レビューの送信を許可する',
+        PENDING_REVIEW_EXISTS: 'この PR に、GitHub で書きかけの保留中のレビューがあります。GitHub で送るか破棄してから、もう一度送ってください。',
+        PENDING_REVIEW_LEFT: 'GitHub に保留中のレビューが残っています。あなたにしか見えません。ここで破棄するか、GitHub の「Finish your review」から破棄してください。',
+        REVIEW_OUTCOME_UNKNOWN: 'GitHub がレビューを受け取ったかわかりません。もう一度送る前に確かめてください。',
+        pending: 'レビューはコードへのコメント付きで GitHub に保留中ですが、公開されていません。直してもう一度送るか、破棄してください。',
+        REVIEW_REJECTED: 'GitHub がレビューを拒みました（自分の PR の承認など）。',
+        REVIEW_THREAD_REJECTED: 'GitHub が作品ファイルへのコメントを拒んだため、何も公開していません。そのファイルへのコメントはレビュー本文に入れます。もう一度送ってください。',
+        RATE_LIMITED: 'GitHub の利用上限に達しました。{seconds} 秒後に再試行してください。',
+        EMPTY_REVIEW: '全体のコメント（修正の依頼では必須）か、コードへのコメントを書いてください。',
+        TOO_LONG: 'レビューが GitHub の上限（65,536 文字）を超えています。',
+        closed: 'GitHub にそのレビューはありません。公開されなかったか、破棄されています。もう一度送れます。',
+        lost: '接続がこの送信の記録を持っていません。レビューが公開されたかを GitHub で確かめてください（この版へのあなたのレビュー {count} 件）。',
+        session: 'レビューを送るには、GitHub にもう一度接続してください。',
+        FORBIDDEN: 'GitHub 接続に、このリポジトリへレビューを送る権限がありません。',
+        GITHUB_API_UNAVAILABLE: 'この接続ではコードへのコメントをスレッドにできません。コメントはレビュー本文に入れます。件数を確かめて、もう一度送ってください。',
+        failed: 'レビューを送れませんでした。何も公開していません。再試行してください。'
+    }
+};
+export type ReviewLabels = typeof reviewMessages.en;
+export const reviewLabelsFor = (locale: string): ReviewLabels => locale.startsWith('ja') ? reviewMessages.ja : reviewMessages.en;

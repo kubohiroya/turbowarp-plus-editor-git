@@ -1,6 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 import type {GitAuthState, GitConnectionMode as Mode} from '@kubohiroya/turbowarp-plus-editor-auth';
 import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
+import {reviewLabelsFor} from './messages.js';
 
 export interface GitConnectionSettings {
     modes: readonly Mode[];
@@ -9,10 +10,12 @@ export interface GitConnectionSettings {
         state: GitAuthState;
         proxyOrigin?: string;
         write?: boolean;
+        /** Whether the connection was made with the grant to send pull request reviews. */
+        review?: boolean;
         authorization?: {url: string; userCode?: string};
     };
     select(mode: Mode): Promise<void>;
-    connect(remote: string, write?: boolean): Promise<void>;
+    connect(remote: string, write?: boolean, review?: boolean): Promise<void>;
     refresh(): Promise<void>;
     disconnect(): Promise<void>;
     getSession?: GetRemoteSession;
@@ -49,6 +52,7 @@ export function ConnectionSettings({settings, locale, readOrigin, runOperation}:
     const [, update] = useState(0);
     const [busy, setBusy] = useState(false);
     const [allowPush, setAllowPush] = useState(false);
+    const [allowReview, setAllowReview] = useState(false);
     const [error, setError] = useState<'error' | 'invalid' | null>(null);
     const active = useRef(true);
     useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
@@ -66,7 +70,7 @@ export function ConnectionSettings({settings, locale, readOrigin, runOperation}:
     const connect = () => run(async () => {
         const remote = await readOrigin?.();
         if (!remote) throw new Error('INVALID_REMOTE');
-        await settings.connect(remote, allowPush);
+        await (allowReview ? settings.connect(remote, allowPush, true) : settings.connect(remote, allowPush));
     });
     const connected = !!mode && state.status === 'connected';
     // Sync sits beside the GitHub status; the settings open over the list instead of pushing it down.
@@ -92,6 +96,9 @@ export function ConnectionSettings({settings, locale, readOrigin, runOperation}:
                 {runOperation && <label><input type="checkbox" checked={allowPush}
                     disabled={busy || state.status === 'connecting' || state.status === 'connected'}
                     onChange={event => setAllowPush(event.currentTarget.checked)}/> {labels.allowPush}</label>}
+                <label><input type="checkbox" data-git-allow-review="" checked={allowReview}
+                    disabled={busy || state.status === 'connecting' || state.status === 'connected'}
+                    onChange={event => setAllowReview(event.currentTarget.checked)}/> {reviewLabelsFor(locale).allowReview}</label>
                 <button disabled={busy || !readOrigin || state.status === 'connecting' || state.status === 'connected'}
                     onClick={connect}>{labels.connect}</button>
                 {authorization && <p>{authorization.userCode && <code>{authorization.userCode} </code>}

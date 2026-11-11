@@ -6,7 +6,7 @@ import type {GitSmartHttpOptions} from './smart-http.js';
 
 export type RemoteOperation = 'fetch' | 'pull' | 'push';
 export type RemoteSession = NonNullable<Awaited<ReturnType<GitSmartHttpOptions['getSession']>>>;
-export type GetRemoteSession = (remote: string, write: boolean) => Promise<RemoteSession | null>;
+export type GetRemoteSession = (remote: string, write: boolean, review?: boolean) => Promise<RemoteSession | null>;
 
 type GitOptions = {fs: ReturnType<typeof createMutationFs>['fs']; dir: string; gitdir: string; cache: object};
 const sessionCodes = ['SESSION_REQUIRED', 'SESSION_UNAVAILABLE', 'SESSION_EXPIRED', 'REAUTH_REQUIRED', 'INVALID_SESSION'];

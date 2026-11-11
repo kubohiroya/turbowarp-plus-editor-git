@@ -11,6 +11,9 @@ import {GitPanelError} from './filesystem.js';
 import type {GetRemoteSession} from './remote-operations.js';
 import type {ProjectSourceReviewFile} from './project-source-review.js';
 import {pullRequestBranch} from './local-operations.js';
+import {createGitHubReviewApi} from './github-review-api.js';
+import {PullRequestReviewComposer} from './review-composer.js';
+import {reviewLabelsFor} from './messages.js';
 
 type OpenTabs = (key: string, files: readonly ProjectSourceTabsFile[], rememberAs?: string) => number;
 
@@ -87,6 +90,8 @@ export interface PullRequestOpenLocally {
 export interface PullRequestConnection {
     getSession: GetRemoteSession;
     connected(): boolean;
+    /** Whether the connection was made with the grant to send reviews; then a review can be sent through it. */
+    reviewGranted?(): boolean;
 }
 
 type Result<T> = {data: T; error?: never} | {data?: never; error: string};
@@ -101,12 +106,21 @@ type Pull = {
     git?: {branches: readonly string[] | null};
 };
 
-function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, repository, connection, openLocally}: {
-    name: string; labels: typeof en; locale: string; renderBlock: ProjectBlockRenderer;
+function PullRequests({name, remote, labels, locale, renderBlock, locateFor, openTabs, repository, connection, openLocally}: {
+    name: string; remote?: string; labels: typeof en; locale: string; renderBlock: ProjectBlockRenderer;
     locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
     openTabs?: OpenTabs; repository: Repository; connection?: PullRequestConnection; openLocally?: PullRequestOpenLocally;
 }) {
     const client = useMemo(() => createGitHubPullRequests(name), [name]);
+    // Reviews go through the connection's proxy, which keeps the GitHub token.
+    const reviewApi = useMemo(() => {
+        if (!remote || !connection) return null;
+        try {
+            return createGitHubReviewApi({remote, getSession: connection.getSession});
+        } catch {
+            return null;
+        }
+    }, [remote, connection]);
     const [page, setPage] = useState(1);
     const [listing, setListing] = useState<{page: number; result: Result<Listing>}>();
     const [input, setInput] = useState('');
@@ -173,6 +187,8 @@ function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, r
         setInput(String(number));
     };
     const pr = detail?.data;
+    // A review is written and sent for contents read over the connection, when it was made with the review grant.
+    const reviewing = !!pr?.git && !!reviewApi && !!connection?.connected() && !!connection.reviewGranted?.();
     return <div className="twgit-content">
         <aside>
             <h3>{labels.title}</h3>
@@ -229,8 +245,13 @@ function PullRequests({name, labels, locale, renderBlock, locateFor, openTabs, r
                         {labels.openLocally.replace('{branch}', pullRequestBranch(pr.number))}</button>}
                 </p>
                 {pr.git && <p className="twgit-context" role="status">{labels.viaConnection}{pr.git.branches && <> {labels.noMetadata}</>}</p>}
+                {pr.git && connection?.connected() && !connection.reviewGranted?.() &&
+                    <p className="twgit-context" role="status">{reviewLabelsFor(locale).needsGrant}</p>}
                 <ProjectSourceReview title={pr.title} description={pr.description} files={locateFor ? pr.files.map(file => 'patch' in file ? {...file, locateBlock: locateFor(file.path, pr.head.sha)} : file) : pr.files}
-                    renderBlock={renderBlock} locale={locale} rememberAs={`${name}#${pr.number}`}/>
+                    renderBlock={renderBlock} locale={locale} rememberAs={`${name}#${pr.number}`}
+                    commentAs={reviewing ? `${name}#${pr.number}` : undefined}/>
+                {reviewing && reviewApi && <PullRequestReviewComposer key={`${name}#${pr.number}`} api={reviewApi} name={`${name}#${pr.number}`}
+                    number={pr.number} head={pr.head.sha} changedFiles={pr.files.map(file => file.path)} url={pr.url} locale={locale}/>}
             </>}
         </main>
     </div>;
@@ -254,11 +275,11 @@ export function PullRequestReviewPanel({repository, locale, renderBlock, locateF
     locateFor?(path: string, headSha: string): ProjectBlockLocator | undefined;
 }) {
     const labels = locale.startsWith('ja') ? ja : en;
-    const [origin, setOrigin] = useState<{repository: Repository; name: string | null; failed?: boolean}>();
+    const [origin, setOrigin] = useState<{repository: Repository; name: string | null; remote?: string; failed?: boolean}>();
     useEffect(() => {
         let active = true;
         void repository.readOrigin().then(value => {
-            if (active) setOrigin({repository, name: gitHubRepositoryFromOrigin(value)});
+            if (active) setOrigin({repository, name: gitHubRepositoryFromOrigin(value), remote: value});
         }, () => {
             if (active) setOrigin({repository, name: null, failed: true});
         });
@@ -266,6 +287,6 @@ export function PullRequestReviewPanel({repository, locale, renderBlock, locateF
     }, [repository]);
     if (origin?.repository !== repository) return <p role="status" className="twgit-context">{labels.loading}</p>;
     if (!origin.name) return <p className="twgit-context" role="status">{origin.failed ? labels.failed : labels.noOrigin}</p>;
-    return <PullRequests key={origin.name} name={origin.name} labels={labels} locale={locale} renderBlock={renderBlock} locateFor={locateFor} openTabs={openTabs}
+    return <PullRequests key={origin.name} name={origin.name} remote={origin.remote} labels={labels} locale={locale} renderBlock={renderBlock} locateFor={locateFor} openTabs={openTabs}
         repository={repository} connection={connection} openLocally={openLocally}/>;
 }
