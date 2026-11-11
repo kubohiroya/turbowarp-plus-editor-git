@@ -14,6 +14,7 @@ import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
 import type {GitAuthor, LocalOperation} from './local-operations.js';
+import {pullRequestBranch} from './local-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
 import {openProjectSourceTabs} from './project-source-tabs.js';
 import type {ProjectSourceTabsFile} from './project-source-tabs.js';
@@ -40,7 +41,6 @@ export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
 export {pullRequestBranch} from './local-operations.js';
-import {pullRequestBranch} from './local-operations.js';
 
 export interface GitHost {
     connectionSettings?: GitConnectionSettings;
