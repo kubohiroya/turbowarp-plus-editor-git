@@ -23,7 +23,7 @@ globalThis.mountBranchButton = ({state, locale}) => {
         return new Promise(resolve => {globalThis.finish = resolve;});
     };
     render(React.createElement(BranchButton, {state, locale,
-        open: () => calls.push(['open']), choose: () => calls.push(['choose']),
+        open: () => calls.push(['open']), choose: () => calls.push(['choose']), reload: () => calls.push(['reload']),
         switchBranch: name => operation('switchBranch', name),
         createBranch: (name, checkout) => operation('createBranch', name, checkout),
         createFromRemote: name => operation('createFromRemote', name)}), document.getElementById('branch'));

@@ -1,4 +1,6 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
+import {CloseButton} from './close-button.js';
 import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
 import type {BranchRefs} from './repository.js';
@@ -11,11 +13,15 @@ export interface BranchButtonState extends BranchRefs {
     writable: boolean;
     /** Whether the panel is running an operation. */
     busy: boolean;
+    /** Whether a project folder is selected in the panel, so a switch can offer to reload it. */
+    project: boolean;
 }
 /** What the branch button asks the Git panel to do. Branch operations resolve as the panel's own buttons do. */
 export interface BranchButtonActions {
     open(): void;
     choose(): void;
+    /** The panel's Reload Project, which asks before replacing unsaved edits. */
+    reload(): void;
     switchBranch(name: string): Promise<HistoryActionResult>;
     /** Creates a branch at HEAD. */
     createBranch(name: string, checkout: boolean): Promise<HistoryActionResult>;
@@ -29,6 +35,74 @@ export interface BranchButtonProps extends BranchButtonActions {
 interface Item {id: string; label: string; checked?: boolean; disabled?: boolean; separatorBefore?: boolean; run(): void}
 
 const menuItems = '[role="menuitem"], [role="menuitemradio"]';
+/** How long a snackbar stays when it is neither hovered nor focused. */
+export const snackbarDuration = 6000;
+interface Snack {id: number; text: string; alert: boolean; action?: {label: string; run(): void}}
+
+/**
+ * A short result at the bottom of the window, with the project folder's status look. It stays while hovered or
+ * focused, Escape or the close button dismisses it, and focus is never moved into it.
+ */
+function Snackbar({snack, closeLabel, onClose}: {snack: Snack; closeLabel: string; onClose(focus: boolean): void}) {
+    // Kept outside React state, so a pointer or focus arriving just before the timeout stops it at once.
+    const held = useRef({hover: false, focus: false});
+    const timer = useRef<ReturnType<typeof setTimeout>>();
+    const hold = (change: Partial<typeof held.current>) => {
+        held.current = {...held.current, ...change};
+        clearTimeout(timer.current);
+        if (!held.current.hover && !held.current.focus) timer.current = setTimeout(() => onClose(false), snackbarDuration);
+    };
+    useEffect(() => {
+        hold({});
+        return () => clearTimeout(timer.current);
+    }, []);
+    return createPortal(<div className="twgit-snackbar" data-git-snackbar=""
+        onMouseEnter={() => hold({hover: true})} onMouseLeave={() => hold({hover: false})}
+        onFocus={() => hold({focus: true})}
+        onBlur={event => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) hold({focus: false});
+        }}
+        onKeyDown={event => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            onClose(true);
+        }}>
+        <span role={snack.alert ? 'alert' : 'status'}>{snack.text}</span>
+        {snack.action && <button type="button" onClick={() => {onClose(true); snack.action!.run();}}>{snack.action.label}</button>}
+        <CloseButton label={closeLabel} onClick={() => onClose(true)}/>
+    </div>, document.body);
+}
+
+/**
+ * The results of branch operations in a snackbar, as the branch button and the history view tell them: a switch with
+ * Reload Project while a project folder is selected, a new branch, or the reason for a refusal with Open Local Git.
+ * A declined confirmation tells nothing. `restoreFocus` takes the focus back when the snackbar closes from inside.
+ */
+export function useBranchSnackbar(locale: string, project: boolean, actions: Pick<BranchButtonActions, 'open' | 'reload'>,
+    restoreFocus?: () => void) {
+    const labels = labelsFor(locale);
+    const [snack, setSnack] = useState<Snack | null>(null);
+    const snacks = useRef(0);
+    const mounted = useRef(true);
+    useEffect(() => () => {mounted.current = false;}, []);
+    const show = (text: string, alert: boolean, action?: Snack['action']) => {
+        if (mounted.current) setSnack({id: ++snacks.current, text, alert, action});
+    };
+    const report = (result: HistoryActionResult, switched: boolean) => {
+        if (result.done) {
+            if (!switched) show(labels.branchCreated, false);
+            // The switch rewrote the files; the open project shows them after Reload Project.
+            else show(labels.switchedShort, false, project ? {label: labels.reload, run: actions.reload} : undefined);
+        } else if (result.error) show(result.error, true, {label: labels.openPanel, run: actions.open});
+    };
+    const element = snack && <Snackbar key={snack.id} snack={snack} closeLabel={labels.close} onClose={focus => {
+        setSnack(previous => previous?.id === snack.id ? null : previous);
+        // Focus inside the snackbar would be lost with it.
+        if (focus) restoreFocus?.();
+    }}/>;
+    return {report, element};
+}
 
 /** Git's branch glyph, drawn in the text color. */
 function BranchIcon() {
@@ -100,11 +174,9 @@ export function BranchButton({state, locale = 'en', ...actions}: BranchButtonPro
         setInitial(from);
         setMode('menu');
     };
-    /** Runs a branch operation and shows its result, or why it did not run, in the panel. */
-    const change = async (operation: () => Promise<HistoryActionResult>) => {
-        const result = await operation();
-        if (result.done || result.error) actions.open();
-    };
+    const {report, element: snackbar} = useBranchSnackbar(locale, state.project, actions,
+        () => trigger.current?.focus({preventScroll: true}));
+    const change = async (operation: () => Promise<HistoryActionResult>) => report(await operation(), true);
     const items: Item[] = [];
     if (!state.repository) {
         items.push({id: 'choose', label: labels.choose, run: () => {close(); actions.choose();}});
@@ -169,7 +241,7 @@ export function BranchButton({state, locale = 'en', ...actions}: BranchButtonPro
         setCreating(false);
         if (result.done) {
             close();
-            actions.open();
+            report(result, checkout);
         } else setCreateError(result.error ?? '');
     };
     return <div className="twgit-branch-entry" ref={root} onBlur={event => {
@@ -212,5 +284,6 @@ export function BranchButton({state, locale = 'en', ...actions}: BranchButtonPro
                 </span>
             </form>
         </div>}
+        {snackbar}
     </div>;
 }
