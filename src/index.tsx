@@ -14,6 +14,7 @@ import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
 import type {GitAuthor, LocalOperation} from './local-operations.js';
+import {pullRequestBranch} from './local-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
 import {openProjectSourceTabs} from './project-source-tabs.js';
 import type {ProjectSourceTabsFile} from './project-source-tabs.js';
@@ -28,17 +29,18 @@ import type {LocatorVM} from './editor-block-locator.js';
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
 
-export {openRepository, createReadOnlyFs, GitPanelError} from './repository.js';
+export {openRepository, createReadOnlyFs, GitPanelError, pullRequestRef} from './repository.js';
 export {openProjectComparison} from './project-comparison.js';
 export {openProjectSourceTabs} from './project-source-tabs.js';
 export type {ProjectSourceTabsFile, ProjectSourceTabsOptions} from './project-source-tabs.js';
 export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
-export type {Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
+export type {PullRequestBase, PullRequestFetch, PullRequestFiles, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
 export {HistoryGraph, laneColors} from './history-graph-view.js';
 export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.js';
 export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
+export {pullRequestBranch} from './local-operations.js';
 
 export interface GitHost {
     connectionSettings?: GitConnectionSettings;
@@ -365,6 +367,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 notice: operation === 'pull' && current.current.project !== null ? labels.pulledProject : labels.remoteDone};
         });
     };
+    // A connected GitHub connection reads pull request contents over Git Smart HTTP, so private repositories work too.
+    const pullRequestConnection = useMemo(() => {
+        const settings = host.connectionSettings;
+        const getSession = settings?.getSession;
+        return getSession ? {getSession, connected: () => settings.getView().state.status === 'connected'} : undefined;
+    }, [host]);
     const [message, setMessage] = useState('');
     const localOperation = (operation: LocalOperation, notice?: string) => {
         const repository = current.current.repository;
@@ -399,6 +407,25 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             !document.defaultView?.confirm(labels.projectMissing)) return {done: false};
         const result = await localOperation(operation, switching ? labels.switched : labels.branchCreated);
         if (operation.kind === 'createBranch' && !operation.fromRemote && !at) setNewBranch('');
+        return result;
+    };
+    /**
+     * Opens a pull request version fetched over the connection: creates `pr/<number>` at its head (or reuses that
+     * branch when it already points there), switches to it with the same refusals as any switch, and opens the project
+     * folder again from it. The branch the person was on stays, so switching back is an ordinary switch.
+     */
+    const openPullRequest = async (number: number, head: string): Promise<HistoryActionResult> => {
+        const repository = current.current.repository;
+        if (!repository) return {done: false};
+        const original = current.current.snapshot?.branch ?? null;
+        const name = pullRequestBranch(number);
+        const result = await changeBranch({kind: 'createBranch', name, at: head, checkout: true, reuse: true});
+        if (!result.done) return result;
+        const project = current.current.project;
+        if (project !== null && await repository.hasFolder(name, project)) await openProject(project);
+        const notice = (original && original !== name ? labels.openedPullRequest : labels.openedPullRequestDetached)
+            .replace('{number}', String(number)).replace('{branch}', name).replace('{previous}', original ?? '');
+        if (alive.current) setState(previous => previous.error ? previous : {...previous, notice});
         return result;
     };
     // The history graph reads its own pages after each snapshot, through the same queue as the other reads.
@@ -517,7 +544,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             {!state.repository && <p>{labels.empty}</p>}
             {review && state.repository && host.renderReviewBlock &&
                 <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}
-                    locateFor={reviewLocator} openTabs={openTabs}/>}
+                    locateFor={reviewLocator} openTabs={openTabs} connection={pullRequestConnection}
+                    openLocally={branching ? {open: openPullRequest, busy: state.busy} : undefined}/>}
             {!review && state.repository && <div className="twgit-content">
                 <aside>
                     {state.browser && <details>
