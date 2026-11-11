@@ -39,6 +39,8 @@ export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.
 export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
+export {pullRequestBranch} from './local-operations.js';
+import {pullRequestBranch} from './local-operations.js';
 
 export interface GitHost {
     connectionSettings?: GitConnectionSettings;
@@ -407,6 +409,25 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         if (operation.kind === 'createBranch' && !operation.fromRemote && !at) setNewBranch('');
         return result;
     };
+    /**
+     * Opens a pull request version fetched over the connection: creates `pr/<number>` at its head (or reuses that
+     * branch when it already points there), switches to it with the same refusals as any switch, and opens the project
+     * folder again from it. The branch the person was on stays, so switching back is an ordinary switch.
+     */
+    const openPullRequest = async (number: number, head: string): Promise<HistoryActionResult> => {
+        const repository = current.current.repository;
+        if (!repository) return {done: false};
+        const original = current.current.snapshot?.branch ?? null;
+        const name = pullRequestBranch(number);
+        const result = await changeBranch({kind: 'createBranch', name, at: head, checkout: true, reuse: true});
+        if (!result.done) return result;
+        const project = current.current.project;
+        if (project !== null && await repository.hasFolder(name, project)) await openProject(project);
+        const notice = (original && original !== name ? labels.openedPullRequest : labels.openedPullRequestDetached)
+            .replace('{number}', String(number)).replace('{branch}', name).replace('{previous}', original ?? '');
+        if (alive.current) setState(previous => previous.error ? previous : {...previous, notice});
+        return result;
+    };
     // The history graph reads its own pages after each snapshot, through the same queue as the other reads.
     const [history, setHistory] = useState<{commits: HistoryCommit[]; cursor: HistoryCursor | null; loading: boolean; failed: boolean}>(
         {commits: [], cursor: null, loading: false, failed: false});
@@ -523,7 +544,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             {!state.repository && <p>{labels.empty}</p>}
             {review && state.repository && host.renderReviewBlock &&
                 <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}
-                    locateFor={reviewLocator} openTabs={openTabs} connection={pullRequestConnection}/>}
+                    locateFor={reviewLocator} openTabs={openTabs} connection={pullRequestConnection}
+                    openLocally={branching ? {open: openPullRequest, busy: state.busy} : undefined}/>}
             {!review && state.repository && <div className="twgit-content">
                 <aside>
                     {state.browser && <details>
