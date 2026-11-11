@@ -126,7 +126,8 @@ test('the branch button lists the branches, moves with the keyboard and switches
     await menu.getByRole('menuitem', {name: 'score を作って切り替える'}).click();
     await page.evaluate(() => finish({done: true}));
     await snackbar.getByText('ブランチを切り替えました。').waitFor();
-    assert.deepEqual(await snackbar.getByRole('button').allTextContents(), ['×']);
+    assert.deepEqual(await snackbar.getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))), ['閉じる']);
+    assert.equal(await snackbar.locator('button.twgit-close svg').count(), 1);
     assert.deepEqual((await calls()).at(-1), ['createFromRemote', 'score']);
     await page.clock.runFor(5000);
     assert.equal(await snackbar.count(), 1);

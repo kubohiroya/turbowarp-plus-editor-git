@@ -1,5 +1,6 @@
 import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
+import {CloseButton} from './close-button.js';
 import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
 import type {BranchRefs} from './repository.js';
@@ -69,8 +70,7 @@ function Snackbar({snack, closeLabel, onClose}: {snack: Snack; closeLabel: strin
         }}>
         <span role={snack.alert ? 'alert' : 'status'}>{snack.text}</span>
         {snack.action && <button type="button" onClick={() => {onClose(true); snack.action!.run();}}>{snack.action.label}</button>}
-        <button type="button" className="twgit-snackbar-close" aria-label={closeLabel} title={closeLabel}
-            onClick={() => onClose(true)}>×</button>
+        <CloseButton label={closeLabel} onClick={() => onClose(true)}/>
     </div>, document.body);
 }
 
