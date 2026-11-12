@@ -1,6 +1,6 @@
 {
   "name": "@kubohiroya/turbowarp-plus-editor-git",
-  "version": "0.20.0-issue.530",
+  "version": "0.20.0",
   "description": "Read-only local Git panel for TurboWarp Plus Editor",
   "type": "module",
   "license": "MPL-2.0",
@@ -66,7 +66,7 @@
     "test:browser": "npm run build && node --test test/*.browser.js"
   },
   "peerDependencies": {
-    "@kubohiroya/turbowarp-plus-editor-auth": ">=0.3.0 <0.5.0",
+    "@kubohiroya/turbowarp-plus-editor-auth": ">=0.3.0 <0.6.0",
     "react": ">=16.14 <19",
     "react-dom": ">=16.14 <19"
   },
