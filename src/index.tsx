@@ -92,6 +92,7 @@ interface Controller {
     refresh(automatic?: boolean): Promise<void>;
     /** Asks for a repository, then opens the panel on it. */
     choose(locale: string): Promise<void>;
+    selectRepository(root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle): Promise<boolean>;
     changeBranch(operation: BranchOperation): Promise<HistoryActionResult>;
     /** Reloads the project folder selected in the panel, as Reload Project does. */
     reload(): void;
@@ -111,7 +112,8 @@ interface Controller {
 function createController(): Controller {
     const listeners = new Set<() => void>();
     const controller: Controller = {
-        open() {}, async refresh() {}, async choose() {}, async changeBranch() {return {done: false};}, reload() {},
+        open() {}, async refresh() {}, async choose() {}, async selectRepository() {return false;},
+        async changeBranch() {return {done: false};}, reload() {},
         branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
             project: false},
         repository: null,
@@ -387,6 +389,24 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         dialog.current?.focus();
         return () => {if (previous?.isConnected) previous.focus();};
     }, [visible, slot]);
+    const loadRepository = async (root: FileSystemDirectoryHandle, project: string | null, disconnect = true) => {
+        const repository = await openRepository(root);
+        const snapshot = await repository.read(project ?? '');
+        const browser = await repository.browse(project ?? '');
+        if (disconnect) await host.connectionSettings?.disconnect();
+        setReview(false);
+        return {...initial, repository, snapshot, project, browser, changes: snapshot.changes};
+    };
+    controller.selectRepository = async (root, directory) => {
+        const result = await run(async () => {
+            const relative = await root.resolve(directory);
+            if (!relative) throw new GitPanelError('invalid');
+            const previous = current.current.repository;
+            const disconnect = !previous || !await previous.root.isSameEntry(root);
+            return loadRepository(root, relative.join('/'), disconnect);
+        });
+        return result.done;
+    };
     const chooseRoot = async () => {
         const view = document.defaultView as PickerWindow;
         return run(async () => {
@@ -395,12 +415,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 if ((error as DOMException).name === 'AbortError') return {};
                 throw error;
             }
-            const repository = await openRepository(root);
-            const snapshot = await repository.read();
-            const browser = await repository.browse();
-            await host.connectionSettings?.disconnect();
-            setReview(false);
-            return {...initial, repository, snapshot, browser, changes: snapshot.changes};
+            return loadRepository(root, null);
         });
     };
     const browse = (path: string) => run(async () => ({browser: await state.repository!.browse(path)}));
@@ -782,7 +797,16 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     controllers.set(vm, controller);
     render(<GitPanel vm={vm} document={document} host={host} controller={controller}/>, root);
     announce();
-    return {refresh: () => controller.refresh(), open: (locale: string) => controller.open(locale), dispose() {
+    return {refresh: () => controller.refresh(), open: (locale: string) => controller.open(locale),
+        selectRepository: (root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle) =>
+            controller.selectRepository(root, project), getCommitRepository() {
+        const repository = controller.repository;
+        if (!host.localWrite || !repository) return null;
+        return {
+            root: repository.root,
+            current: () => controllers.get(vm) === controller && controller.repository === repository
+        };
+    }, dispose() {
         if (controllers.get(vm) === controller) controllers.delete(vm);
         void host.connectionSettings?.disconnect().catch(() => {});
         unmountComponentAtNode(root);

@@ -27,6 +27,22 @@
     "./project-source-diff": {
       "types": "./dist/project-source-diff.d.ts",
       "default": "./dist/project-source-diff.js"
+    },
+    "./task-queue": {
+      "types": "./dist/task-queue.d.ts",
+      "default": "./dist/task-queue.js"
+    },
+    "./initial-commit": {
+      "types": "./dist/initial-commit.d.ts",
+      "default": "./dist/initial-commit.js"
+    },
+    "./pull-request-queue": {
+      "types": "./dist/pull-request-queue.d.ts",
+      "default": "./dist/pull-request-queue.js"
+    },
+    "./github-publication-host": {
+      "types": "./dist/github-publication-host.d.ts",
+      "default": "./dist/github-publication-host.js"
     }
   },
   "files": [

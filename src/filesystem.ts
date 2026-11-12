@@ -1,7 +1,7 @@
 export class GitPanelError extends Error {
     constructor(public code: 'invalid' | 'changed' | 'large' | 'unsupported' | 'pullUnsafe' | 'diverged' |
         'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed' |
-        'saveFirst' | 'author' | 'nothingStaged' | 'commitMessage' |
+        'saveFirst' | 'author' | 'nothingStaged' | 'commitMessage' | 'ignoredProjectFile' |
         'switchUnsafe' | 'branchExists' | 'branchConflict' | 'pullRequestBranch' | 'branchName' | 'locked' |
         'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing', message: string = code) {
         super(message);

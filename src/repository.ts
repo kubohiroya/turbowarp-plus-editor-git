@@ -312,7 +312,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             .filter(name => name !== 'HEAD' && !branches.includes(name)).sort();
         return {branch: branch || undefined, head, branches, remoteBranches};
     };
-    const read = async (scope = ''): Promise<Snapshot> => {
+    const read = async (scope = '', filepaths?: string[]): Promise<Snapshot> => {
         scope = pathParts(scope).join('/');
         fs.clearReads();
         cache = {};
@@ -324,7 +324,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
         const upstream = await upstreamRelation(branch || undefined, head);
-        const matrix = await git.statusMatrix({...options, cache, refresh: false, filepaths: [scope || '.']});
+        const matrix = await git.statusMatrix({...options, cache, refresh: false,
+            filepaths: filepaths ?? [scope || '.'], ignored: Boolean(filepaths)});
         const staged = await entries(null, scope);
         const committed = await entries(head || emptyTree, scope);
         const changes: FileChange[] = [];
@@ -750,7 +751,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                 return false;
             }
         }),
-        read: (scope?: string) => serial(() => read(scope)),
+        read: (scope?: string, filepaths?: string[]) => serial(() => read(scope, filepaths)),
         /**
          * The current branch, HEAD and the branch names, read from refs only. Cheap enough to follow branch changes made
          * by other tools while nothing else is read; `read` returns the same fields.

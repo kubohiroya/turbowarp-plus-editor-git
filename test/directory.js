@@ -22,7 +22,9 @@ export function directoryHandle(root, beforeWrite) {
         async getFileHandle(name, {create = false} = {}) {
             if (create) await fs.appendFile(child(name), '');
             const filename = await check(name, 'file');
-            return {kind: 'file', name, async getFile() {
+            return {kind: 'file', name, location: filename, async isSameEntry(other) {
+                return other.location === filename;
+            }, async getFile() {
                 const bytes = await fs.readFile(filename);
                 const stat = await fs.stat(filename);
                 return new File([bytes], name, {lastModified: stat.mtimeMs});

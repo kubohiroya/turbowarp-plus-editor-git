@@ -80,7 +80,7 @@ export async function runPullRequestFetch(root: FileSystemDirectoryHandle, numbe
 }
 
 /** Maps a failed read from GitHub to what the person can act on: the connection, access, or the network. */
-function remoteError(error: unknown) {
+export function remoteError(error: unknown) {
     if (error instanceof GitPanelError) return error;
     if (error instanceof GitSmartHttpError) {
         if (sessionCodes.includes(error.code)) return new GitPanelError('session');
@@ -89,6 +89,43 @@ function remoteError(error: unknown) {
             return new GitPanelError('network');
     }
     return new GitPanelError('remoteFailed');
+}
+
+/** Read failures after a send leave an uncertain outcome, even if Git parsed an initial report-status. */
+export async function pushWithoutForce(args: Parameters<typeof git.push>[0]) {
+    let receivedResponse = false;
+    let responseFailed = false;
+    const http = {async request(request: Parameters<typeof args.http.request>[0]) {
+        const response = await args.http.request(request);
+        if (request.method !== 'POST' || !response.body) return response;
+        receivedResponse = true;
+        const body = response.body;
+        return {...response, body: (async function* () {
+            try {
+                yield* body;
+            } catch (error) {
+                responseFailed = true;
+                throw error;
+            }
+        })()};
+    }};
+    try {
+        const result = await git.push({...args, http, force: false});
+        if (responseFailed) throw new GitPanelError('pushUnknown');
+        return result;
+    } catch (error) {
+        if (error instanceof GitPanelError) throw error;
+        if (error instanceof GitSmartHttpError && error.code === 'PUSH_OUTCOME_UNKNOWN')
+            throw new GitPanelError('pushUnknown');
+        const code = (error as {code?: string})?.code;
+        if (code === 'FastForwardError') throw new GitPanelError('diverged');
+        if (receivedResponse && !(error instanceof GitSmartHttpError) && code !== 'GitPushError')
+            throw new GitPanelError('pushUnknown');
+        if (error instanceof GitSmartHttpError &&
+            ['SESSION_REQUIRED', 'SESSION_UNAVAILABLE', 'SESSION_EXPIRED', 'REAUTH_REQUIRED'].includes(error.code))
+            throw new GitPanelError('session');
+        throw new GitPanelError('remoteFailed');
+    }
 }
 
 export async function runRemoteOperation(root: FileSystemDirectoryHandle, operation: RemoteOperation,
@@ -121,32 +158,12 @@ export async function runRemoteOperation(root: FileSystemDirectoryHandle, operat
         guard();
         const transport = createGitSmartHttp({remote, connection: session.connection,
             getSession: () => getSession(remote, write), signal});
-        let receivedPushResponse = false;
-        let pushResponseFailed = false;
-        const http = {async request(request: Parameters<typeof transport.http.request>[0]) {
-            const response = await transport.http.request(request);
-            if (!write || request.method !== 'POST' || !response.body) return response;
-            receivedPushResponse = true;
-            const body = response.body;
-            // isomorphic-git stops at the report-status and drops later read errors, so record them here.
-            return {...response, body: (async function* () {
-                try {
-                    yield* body;
-                } catch (error) {
-                    pushResponseFailed = true;
-                    throw error;
-                }
-            })()};
-        }};
-        const args = {...options, ...transport, http, remote: 'origin', ref,
+        const args = {...options, ...transport, remote: 'origin', ref,
             remoteRef: trackingRef || `refs/heads/${ref}`};
         try {
             if (operation === 'fetch') await git.fetch({...args, tags: false});
             else if (operation === 'pull') await git.fastForward(args);
-            else {
-                await git.push({...args, force: false, signal});
-                if (pushResponseFailed) throw new GitPanelError('pushUnknown');
-            }
+            else await pushWithoutForce({...args, signal});
         } catch (error) {
             if (error instanceof GitSmartHttpError) {
                 if (error.code === 'PUSH_OUTCOME_UNKNOWN') throw new GitPanelError('pushUnknown');
@@ -155,8 +172,6 @@ export async function runRemoteOperation(root: FileSystemDirectoryHandle, operat
             }
             const code = (error as {code?: string})?.code;
             if (code === 'FastForwardError') throw new GitPanelError('diverged');
-            if (receivedPushResponse && !(error instanceof GitSmartHttpError) && code !== 'GitPushError')
-                throw new GitPanelError('pushUnknown');
             if (error instanceof GitPanelError) throw error;
             throw new GitPanelError('remoteFailed');
         }
