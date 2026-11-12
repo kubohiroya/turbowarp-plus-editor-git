@@ -460,6 +460,15 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 notice: operation === 'pull' && current.current.project !== null ? labels.pulledProject : labels.remoteDone};
         });
     };
+    const readOrigin = useMemo(() => {
+        const repository = state.repository;
+        if (!repository || state.busy) return undefined;
+        return async () => {
+            const ticket = epoch.current;
+            const remote = await repository.readOrigin();
+            return epoch.current === ticket ? remote : undefined;
+        };
+    }, [state.repository, state.busy]);
     // A connected GitHub connection reads pull request contents over Git Smart HTTP, so private repositories work too.
     const pullRequestConnection = useMemo(() => {
         const settings = host.connectionSettings;
@@ -632,11 +641,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 {state.snapshot && <span data-git-upstream={state.snapshot.upstream.state} title={labels.checkedAt}>{upstreamText(state.snapshot, labels)}</span>}
                 {!review && host.connectionSettings && <ConnectionSettings settings={host.connectionSettings} locale={locale}
                     runOperation={host.connectionSettings.getSession ? remoteOperation : undefined}
-                    readOrigin={state.repository && !state.busy ? async () => {
-                        const ticket = epoch.current;
-                        const remote = await state.repository!.readOrigin();
-                        return epoch.current === ticket ? remote : undefined;
-                    } : undefined}/>}
+                    readOrigin={readOrigin}/>}
                 {state.snapshot && <details className="twgit-git-details">
                     <summary>{labels.details}</summary>
                     <div className="twgit-connection-body">

@@ -20,6 +20,7 @@
     overflow: auto; padding: 10px 12px; background: Canvas; color: CanvasText; border: 1px solid GrayText; border-radius: 6px;
     box-shadow: 0 8px 24px #0004; }
 .twgit-connection-body > p { margin: 4px 0; overflow-wrap: anywhere; }
+.twgit-connection-body > label { display: block; margin: 4px 0; }
 .twgit-sync { display: inline-flex; flex-wrap: wrap; gap: 4px; }
 .twgit-change-kind { display: inline-block; min-width: 2.6em; font-size: 11px; opacity: .8; }
 .twgit-file-details { font-size: 12px; margin-bottom: 6px; }
