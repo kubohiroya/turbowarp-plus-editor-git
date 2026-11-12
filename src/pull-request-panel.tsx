@@ -1,6 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
-import {createGitHubPullRequests, gitHubRepositoryFromOrigin, PullRequestError} from './github-pull-requests.js';
-import type {GitHubPullRequests} from './github-pull-requests.js';
+import {createGitHubPullRequests, gitHubRepositoryFromOrigin, PullRequestError, pullRequestPageSize} from './github-pull-requests.js';
+import type {GitHubPullRequests, PullRequestListItem, PullRequestStatus} from './github-pull-requests.js';
 import {ProjectSourceReview} from './project-source-review.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {Repository} from './repository.js';
@@ -9,17 +9,20 @@ import {readProjectSourceDiff} from './project-source-patch.js';
 import type {ProjectSourceTabsFile} from './project-source-tabs.js';
 import {GitPanelError} from './filesystem.js';
 import type {GetRemoteSession} from './remote-operations.js';
+import {listPullRequestRefs} from './remote-operations.js';
 import type {ProjectSourceReviewFile} from './project-source-review.js';
 import {pullRequestBranch} from './local-operations.js';
-import {createGitHubReviewApi} from './github-review-api.js';
+import {createGitHubReviewApi, GitHubReviewError} from './github-review-api.js';
 import {PullRequestReviewComposer} from './review-composer.js';
 import {reviewLabelsFor} from './messages.js';
 
 type OpenTabs = (key: string, files: readonly ProjectSourceTabsFile[], rememberAs?: string) => number;
 
 const en = {
-    title: 'Pull requests', number: 'Pull request number', openNumber: 'Open pull request',
+    choose: 'Choose a pull request',
     open: 'Open', closed: 'Closed', merged: 'Merged', draft: 'Draft',
+    mergeable: 'Ready to merge', conflicting: 'Merge conflicts', blocked: 'Merge blocked', unknown: 'Status unavailable',
+    mergeUnknown: 'Merge status unavailable', page: 'Page {page}',
     prev: 'Previous page', next: 'Next page', empty: 'No pull requests on this page.',
     loading: 'Reading GitHub…', select: 'Select a pull request to review its changes.', onGitHub: 'Open on GitHub',
     noOrigin: 'Choose a repository whose origin is on GitHub.',
@@ -35,15 +38,16 @@ const en = {
     remoteFailed: 'Could not read the pull request through the GitHub connection. Try again.',
     baseMissing: 'The base branch is not on GitHub. Choose another base branch.',
     viaConnection: 'Read through the GitHub connection.',
-    listPrivate: 'The list uses the public GitHub API. Enter a pull request number to read it through the connection.',
-    noMetadata: 'The title and base branch are not available without the public GitHub API. Choose the base branch to compare with.',
+    noMetadata: 'The title and base branch are unavailable. Choose the base branch to compare with.',
     base: 'Base branch', pullRequest: 'Pull request',
     openLocally: 'Open here as {branch}',
     openLocallyHint: 'Creates the local branch {branch} at this version, switches to it and opens the project, so it can be run. Unsaved edits and unrecorded changes stop it. Switch back in Local changes.'
 };
 const ja: typeof en = {
-    title: 'プルリクエスト', number: 'プルリクエスト番号', openNumber: 'PR を開く',
+    choose: 'PR を選ぶ',
     open: 'オープン', closed: 'クローズ済み', merged: 'マージ済み', draft: 'ドラフト',
+    mergeable: 'マージ可能', conflicting: '競合あり', blocked: 'マージ条件未達', unknown: '状態未確認',
+    mergeUnknown: 'マージ可否未確認', page: '{page} ページ目',
     prev: '前のページ', next: '次のページ', empty: 'このページにプルリクエストはありません。',
     loading: 'GitHub から取得中…', select: 'プルリクエストを選ぶと差分内容を確認できます。', onGitHub: 'GitHub で開く',
     noOrigin: 'GitHub のリポジトリを origin に設定した作業フォルダを選んでください。',
@@ -60,8 +64,7 @@ const ja: typeof en = {
     remoteFailed: 'GitHub 接続でプルリクエストを読めませんでした。もう一度試してください。',
     baseMissing: 'ベースのブランチが GitHub にありません。別のベースを選んでください。',
     viaConnection: 'GitHub 接続で取得しました。',
-    listPrivate: '一覧は公開 GitHub API を使います。番号を入れると、GitHub 接続で読みます。',
-    noMetadata: '公開 GitHub API を使えないため、題名とベースのブランチがわかりません。比べるベースのブランチを選んでください。',
+    noMetadata: '題名とベースのブランチを取得できませんでした。比べるベースのブランチを選んでください。',
     base: 'ベースのブランチ', pullRequest: 'プルリクエスト',
     openLocally: '{branch} として手元で開く',
     openLocallyHint: 'この版にローカルブランチ {branch} を作って切り替え、作品を開き直して実行できるようにします。保存していない編集や記録していない変更があるときは行いません。元に戻すときは「ローカルの変更」で切り替えてください。'
@@ -95,8 +98,25 @@ export interface PullRequestConnection {
 }
 
 type Result<T> = {data: T; error?: never} | {data?: never; error: string};
-type Listing = Awaited<ReturnType<GitHubPullRequests['list']>>;
+type ListSource = 'public' | 'connection' | 'refs';
+type Listing = {items: PullRequestListItem[]; more: boolean; source: ListSource; remaining?: string | null};
 type Metadata = Awaited<ReturnType<GitHubPullRequests['metadata']>>;
+
+function PullRequestIcon({status}: {status: PullRequestStatus}) {
+    const mark = {
+        mergeable: 'M4.5 8.5 7 11l4.5-5',
+        merged: 'M5 4v8m0-6c0 3 2 4 6 4m-2-2 2 2-2 2',
+        conflicting: 'M8 4.5v4m0 2.5v.5',
+        blocked: 'M6.5 5v6m3-6v6',
+        closed: 'm5.5 5.5 5 5m0-5-5 5',
+        draft: 'M6 4.5h2m2 0h.5V6m0 2v1.5m0 2H9m-2 0H5.5V10m0-2V6.5',
+        open: 'M5.5 6.5v5m5-4v4m0-4c0-2-1-3-3-3m0 0 1.5-1.5M7.5 4.5 9 6',
+        unknown: 'M6.5 6a1.5 1.5 0 1 1 2.6 1c-.7.6-1.1 1-1.1 1.5m0 2.5v.5'
+    }[status];
+    return <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.35"
+        strokeLinecap="round" strokeLinejoin="round"><path d={mark}/></svg>;
+}
+
 /** A pull request to show: from the public API, or from Git objects fetched over the connection. */
 type Pull = {
     number: number; title: string; description: string; author?: string; state?: Metadata['state'];
@@ -123,51 +143,94 @@ function PullRequests({name, remote, labels, locale, renderBlock, locateFor, ope
     }, [remote, connection]);
     const [page, setPage] = useState(1);
     const [listing, setListing] = useState<{page: number; result: Result<Listing>}>();
-    const [input, setInput] = useState('');
-    const [selection, setSelection] = useState<{number: number; base?: string}>();
+    const [selection, setSelection] = useState<{number: number; source: ListSource; base?: string}>();
     const [loaded, setLoaded] = useState<{selection: NonNullable<typeof selection>; result: Result<Pull>}>();
     const list = listing?.page === page ? listing.result : undefined;
-    const [listConnected, setListConnected] = useState(false);
+    const listed = list?.data;
+    const connected = connection?.connected() === true;
     const detail = loaded?.selection === selection ? loaded?.result : undefined;
     useEffect(() => {
         const controller = new AbortController();
+        const {signal} = controller;
         setListing(undefined);
-        setListConnected(!!connection?.connected());
-        void client.list(page, controller.signal).then(data => {
-            if (!controller.signal.aborted) setListing({page, result: {data}});
+        const load = async (): Promise<Listing> => {
+            try {
+                return {...await client.list(page, signal), source: 'public'};
+            } catch (error) {
+                if (!connected || !remote || !connection) throw error;
+                signal.throwIfAborted();
+            }
+            if (reviewApi) {
+                try {
+                    return {...await reviewApi.pullRequests(page, signal), source: 'connection'};
+                } catch {
+                    signal.throwIfAborted();
+                }
+            }
+            const refs = await listPullRequestRefs(remote, connection.getSession, signal);
+            const end = page * pullRequestPageSize;
+            const items: PullRequestListItem[] = refs.slice(end - pullRequestPageSize, end)
+                .map(ref => ({...ref, title: labels.pullRequest, base: undefined, status: 'unknown'}));
+            return {source: 'refs', items, more: refs.length > end};
+        };
+        void load().then(async data => {
+            if (signal.aborted) return;
+            setListing({page, result: {data}});
+            // Leave requests for opening a diff and for other public API reads.
+            let budget = data.remaining == null ? pullRequestPageSize : Math.max(0, Number(data.remaining) - 12);
+            for (const item of data.items) {
+                if (signal.aborted || budget <= 0) break;
+                if (item.status !== 'open' || !item.head || !item.base) continue;
+                try {
+                    budget--;
+                    const {head, base, status} = data.source === 'connection' && reviewApi ?
+                        await reviewApi.pullRequestStatus(item.number, signal) : await client.listItemStatus(item.number, signal);
+                    if (signal.aborted || item.head !== head || item.base !== base || status === item.status) continue;
+                    setListing(previous => previous?.page === page && previous.result.data ?
+                        {page, result: {data: {...previous.result.data, items: previous.result.data.items
+                            .map(row => row.number === item.number ? {...row, status} : row)}}} : previous);
+                } catch (error) {
+                    if ((error instanceof PullRequestError && error.code === 'rateLimit') ||
+                        (error instanceof GitHubReviewError && error.code !== 'PULL_REQUEST_NOT_FOUND')) break;
+                }
+            }
         }, error => {
-            if (!controller.signal.aborted) setListing({page, result: {error: errorMessage(error, labels)}});
+            if (!signal.aborted) setListing({page, result: {error: errorMessage(error, labels)}});
         });
         return () => controller.abort();
-    }, [client, page, labels]);
+    }, [client, page, labels, connected, reviewApi, remote, connection]);
     useEffect(() => {
         if (!selection) return;
         const controller = new AbortController();
-        const load = (): Promise<Pull> => connection?.connected() ?
-            loadThroughConnection(selection.number, selection.base, controller.signal) : client.load(selection.number, controller.signal);
+        const load = (): Promise<Pull> => connected ?
+            loadThroughConnection(selection, controller.signal) : client.load(selection.number, controller.signal);
         void load().then(data => {
             if (!controller.signal.aborted) setLoaded({selection, result: {data}});
         }, error => {
             if (!controller.signal.aborted) setLoaded({selection, result: {error: errorMessage(error, labels)}});
         });
         return () => controller.abort();
-    }, [client, selection, labels]);
+    }, [client, selection, labels, connected, reviewApi, repository, connection]);
     const fetched = useRef<{number: number; head: string; branches: readonly string[]; defaultBranch: string | null}>();
     /**
      * Fetches `refs/pull/<number>/head` and the branches over Git Smart HTTP and compares them from local objects. The
-     * public API only adds the title, description and base when it can read the repository; the contents never come
-     * from it, so a private repository is read only through the connection.
+     * listing's metadata source supplies the title, description and base when available.
      */
-    const loadThroughConnection = async (number: number, chosenBase: string | undefined, signal: AbortSignal): Promise<Pull> => {
+    const loadThroughConnection = async ({number, source, base: chosenBase}: NonNullable<typeof selection>, signal: AbortSignal): Promise<Pull> => {
         const guard = () => {if (signal.aborted) throw new GitPanelError('changed');};
-        let head: string, branches: readonly string[], defaultBranch: string | null, metadata: Metadata | null = null;
+        let head: string, branches: readonly string[], defaultBranch: string | null;
+        let metadata: Omit<Metadata, 'url'> | null = null;
         if (chosenBase !== undefined && fetched.current?.number === number) {
             ({head, branches, defaultBranch} = fetched.current);
         } else {
-            metadata = await client.metadata(number, signal).catch(error => {
-                if (signal.aborted) throw error;
-                return null;
-            });
+            if (source !== 'refs') {
+                const readMetadata = source === 'connection' && reviewApi ?
+                    reviewApi.pullRequest(number, signal) : client.metadata(number, signal);
+                metadata = await readMetadata.catch(error => {
+                    if (signal.aborted) throw error;
+                    return null;
+                });
+            }
             const result = await repository.fetchPullRequest(number, connection!.getSession, guard, signal);
             if (metadata && metadata.head.sha !== result.head) throw new PullRequestError('changed');
             ({head, branches, defaultBranch} = result);
@@ -181,37 +244,34 @@ function PullRequests({name, remote, labels, locale, renderBlock, locateFor, ope
             base: read.base, files: read.files, url: 'https://github.com/' + name + '/pull/' + number,
             git: {branches: metadata ? null : branches}};
     };
-    const choose = (number: number) => {
-        if (!Number.isSafeInteger(number) || number < 1) return;
-        setSelection({number});
-        setInput(String(number));
-    };
     const pr = detail?.data;
     // A review is written and sent for contents read over the connection, when it was made with the review grant.
     const reviewing = !!pr?.git && !!reviewApi && !!connection?.connected() && !!connection.reviewGranted?.();
-    return <div className="twgit-content">
-        <aside>
-            <h3>{labels.title}</h3>
-            <p>{name}</p>
-            <form className="twgit-pr-number" onSubmit={event => {event.preventDefault(); choose(Number(input));}}>
-                <label>{labels.number}<input type="number" required min={1} max={Number.MAX_SAFE_INTEGER}
-                    value={input} onChange={event => setInput(event.currentTarget.value)}/></label>
-                <button type="submit">{labels.openNumber}</button>
-            </form>
+    return <div className="twgit-content twgit-pr-content">
+        <aside className="twgit-pr-picker" aria-label={labels.choose}>
+            <h3>{labels.choose}</h3>
+            <p className="twgit-pr-repository">{name}</p>
             {!list && <p role="status">{labels.loading}</p>}
-            {list?.error && (listConnected && list.error === labels.unavailable ?
-                <p role="status">{labels.listPrivate}</p> : <p role="alert">{list.error}</p>)}
-            {list?.data && <>
-                {!list.data.items.length && <p>{labels.empty}</p>}
-                <ul>{list.data.items.map(item => <li key={item.number}>
-                    <button className="twgit-file" type="button" aria-pressed={selection?.number === item.number}
-                        onClick={() => choose(item.number)}>#{item.number} {item.title}</button>
-                </li>)}</ul>
-                <div className="twgit-pr-paging">
-                    <button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>{labels.prev}</button>
-                    <button type="button" disabled={!list.data.more} onClick={() => setPage(page + 1)}>{labels.next}</button>
-                </div>
+            {list?.error && <p role="alert">{list.error}</p>}
+            {listed && <>
+                {!listed.items.length && <p>{labels.empty}</p>}
+                {!!listed.items.length && <ul className="twgit-pr-list">{listed.items.map(item => <li key={item.number}>
+                    <button className="twgit-pr-option" type="button" data-status={item.status}
+                        aria-pressed={selection?.number === item.number}
+                        onClick={() => setSelection({number: item.number, source: listed.source})}>
+                        <span className="twgit-pr-icon"><PullRequestIcon status={item.status}/></span>
+                        <span className="twgit-pr-item">
+                            <span className="twgit-pr-item-title"><strong>#{item.number}</strong> {item.title}</span>
+                            <span className="twgit-pr-item-status">{item.status === 'open' ? labels.mergeUnknown : labels[item.status]}</span>
+                        </span>
+                    </button>
+                </li>)}</ul>}
             </>}
+            {(page > 1 || listed?.more) && <div className="twgit-pr-paging">
+                <button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>{labels.prev}</button>
+                <span>{labels.page.replace('{page}', String(page))}</span>
+                <button type="button" disabled={!listed?.more} onClick={() => setPage(page + 1)}>{labels.next}</button>
+            </div>}
         </aside>
         <main className="twgit-diff">
             {!selection && <p>{labels.select}</p>}
@@ -223,7 +283,7 @@ function PullRequests({name, remote, labels, locale, renderBlock, locateFor, ope
                     {pr.author && <span>{pr.author}</span>}
                     <code title={pr.head.sha}>{pr.head.ref} → {pr.base.ref ?? pr.base.sha.slice(0, 12)}</code>
                     {pr.git?.branches && <label>{labels.base} <select data-git-pr-base="" value={pr.base.ref ?? ''}
-                        onChange={event => setSelection({number: pr.number, base: event.currentTarget.value})}>
+                        onChange={event => setSelection({...selection!, base: event.currentTarget.value})}>
                         {pr.git.branches.map(branch => <option key={branch} value={branch}>{branch}</option>)}
                     </select></label>}
                     <a href={pr.url} target="_blank" rel="noreferrer">{labels.onGitHub}</a>

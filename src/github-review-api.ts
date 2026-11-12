@@ -1,5 +1,7 @@
 import type {GitProxySession} from '@kubohiroya/turbowarp-plus-editor-auth';
 import {checkConnection, remoteUrl} from './smart-http.js';
+import {readMergeStatus, readPullRequest, readPullRequestList} from './github-pull-requests.js';
+import type {PullRequestStatus} from './github-pull-requests.js';
 
 /**
  * The pull request review routes of the GitHub connection's proxy, under `/v1/github/<owner>/<repo>/`. The proxy keeps
@@ -197,7 +199,7 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
     async function call(route: string, {method = 'GET', body, submitId, review = false, mutation = false, limit = 256 * 1024,
         group, signal, repositoryId}: {
         method?: 'GET' | 'POST'; body?: unknown; submitId?: string; review?: boolean; mutation?: boolean; limit?: number;
-        group: 'threads' | 'body' | 'read' | 'publication'; signal?: AbortSignal; repositoryId?: number;
+        group: 'threads' | 'body' | 'read' | 'pull-request' | 'publication'; signal?: AbortSignal; repositoryId?: number;
     }): Promise<unknown> {
         if (signal?.aborted) throw new GitHubReviewError('ABORTED');
         const current = await session(review);
@@ -268,6 +270,31 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
         available,
         /** The GitHub login of the last session this client used. */
         account: () => account,
+        async pullRequests(page: number, signal: AbortSignal) {
+            if (!Number.isSafeInteger(page) || page < 1) throw new GitHubReviewError('BAD_REQUEST');
+            return readPullRequestList(await call(`/pulls?page=${page}`, {group: 'pull-request', limit: 1024 * 1024, signal}));
+        },
+        async pullRequest(number: number, signal: AbortSignal) {
+            checkNumber(number);
+            const pull = readPullRequest(await call(`/pulls/${number}`, {group: 'pull-request', limit: 1024 * 1024, signal}));
+            return shape(pull.number === number, pull, false);
+        },
+        async pullRequestStatus(number: number, signal: AbortSignal) {
+            checkNumber(number);
+            const value = await call(`/pulls/${number}/publication-status`, {group: 'pull-request', limit: 4096, signal});
+            if (!isRecord(value) || value.number !== number || !isRecord(value.head) || !isSha(value.head.sha) ||
+                !isRecord(value.base) || !isSha(value.base.sha)) throw new GitHubReviewError('INVALID_RESPONSE');
+            let status: PullRequestStatus = 'unknown';
+            if (value.state === 'MERGED') status = 'merged';
+            else if (value.state === 'CLOSED') status = 'closed';
+            else if (value.draft === true) status = 'draft';
+            else if (value.state === 'OPEN') {
+                const mergeable = value.mergeable === 'MERGEABLE' ? true : value.mergeable === 'CONFLICTING' ? false : null;
+                const mergeState = typeof value.mergeStateStatus === 'string' ? value.mergeStateStatus.toLowerCase() : null;
+                status = readMergeStatus(mergeable, mergeState);
+            }
+            return {head: value.head.sha, base: value.base.sha, status};
+        },
         /** Reads the Worker status for a specific repository ID. Check the returned head before using its CI result. */
         async publicationStatus(number: number, repositoryId: number, signal?: AbortSignal) {
             checkNumber(number);

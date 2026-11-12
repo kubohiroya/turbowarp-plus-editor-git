@@ -82,6 +82,27 @@ test('accepts only project.source.json thread paths the proxy accepts', () => {
         'a/project.source.json.bak', 'a/\u0001/project.source.json']) assert.equal(isReviewThreadPath(path), false, path);
 });
 
+test('reads the PR picker through the proxy using a read session', async () => {
+    const base = 'a'.repeat(40);
+    const pull = {number: 42, title: 'Private project changes', state: 'open', changed_files: 0,
+        head: {sha: head, ref: 'topic', repo: null}, base: {sha: base, ref: 'main', repo: null}};
+    const root = reviewProxyOrigin + '/v1/github/fixture/work/pulls';
+    const {api, requests} = client(url => {
+        if (url === root + '?page=1') return json(200, [pull]);
+        if (url === root + '/42') return json(200, pull);
+        if (url === root + '/42/publication-status') return json(200, {number: 42, state: 'OPEN',
+            head: pull.head, base: pull.base, mergeable: 'MERGEABLE', mergeStateStatus: 'BLOCKED'});
+        assert.fail(url);
+    });
+    const signal = new AbortController().signal;
+    const list = await api.pullRequests(1, signal);
+    assert.deepEqual(list.items, [{number: 42, title: pull.title, status: 'open', head, base}]);
+    assert.equal((await api.pullRequest(42, signal)).title, pull.title);
+    assert.deepEqual(await api.pullRequestStatus(42, signal), {head, base, status: 'blocked'});
+    assert.ok(requests.every(({init}) => init.method === 'GET' && init.signal === signal &&
+        init.headers.Authorization === 'Bearer ' + reviewBearer));
+});
+
 test('reads the Worker check status only through a Cloudflare session bound to the selected repository', async () => {
     const status = {repositoryId: 71, number: 42, state: 'OPEN', mergedAt: null, draft: false,
         head: {ref: 'tw-plus/pr-' + id, sha: head, repositoryId: 71}, base: {ref: 'main', sha: 'a'.repeat(40)},

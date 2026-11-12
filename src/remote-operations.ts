@@ -25,6 +25,24 @@ async function checkRefspecs(options: GitOptions) {
  */
 export const pullRequestRef = (number: number) => `refs/pull/origin/${number}/head`;
 
+/** Lists PR head refs over the connection when the proxy cannot read PR metadata. */
+export async function listPullRequestRefs(remote: string, getSession: GetRemoteSession, signal: AbortSignal) {
+    try {
+        const session = await getSession(remote, false);
+        if (!session) throw new GitPanelError('session');
+        signal.throwIfAborted();
+        const transport = createGitSmartHttp({remote, connection: session.connection,
+            getSession: () => getSession(remote, false), signal});
+        const refs = await git.listServerRefs({...transport, protocolVersion: 1, prefix: 'refs/pull/'});
+        return refs.flatMap(({ref, oid}) => {
+            const number = Number(/^refs\/pull\/([1-9]\d*)\/head$/u.exec(ref)?.[1]);
+            return Number.isSafeInteger(number) && /^[0-9a-f]{40}$/u.test(oid) ? [{number, head: oid}] : [];
+        }).sort((a, b) => b.number - a.number);
+    } catch (error) {
+        throw remoteError(error);
+    }
+}
+
 export interface PullRequestFetch {
     readonly number: number;
     /** The commit at GitHub's `refs/pull/<number>/head`, kept locally at `ref`. */
