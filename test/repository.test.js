@@ -76,6 +76,30 @@ test('matches CLI changes, separates staged and working bytes, and keeps Git met
     assert.deepEqual(scope.changes, []);
 });
 
+test('reads a file from the current commit regardless of index and working changes', async t => {
+    const {handle, git, write} = await fixture(t);
+    const repo = await openRepository(handle);
+    const read = path => repo.readHeadFile(path, 100);
+    const decode = bytes => new TextDecoder().decode(bytes);
+    await write('notes.txt', 'staged\n');
+    git('add', 'notes.txt');
+    await write('notes.txt', 'working\n');
+    const initial = await read('notes.txt');
+    assert.equal(initial.head, git('rev-parse', 'HEAD'));
+    assert.equal(initial.branch, 'main');
+    assert.equal(decode(initial.bytes), 'initial\n');
+    assert.equal(decode((await read('projects/demo/project.source.json')).bytes), '{"targets":[]}\n');
+    assert.equal(decode((await read('run.sh')).bytes), '#!/bin/sh\necho initial\n');
+    assert.equal((await read('missing/notes.txt')).bytes, null);
+    assert.equal((await read('projects')).bytes, null);
+    await assert.rejects(repo.readHeadFile('notes.txt', 1), {code: 'large'});
+    git('commit', '-qm', 'Update notes');
+    assert.equal(decode((await read('notes.txt')).bytes), 'staged\n');
+    const unborn = await fixture(t, false);
+    const empty = await openRepository(unborn.handle);
+    assert.deepEqual(await empty.readHeadFile('notes.txt', 100), {head: null, branch: 'main', bytes: null});
+});
+
 test('reads packed commits and detached HEAD, with commit changes and an unborn repository', async t => {
     const {handle, git} = await fixture(t);
     git('gc', '--prune=now');
