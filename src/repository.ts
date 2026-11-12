@@ -362,7 +362,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         if (current.head !== head || current.branch !== branch) throw new GitPanelError('changed');
         return {head, branch, bytes};
     };
-    const read = async (scope = ''): Promise<Snapshot> => {
+    const read = async (scope = '', filepaths?: string[]): Promise<Snapshot> => {
         scope = pathParts(scope).join('/');
         fs.clearReads();
         cache = {};
@@ -374,14 +374,15 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
         const upstream = await upstreamRelation(branch || undefined, head);
-        const {changes} = await readChanges(scope, head);
+        const {changes} = await readChanges(scope, head, filepaths);
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
         return {branch, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
             upstream};
     };
-    const readChanges = async (scope: string, head: string | null) => {
-        const matrix = await git.statusMatrix({...options, cache, refresh: false, filepaths: [scope || '.']});
+    const readChanges = async (scope: string, head: string | null, filepaths?: string[]) => {
+        const matrix = await git.statusMatrix({...options, cache, refresh: false,
+            filepaths: filepaths ?? [scope || '.'], ignored: Boolean(filepaths)});
         const staged = await entries(null, scope);
         const committed = await entries(head || emptyTree, scope);
         const changes: FileChange[] = [];
@@ -830,7 +831,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                 return false;
             }
         }),
-        read: (scope?: string) => serial(() => read(scope)),
+        read: (scope?: string, filepaths?: string[]) => serial(() => read(scope, filepaths)),
         /** Reads the saved files against the index, HEAD and the last known upstream, under one folder. */
         readFileStatus: (scope: string, fingerprint: string) =>
             serial(() => readFileStatus(pathParts(scope).join('/'), fingerprint)),

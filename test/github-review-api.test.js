@@ -81,3 +81,31 @@ test('accepts only project.source.json thread paths the proxy accepts', () => {
     for (const path of ['/a/project.source.json', 'a//project.source.json', 'a/./project.source.json', 'a\\project.source.json',
         'a/project.source.json.bak', 'a/\u0001/project.source.json']) assert.equal(isReviewThreadPath(path), false, path);
 });
+
+test('reads the Worker check status only through a Cloudflare session bound to the selected repository', async () => {
+    const status = {repositoryId: 71, number: 42, state: 'OPEN', mergedAt: null, draft: false,
+        head: {ref: 'tw-plus/pr-' + id, sha: head, repositoryId: 71}, base: {ref: 'main', sha: 'a'.repeat(40)},
+        checks: {state: 'SUCCESS', totalCount: 1}, reviewDecision: null, mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE'};
+    const proxyOrigin = 'https://worker.example';
+    const unbound = {...reviewSession(), connection: {mode: 'cloudflare', proxyOrigin}};
+    const bound = {...unbound, repositoryId: 71};
+    const {api, requests} = client(() => json(200, status), bound);
+    assert.deepEqual(await api.publicationStatus(42, 71), status);
+    assert.equal(requests.length, 1);
+    const [{url, init}] = requests;
+    assert.equal(url, proxyOrigin + '/v1/github/fixture/work/pulls/42/publication-status');
+    assert.deepEqual([init.method, init.credentials, init.redirect, init.body], ['GET', 'omit', 'error', undefined]);
+    assert.deepEqual(init.headers, {Authorization: 'Bearer ' + reviewBearer, Accept: 'application/json'});
+    const noRequest = () => assert.fail('An unrelated session must never reach the Worker');
+    await assert.rejects(client(noRequest, unbound).api.publicationStatus(42, 71), {code: 'INVALID_SESSION'});
+    await assert.rejects(client(noRequest, {...reviewSession(), repositoryId: 71}).api.publicationStatus(42, 71),
+        {code: 'INVALID_SESSION'});
+    await assert.rejects(client(noRequest, bound).api.publicationStatus(42, 72), {code: 'INVALID_SESSION'});
+    await assert.rejects(client(() => json(200, {...status, repositoryId: 72}), bound).api.publicationStatus(42, 71),
+        {code: 'INVALID_RESPONSE'});
+    await assert.rejects(client(() => json(200, {...status, checks: {state: 'SUCCESS', totalCount: 0}}), bound)
+        .api.publicationStatus(42, 71), {code: 'INVALID_RESPONSE'});
+    const unavailable = client(() => json(404, {code: 'GITHUB_API_UNAVAILABLE'}), bound).api;
+    await assert.rejects(unavailable.publicationStatus(42, 71), {code: 'GITHUB_API_UNAVAILABLE'});
+    assert.equal(unavailable.available.threads, undefined);
+});

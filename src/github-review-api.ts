@@ -79,6 +79,37 @@ export interface ReviewContext {
 export interface SubmittedReview {state: string; commitOid: string; submittedAt: string; url: string}
 export interface RestReview {id: number; login: string | null; commitId: string | null; state: string; body: string}
 
+const publicationStates = ['OPEN', 'CLOSED', 'MERGED'] as const;
+const checkStates = ['SUCCESS', 'FAILURE', 'PENDING', 'ERROR', 'EXPECTED'] as const;
+const reviewDecisions = ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED'] as const;
+const mergeStates = ['BEHIND', 'BLOCKED', 'CLEAN', 'DIRTY', 'DRAFT', 'HAS_HOOKS', 'UNKNOWN', 'UNSTABLE'] as const;
+const mergeability = ['MERGEABLE', 'CONFLICTING', 'UNKNOWN'] as const;
+const oneOf = <T extends string>(choices: readonly T[], value: unknown): value is T =>
+    typeof value === 'string' && (choices as readonly string[]).includes(value);
+const positive = (value: unknown): value is number => isCount(value, Number.MAX_SAFE_INTEGER) && value > 0;
+
+function readPublicationStatus(value: unknown, number: number, repositoryId: number) {
+    if (!isRecord(value) || value.number !== number || value.repositoryId !== repositoryId)
+        throw new GitHubReviewError('INVALID_RESPONSE');
+    const {state, mergedAt, draft, head, base, checks, reviewDecision, mergeStateStatus, mergeable} = value;
+    if (!oneOf(publicationStates, state) ||
+        (state === 'MERGED' ? typeof mergedAt !== 'string' || !Number.isFinite(Date.parse(mergedAt)) : mergedAt !== null) ||
+        typeof draft !== 'boolean' || !isRecord(head) || typeof head.ref !== 'string' || !head.ref || !isSha(head.sha) ||
+        !(head.repositoryId === null || positive(head.repositoryId)) || !isRecord(base) ||
+        typeof base.ref !== 'string' || !base.ref || !isSha(base.sha) || !isRecord(checks) ||
+        !isCount(checks.totalCount, Number.MAX_SAFE_INTEGER) || !(checks.state === null || oneOf(checkStates, checks.state)) ||
+        (checks.totalCount === 0) !== (checks.state === null) ||
+        !(reviewDecision === null || oneOf(reviewDecisions, reviewDecision)) ||
+        !oneOf(mergeStates, mergeStateStatus) || !oneOf(mergeability, mergeable))
+        throw new GitHubReviewError('INVALID_RESPONSE');
+    return {repositoryId, number, state, mergedAt: mergedAt as string | null, draft,
+        head: {ref: head.ref, sha: head.sha, repositoryId: head.repositoryId},
+        base: {ref: base.ref, sha: base.sha}, checks: {state: checks.state, totalCount: checks.totalCount},
+        reviewDecision, mergeStateStatus, mergeable};
+}
+
+export type PullRequestPublicationStatus = ReturnType<typeof readPublicationStatus>;
+
 function readContext(value: unknown, withSubmit: boolean): ReviewContext {
     if (!isRecord(value) || !isSha(value.headRefOid) || typeof value.viewer !== 'string' || !Array.isArray(value.reviews))
         throw new GitHubReviewError('INVALID_RESPONSE');
@@ -127,7 +158,8 @@ export interface GitHubReviewApiOptions {
     /** The repository's GitHub HTTPS remote, as the connection was made for it. */
     readonly remote: string;
     /** The connection's session for `remote`; review calls ask for the review grant. */
-    readonly getSession: (remote: string, write: boolean, review?: boolean) => Promise<GitProxySession | null>;
+    readonly getSession: (remote: string, write: boolean, review?: boolean) =>
+        Promise<(GitProxySession & {readonly repositoryId?: number}) | null>;
     readonly fetch?: typeof fetch;
 }
 
@@ -143,7 +175,7 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
     let account: string | null = null;
 
     async function session(review: boolean) {
-        let value: GitProxySession | null;
+        let value: Awaited<ReturnType<typeof getSession>>;
         try {
             value = await getSession(remote, false, review);
         } catch {
@@ -163,12 +195,15 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
     }
 
     async function call(route: string, {method = 'GET', body, submitId, review = false, mutation = false, limit = 256 * 1024,
-        group, signal}: {
+        group, signal, repositoryId}: {
         method?: 'GET' | 'POST'; body?: unknown; submitId?: string; review?: boolean; mutation?: boolean; limit?: number;
-        group: 'threads' | 'body' | 'read'; signal?: AbortSignal;
+        group: 'threads' | 'body' | 'read' | 'publication'; signal?: AbortSignal; repositoryId?: number;
     }): Promise<unknown> {
         if (signal?.aborted) throw new GitHubReviewError('ABORTED');
         const current = await session(review);
+        if (repositoryId !== undefined &&
+            (current.connection.mode !== 'cloudflare' || current.repositoryId !== repositoryId))
+            throw new GitHubReviewError('INVALID_SESSION');
         const headers: Record<string, string> = {Authorization: 'Bearer ' + current.bearer, Accept: 'application/json'};
         if (body !== undefined) headers['Content-Type'] = 'application/json';
         if (submitId !== undefined) {
@@ -200,13 +235,13 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
             } catch {
                 // An untrusted error body never becomes part of a client error.
             }
-            if (code === 'GITHUB_API_UNAVAILABLE' && group !== 'read') available[group] = false;
+            if (code === 'GITHUB_API_UNAVAILABLE' && (group === 'threads' || group === 'body')) available[group] = false;
             if (code === 'GITHUB_API_UNAVAILABLE' && group === 'read') available.threads = false;
             const unknown = mutation && (unknownCodes.includes(code) || !allowed);
             throw new GitHubReviewError(unknown && !allowed ? 'UPSTREAM_FAILURE' : code,
                 {status: response.status, requestId, retryAfter, unknown});
         }
-        if (group !== 'read') available[group] = true;
+        if (group === 'threads' || group === 'body') available[group] = true;
         try {
             if (!json) throw new Error();
             return JSON.parse(await readBounded(response, limit));
@@ -233,6 +268,14 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
         available,
         /** The GitHub login of the last session this client used. */
         account: () => account,
+        /** Reads the Worker status for a specific repository ID. Check the returned head before using its CI result. */
+        async publicationStatus(number: number, repositoryId: number, signal?: AbortSignal) {
+            checkNumber(number);
+            if (!positive(repositoryId)) throw new GitHubReviewError('BAD_REQUEST');
+            const value = await call(`/pulls/${number}/publication-status`,
+                {group: 'publication', repositoryId, limit: 4096, signal});
+            return readPublicationStatus(value, number, repositoryId);
+        },
         /** Reads the viewer's pending and recent reviews; with `submitId`, resolves that submission's unknown outcome. */
         async context(number: number, submitId?: string, signal?: AbortSignal) {
             const value = await graphql('pullRequestReviewContext', number, {}, submitId, signal, false);

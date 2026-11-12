@@ -1,6 +1,6 @@
 {
   "name": "@kubohiroya/turbowarp-plus-editor-git",
-  "version": "0.20.0-issue.532",
+  "version": "0.20.0",
   "description": "Read-only local Git panel for TurboWarp Plus Editor",
   "type": "module",
   "license": "MPL-2.0",
@@ -27,6 +27,22 @@
     "./project-source-diff": {
       "types": "./dist/project-source-diff.d.ts",
       "default": "./dist/project-source-diff.js"
+    },
+    "./task-queue": {
+      "types": "./dist/task-queue.d.ts",
+      "default": "./dist/task-queue.js"
+    },
+    "./initial-commit": {
+      "types": "./dist/initial-commit.d.ts",
+      "default": "./dist/initial-commit.js"
+    },
+    "./pull-request-queue": {
+      "types": "./dist/pull-request-queue.d.ts",
+      "default": "./dist/pull-request-queue.js"
+    },
+    "./github-publication-host": {
+      "types": "./dist/github-publication-host.d.ts",
+      "default": "./dist/github-publication-host.js"
     }
   },
   "files": [
@@ -50,7 +66,7 @@
     "test:browser": "npm run build && node --test test/*.browser.js"
   },
   "peerDependencies": {
-    "@kubohiroya/turbowarp-plus-editor-auth": ">=0.3.0 <0.5.0",
+    "@kubohiroya/turbowarp-plus-editor-auth": ">=0.3.0 <0.6.0",
     "react": ">=16.14 <19",
     "react-dom": ">=16.14 <19"
   },

@@ -45,6 +45,12 @@ receive-pack の POST ごとに UUID v4 を発行し、`Git-Push-Id` に設定�
 
 Editor のホストが接続設定を渡すと、ローカル Git パネルで、現在のブランチと既存の GitHub HTTPS リモート `origin` に対して fetch、fast-forward pull、push ができます。push には接続時の明示許可が必要です。fetch は Git のメタデータを更新します。pull は作品を停止し、作業ツリーがクリーンで通常の実行権限なしファイルだけを扱える場合に使えます。変更を一時領域に組み立て、ローカルの状態を再確認してから適用します。pull 後はパネルから作品を再読込できます。
 
+### 作品の初回 push
+
+`./initial-commit` は `prepareInitialRepository` と `pushInitialRepository` を提供します。前者は選択した空のフォルダに作品・文書ファイルと `main` の初回コミットを作り、`origin`、追跡ブランチ、指定された Git 作者をローカル設定に記録します。再開用に、ホストはフォルダハンドル、操作の UUID、確認済みの GitHub リポジトリ ID と URL、初回コミットのファイル・作者・時刻、返されたコミット ID を保持します。
+
+push には同じ GitHub リポジトリ ID に紐づく書き込みセッションを使います。ローカルのコミットとリモートの参照を確認し、空のリポジトリでは Git の参照作成条件付きで push します。リモートに記録済みのコミットがある場合、再開時はパックを再送せずローカルの追跡参照を整えます。作成途中の状態と完了は `.git/` 内に記録します。途中からの再開には同じ入力を使います。ファイルの内容が変わった場合や一致する記録がない場合は、フォルダの内容を確認し、新しい操作には空のフォルダを選びます。
+
 ### 接続を使って PR を読む
 
 GitHub 接続が接続済みのとき、PR レビューは PR の中身を GitHub API ではなく同じ Git Smart HTTP の経路で読みます。非公開リポジトリの PR も読め、中身の取得には API の利用上限を使いません。`repository.fetchPullRequest(number, getSession, guard, signal)` は GitHub の `refs/pull/<番号>/head` を、すべてのブランチと一緒に fetch します（広告と pack の 2 件）。フォークからの PR も base のリポジトリのこの ref で取れます。ブランチは fetch と同じく `refs/remotes/origin/*` を更新します。`repository.readPullRequest(head, {sha, branch})` は、手元の Git オブジェクトから、ベースとの merge base と head を比べます。変更されたパス（内容が同じ移動は名前の変更として対にします）、`project.source.json` ごとのブロック差分、同じコミットから読むサムネイルを返します。プロキシの経路と GitHub App の権限は変えません。
@@ -154,6 +160,16 @@ const choice = await openProjectComparison(document, {
     renderBlock, locale: 'ja'
 });
 ```
+
+## コミットをプルリクエストとして送る
+
+`/pull-request-queue` の `createPullRequestQueue` に、利用者が確認したリポジトリ ID、対象ブランチ、コミット OID、PR と Issue の内容を登録します。固定したコミットは `pushPublicationCommit` でジョブ専用の `tw-plus/pr-…` ブランチに送ります。その後のローカル編集やコミットは別の変更として扱われます。
+
+キューは処理前に進捗を記録し、Issue・PR の作成応答が途切れた場合は、本文のジョブ識別子と PR の head を照合します。`advance` は一段階進め、`watch` は CI や非同期マージを待ちます。チェックが無い場合は明示の確認を待ちます。GitHub で対象 PR のマージを確認してから、選択された Issue をクローズします。
+
+`/github-publication-host` は、GitHub のアクセストークンを保持するホスト向けです。利用者が承認した操作ごとに、照合済みリポジトリ ID と必要な権限を持つ短期トークンを渡します。ホストはマージ直前に head、base、差分と CI・レビュー条件を照合し、GitHub へ head SHA とルールをバイパスしない設定を送ります。ネイティブのスタック PR は通常 PR の自動マージ対象外です。
+
+Cloudflare 接続では `createGitHubReviewApi` の `publicationStatus(number, repositoryId)` が Worker から head、base、CI とレビューの状態を取得します。Worker で `checks-read` を有効にし、通常の Git セッションを同じリポジトリ ID にひもづけます。キューで利用する際は、返された head と base を登録済みの情報と照合します。
 
 ## 公開
 

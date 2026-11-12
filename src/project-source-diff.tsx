@@ -9,6 +9,7 @@ import './project-source-diff.css';
 
 export {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
 export {createGitHubReviewApi, GitHubReviewError, isReviewThreadPath} from './github-review-api.js';
+export type {PullRequestPublicationStatus} from './github-review-api.js';
 export type {GitHubReviewApi, GitHubReviewApiOptions, GitHubReviewErrorCode, ReviewContext, ReviewEvent} from './github-review-api.js';
 export {checkReview, discardReview, emptyReviewDraft, forgetReviewSubmission, planReview, probeReviewRoutes, readReviewDraft,
     reviewBody, reviewProblem, reviewRoute, sendReview, subscribeReviewDraft, writeReviewDraft} from './review-submit.js';

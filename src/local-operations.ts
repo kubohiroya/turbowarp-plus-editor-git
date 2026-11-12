@@ -24,14 +24,46 @@ export const pullRequestBranch = (number: number) => `pr/${number}`;
 
 const missing = (error: unknown) => ['ENOENT', 'ENOTDIR', 'NotFoundError'].includes(errorCode(error) ?? '');
 
+export interface CommitSelection {
+    branch: string;
+    head: string | null;
+    files: readonly {path: string; oid: string | null}[];
+}
+
+interface QueuedCommit {
+    selection: CommitSelection;
+    timestamp: number;
+    prepared(oid: string): Promise<void>;
+}
+
+let mutationTail = Promise.resolve();
+export function withGitMutationLock<T>(execute: () => Promise<T>) {
+    if (globalThis.navigator?.locks) return navigator.locks.request('tw-plus-git-mutation', execute);
+    const result = mutationTail.then(execute);
+    mutationTail = result.then(() => {}, () => {});
+    return result;
+}
+
 /**
  * Stages, unstages or commits in the granted repository. Like pull, Git's writes are collected first and applied
  * after the files they replace are checked again; a failure part way puts back what was applied. Only `.git/index`,
  * objects and the current branch ref are written. The work tree and `.git/config` are never written.
  */
 export async function runLocalOperation(root: FileSystemDirectoryHandle, operation: LocalOperation, guard: () => void) {
+    return withGitMutationLock(async () => {await applyLocalOperation(root, operation, guard);});
+}
+
+/** The queue holds the Git mutation lock from its journal read through its final state write. */
+export function applyQueuedCommit(root: FileSystemDirectoryHandle, message: string, author: GitAuthor | undefined,
+    guard: () => void, queued: QueuedCommit) {
+    return applyLocalOperation(root, {kind: 'commit', message, author}, guard, queued);
+}
+
+async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: LocalOperation, guard: () => void,
+    queued?: QueuedCommit) {
     const execute = async () => {
         guard();
+        let commitOid: string | undefined;
         const switching = operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout);
         const transaction = createMutationFs(root, switching);
         const options = {fs: transaction.fs, dir: '/', gitdir: '/.git', cache: {}};
@@ -43,6 +75,21 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
             } catch (error) {
                 if (missing(error)) return false;
                 throw error;
+            }
+        };
+        const stage = async (paths: readonly string[]) => {
+            // The browser cannot see executable bits or links: staging such a file would change its mode in Git.
+            const modes = new Map<string, number>();
+            await git.walk({...options, trees: [git.STAGE()], map: async (path, [entry]) => {
+                if (entry && path !== '.' && await entry.type() === 'blob') modes.set(path, await entry.mode());
+                return true;
+            }});
+            for (const path of paths) {
+                pathParts(path);
+                const mode = modes.get(path);
+                if (mode !== undefined && mode !== 0o100644) throw new GitPanelError('unsupported');
+                if (await exists('/' + path)) await git.add({...options, filepath: path});
+                else await git.remove({...options, filepath: path});
             }
         };
         // Another tool is in the middle of a merge, rebase or its own write: leave the repository to it.
@@ -112,19 +159,7 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
                 if (await git.currentBranch(options) !== name) throw new GitPanelError('changed');
             }
         } else if (operation.kind === 'stage') {
-            // The browser cannot see executable bits or links: staging such a file would change its mode in Git.
-            const modes = new Map<string, number>();
-            await git.walk({...options, trees: [git.STAGE()], map: async (path, [entry]) => {
-                if (entry && path !== '.' && await entry.type() === 'blob') modes.set(path, await entry.mode());
-                return true;
-            }});
-            for (const path of operation.paths) {
-                pathParts(path);
-                const mode = modes.get(path);
-                if (mode !== undefined && mode !== 0o100644) throw new GitPanelError('unsupported');
-                if (await exists('/' + path)) await git.add({...options, filepath: path});
-                else await git.remove({...options, filepath: path});
-            }
+            await stage(operation.paths);
         } else if (operation.kind === 'unstage') {
             for (const path of operation.paths) {
                 pathParts(path);
@@ -143,12 +178,75 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
             const name = await configured('user.name') ?? operation.author?.name?.trim();
             const email = await configured('user.email') ?? operation.author?.email?.trim();
             if (!name || !email) throw new GitPanelError('author');
+            if (queued) {
+                const {head, branch, files} = queued.selection;
+                if (ref !== branch || await readLocalRef(options, 'HEAD') !== head) throw new GitPanelError('changed');
+                const selected = new Map(files.map(file => [file.path, file.oid]));
+                await assertIndex(options, head, selected, false);
+                await assertWorktree(options.fs, files);
+                await stage([...selected.keys()]);
+                await assertIndex(options, head, selected, true);
+            }
             const staged = (await git.statusMatrix({...options, refresh: false})).some(([, head, , stage]) => head !== stage);
             if (!staged) throw new GitPanelError('nothingStaged');
-            await git.commit({...options, message: message + '\n', author: {name, email}});
+            const author = queued ? {name, email, timestamp: queued.timestamp, timezoneOffset: 0} : {name, email};
+            commitOid = await git.commit({...options, message: message + '\n', author, committer: queued ? author : undefined});
+            if (queued) {
+                await queued.prepared(commitOid);
+                // A journal write can yield to another editor or a command-line tool.
+                await assertWorktree(createReadOnlyFs(root), queued.selection.files);
+            }
         }
         guard();
         await transaction.commit(guard);
+        return commitOid;
     };
-    return globalThis.navigator?.locks ? navigator.locks.request('tw-plus-git-mutation', execute) : execute();
+    return execute();
+}
+
+type GitReadOptions = Omit<Parameters<typeof git.resolveRef>[0], 'ref'>;
+
+export async function readLocalRef(options: GitReadOptions, ref: string) {
+    try {return await git.resolveRef({...options, ref});}
+    catch (error) {
+        if (errorCode(error) !== 'NotFoundError') throw error;
+        return null;
+    }
+}
+
+async function assertWorktree(fs: {promises: Pick<ReturnType<typeof createReadOnlyFs>['promises'], 'readFile'>},
+    files: CommitSelection['files']) {
+    for (const {path, oid} of files) {
+        let actual: string | null = null;
+        try {
+            const bytes = await fs.promises.readFile('/' + path) as Uint8Array;
+            actual = (await git.hashBlob({object: bytes})).oid;
+        } catch (error) {
+            if (!missing(error)) throw error;
+        }
+        if (actual !== oid) throw new GitPanelError('changed');
+    }
+}
+
+/** Refuse unrelated staged changes and any staged version that the approved worktree bytes would replace. */
+async function assertIndex(options: GitReadOptions, head: string | null, selected: Map<string, string | null>, prepared: boolean) {
+    const seen = new Set<string>();
+    const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+    await git.walk({...options, trees: [git.TREE({ref: head ?? emptyTree}), git.STAGE()],
+        map: async (path, [before, staged]) => {
+            if (path === '.') return true;
+            const beforeType = await before?.type();
+            const stagedType = await staged?.type();
+            const old = before && beforeType !== 'tree' ? {oid: await before.oid(), mode: await before.mode()} : null;
+            const next = staged && stagedType !== 'tree' ? {oid: await staged.oid(), mode: await staged.mode()} : null;
+            const differs = old?.oid !== next?.oid || old?.mode !== next?.mode;
+            if (selected.has(path)) {
+                seen.add(path);
+                if ((old && old.mode !== 0o100644) || (next && next.mode !== 0o100644)) throw new GitPanelError('unsupported');
+            }
+            if ((differs || (prepared && selected.has(path))) &&
+                (!selected.has(path) || selected.get(path) !== (next?.oid ?? null))) throw new GitPanelError('changed');
+            return true;
+        }});
+    if (prepared && [...selected].some(([path, oid]) => oid !== null && !seen.has(path))) throw new GitPanelError('changed');
 }
