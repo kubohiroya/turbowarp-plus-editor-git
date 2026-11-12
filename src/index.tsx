@@ -7,8 +7,9 @@ import type {ChangedFile} from './project-change-model.js';
 import {openRepository} from './repository.js';
 import type {BranchRefs, Repository, Snapshot, FileChange, FileDiff, ChangeGroup, HistoryCommit, HistoryCursor} from './repository.js';
 import {BranchButton, useBranchSnackbar} from './branch-button.js';
-import {changeMarks} from './change-marks.js';
-import type {ChangeMark} from './change-marks.js';
+import {changeMarks, fileStatuses} from './change-marks.js';
+import type {ChangeMark, FileStatus, MergedFileVersions} from './change-marks.js';
+import {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
 import type {BranchButtonState} from './branch-button.js';
 import {HistoryGraph} from './history-graph-view.js';
 import type {HistoryActionResult} from './history-graph-view.js';
@@ -46,7 +47,7 @@ export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.
 export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
 export {changeMarks} from './change-marks.js';
-export type {ChangeMark} from './change-marks.js';
+export type {ChangeMark, FileStatus} from './change-marks.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
 export {pullRequestBranch} from './local-operations.js';
 
@@ -940,5 +941,103 @@ export function followChangeMarks(vm: object, directory: FileSystemDirectoryHand
         stopped = true;
         unregister();
         unfollow();
+    };
+}
+
+/** Watches the open folder's Git status independently of the visibility of the Git panel. */
+export function followFileStatuses(vm: object, directory: FileSystemDirectoryHandle,
+    listener: (statuses: ReadonlyMap<string, FileStatus>) => void) {
+    let repository: Repository | null | undefined;
+    let unfollow = () => {};
+    let stopWatching = () => {};
+    let generation = 0;
+    const follow = async (next: Repository | null | undefined) => {
+        if (next === repository) return;
+        repository = next;
+        const ticket = ++generation;
+        stopWatching();
+        listener(new Map());
+        if (!next) return;
+        const path = await next.root.resolve(directory).catch(() => null);
+        if (!path || generation !== ticket) return;
+        const scope = path.join('/');
+        let fingerprint: string | undefined;
+        let local: Awaited<ReturnType<Repository['readFileStatus']>> | undefined;
+        let merged: MergedFileVersions = new Map();
+        let remoteBranch = '';
+        let remoteKey = '';
+        let remoteRequest: AbortController | undefined;
+        let checkAgain = 0;
+        const publish = () => {
+            if (local) listener(fileStatuses(local.changes, local.committed, local.upstream, merged, scope));
+        };
+        const checkRemote = () => {
+            const name = gitHubRepositoryFromOrigin(local?.remote);
+            const pushed = local?.pushed;
+            const branch = name && pushed ? name + '@' + local?.branch : '';
+            const key = branch && pushed ? branch + '@' + pushed : '';
+            if (branch !== remoteBranch) {
+                remoteBranch = branch;
+                merged = new Map();
+            }
+            if (key !== remoteKey) {
+                remoteRequest?.abort();
+                remoteRequest = undefined;
+                remoteKey = key;
+                checkAgain = 0;
+            }
+            if (!name || !pushed || remoteRequest || Date.now() < checkAgain) return;
+            const request = new AbortController();
+            remoteRequest = request;
+            const timeout = setTimeout(() => request.abort(), 10000);
+            void createGitHubPullRequests(name).mergedFileVersions(pushed, scope, request.signal).then(result => {
+                if (!request.signal.aborted) {
+                    merged = new Map([...merged, ...result]);
+                    publish();
+                }
+            }).catch(() => {
+                // The local statuses are still usable when GitHub can't confirm a merge.
+            }).finally(() => {
+                clearTimeout(timeout);
+                if (remoteRequest === request) {
+                    remoteRequest = undefined;
+                    checkAgain = Date.now() + 120000;
+                }
+            });
+        };
+        const stop = watchRepository(document, next.root, async stopped => {
+            const probe = await next.probe(scope, true);
+            if (stopped() || probe === 'locked') return;
+            if (probe === fingerprint) {
+                checkRemote();
+                return;
+            }
+            try {
+                const status = await next.readFileStatus(scope, probe);
+                if (stopped()) return;
+                local = status;
+                fingerprint = probe;
+                checkRemote();
+                publish();
+            } catch {
+                if (stopped()) return;
+                local = undefined;
+                fingerprint = undefined;
+                listener(new Map());
+            }
+        });
+        stopWatching = () => {stop(); remoteRequest?.abort();};
+    };
+    const unregister = findController(vm, controller => {
+        unfollow();
+        const update = () => void follow(controller?.repository);
+        unfollow = controller?.follow(update) ?? (() => {});
+        update();
+    });
+    return () => {
+        generation++;
+        unregister();
+        unfollow();
+        stopWatching();
     };
 }

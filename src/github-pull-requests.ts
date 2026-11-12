@@ -2,6 +2,7 @@ import {createProjectSourceDiff, isRecord} from './project-source-patch.js';
 import type {ProjectSourceReviewFile} from './project-source-review.js';
 import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from './project-asset-paths.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
+import type {FileVersion, MergedFileVersions} from './change-marks.js';
 
 type ErrorCode = 'unavailable' | 'rateLimit' | 'failed' | 'changed' | 'tooManyFiles';
 export class PullRequestError extends Error {
@@ -165,6 +166,49 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
         await request(repoPath(name) + '/contents/' + contentPath(path) + '?ref=' + revision, signal, 'application/vnd.github.raw+json'), sourceLimit);
 
     return {
+        /** File versions actually integrated by a merged PR associated with one of the known commits. */
+        async mergedFileVersions(sha: string, scope: string, signal: AbortSignal): Promise<MergedFileVersions> {
+            if (!isSha(sha)) throw invalidResponse();
+            const associated = await json(repo + '/commits/' + sha + '/pulls?per_page=10', signal);
+            if (!Array.isArray(associated)) throw invalidResponse();
+            const pulls = new Map<number, string>();
+            for (const value of associated) {
+                if (!isRecord(value) || typeof value.merged_at !== 'string' || !isSha(value.merge_commit_sha)) continue;
+                const {number} = readSummary(value);
+                const base = readRevision(value.base);
+                if (base.repository?.toLowerCase() === repository.toLowerCase()) pulls.set(number, value.merge_commit_sha);
+            }
+            const versions = new Map<string, FileVersion[]>();
+            for (const [number, merge] of pulls) {
+                const commit = await json(repo + '/git/commits/' + merge, signal);
+                const tree = isRecord(commit) ? commit.tree : null;
+                if (!isRecord(tree) || !isSha(tree.sha)) throw invalidResponse();
+                const result = await json(repo + '/git/trees/' + tree.sha + '?recursive=1', signal);
+                if (!isRecord(result) || result.truncated !== false || !Array.isArray(result.tree)) continue;
+                const entries = new Map<string, FileVersion>();
+                for (const entry of result.tree) {
+                    if (!isRecord(entry) || entry.type !== 'blob' || typeof entry.path !== 'string' || !isSha(entry.sha) ||
+                        (entry.mode !== '100644' && entry.mode !== '100755') ||
+                        (scope && !entry.path.startsWith(scope + '/'))) continue;
+                    entries.set(entry.path, {oid: entry.sha, mode: parseInt(entry.mode, 8)});
+                }
+                for (let page = 1; page <= 30; page++) {
+                    const files = await json(repo + '/pulls/' + number + '/files?per_page=100&page=' + page, signal);
+                    if (!Array.isArray(files)) throw invalidResponse();
+                    for (const file of files) {
+                        if (!isRecord(file) || typeof file.filename !== 'string' || file.status === 'removed') continue;
+                        const version = entries.get(file.filename);
+                        // A merge may resolve a file differently from the PR. In that case its head version did not land.
+                        if (!version || version.oid !== file.sha) continue;
+                        const previous = versions.get(file.filename);
+                        if (previous) previous.push(version);
+                        else versions.set(file.filename, [version]);
+                    }
+                    if (files.length < 100) break;
+                }
+            }
+            return versions;
+        },
         /** Reads one pull request's title, description, state and both revisions, without its files (one request). */
         async metadata(number: number, signal: AbortSignal) {
             if (!Number.isSafeInteger(number) || number < 1) throw invalidResponse();
