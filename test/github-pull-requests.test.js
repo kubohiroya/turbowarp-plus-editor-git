@@ -23,6 +23,30 @@ test('GitHub HTTPS and SSH origins resolve without forwarding credentials or que
     }
 });
 
+test('merge evidence is scoped to PR files whose exact versions landed in the merge result', async () => {
+    const path = 'projects/demo/project.source.json';
+    const merge = 'd'.repeat(40), tree = 'e'.repeat(40);
+    const removed = 'projects/demo/old.js', resolved = 'projects/demo/resolved.js', unrelated = 'projects/demo/other.js';
+    const entry = (path, sha) => ({type: 'blob', mode: '100644', path, sha});
+    const client = createGitHubPullRequests('owner/game', async (url, options) => {
+        assert.equal(options.signal, signal);
+        switch (new URL(url).pathname) {
+        case '/repos/owner/game/commits/' + head + '/pulls':
+            return Response.json([pr, {...pr, merged_at: '2026-11-13T00:00:00Z', merge_commit_sha: merge}]);
+        case '/repos/owner/game/git/commits/' + merge: return Response.json({tree: {sha: tree}});
+        case '/repos/owner/game/git/trees/' + tree:
+            return Response.json({truncated: false, tree: [entry(path, head), entry(removed, head), entry(resolved, base),
+                entry(unrelated, head), entry('projects/demo-copy/project.source.json', head)]});
+        case '/repos/owner/game/pulls/42/files':
+            return Response.json([{filename: path, status: 'modified', sha: head},
+                {filename: removed, status: 'removed', sha: head}, {filename: resolved, status: 'modified', sha: head},
+                {filename: 'projects/demo-copy/project.source.json', status: 'added', sha: head}]);
+        default: throw new Error('Unexpected endpoint: ' + url);
+        }
+    });
+    assert.deepEqual([...await client.mergedFileVersions(head, 'projects/demo', signal)], [[path, [{oid: head, mode: 0o100644}]]]);
+});
+
 test('a fork PR uses the immutable merge base and head source, including renamed paths', async () => {
     const requests = [];
     const client = createGitHubPullRequests('owner/game', async (url, options) => {

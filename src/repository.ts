@@ -9,6 +9,7 @@ import type {LocalOperation} from './local-operations.js';
 import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
 import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from './project-asset-paths.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
+import type {FileVersion} from './change-marks.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
 export {pullRequestRef} from './remote-operations.js';
@@ -47,7 +48,7 @@ export interface Commit {
     author: string;
     timestamp: number;
 }
-interface Entry {oid: string; mode: number}
+type Entry = FileVersion;
 /** Where one version of a file is read from: a commit or tree, the index, or the working tree. */
 type Source = {kind: 'tree'; ref: string} | {kind: 'index'} | {kind: 'worktree'};
 /**
@@ -155,7 +156,14 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     const options = {fs, dir: '/', gitdir: '/.git'};
     let cache = {};
     let pushNeedsFetch = false;
-    const metadata = async (): Promise<Metadata> => {
+    const statusTrackingRef = async (branch: string, reader = fs) => {
+        const remote = await git.getConfig({...options, fs: reader, path: 'branch.' + branch + '.remote'});
+        if (remote && remote !== 'origin') return undefined;
+        const merge = await git.getConfig({...options, fs: reader, path: 'branch.' + branch + '.merge'});
+        if (!merge) return trackingRef('refs/heads/' + branch);
+        if (merge.startsWith('refs/heads/') && validBranch(merge.slice('refs/heads/'.length))) return trackingRef(merge);
+    };
+    const metadata = async (includeConfiguredTracking = false): Promise<Metadata> => {
         const head = await readOptional(fs, '/.git/HEAD');
         if (!head) throw new GitPanelError('invalid');
         const text = new TextDecoder().decode(head).trim();
@@ -164,6 +172,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             const ref = text.slice(5);
             pathParts(ref);
             paths.push('/.git/' + ref, '/.git/' + trackingRef(ref));
+            const tracking = includeConfiguredTracking && await statusTrackingRef(ref.slice('refs/heads/'.length));
+            if (tracking && tracking !== trackingRef(ref)) paths.push('/.git/' + tracking);
         } else if (!/^[0-9a-f]{40}$/.test(text)) throw new GitPanelError('invalid');
         const result: Metadata = new Map();
         for (const path of paths) {
@@ -188,9 +198,10 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     const stamp = (file: File | null) => file ? `${file.size}:${file.lastModified}` : '-';
     /**
      * Fingerprints Git metadata and the work tree in `scope` from sizes and modification times, without
-     * reading file contents other than HEAD. Returns 'locked' while Git holds a lock on that metadata.
+     * reading file contents other than HEAD and, when following the configured tracking ref, config.
+     * Returns 'locked' while Git holds a lock on that metadata.
      */
-    const probe = async (scope = ''): Promise<string> => {
+    const probe = async (scope = '', includeConfiguredTracking = false): Promise<string> => {
         const parts = pathParts(scope);
         const headFile = await optionalFile('.git/HEAD');
         if (!headFile) return 'locked';
@@ -198,7 +209,11 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const paths = ['.git/HEAD', '.git/index', '.git/packed-refs', '.git/shallow', '.git/config'];
         if (head.startsWith('ref: refs/heads/')) {
             try {pathParts(head.slice(5));} catch {return 'locked';}
-            paths.push('.git/' + head.slice(5), '.git/' + trackingRef(head.slice(5)));
+            const ref = head.slice(5);
+            paths.push('.git/' + ref, '.git/' + trackingRef(ref));
+            const tracking = includeConfiguredTracking &&
+                await statusTrackingRef(ref.slice('refs/heads/'.length), createReadOnlyFs(root));
+            if (tracking && tracking !== trackingRef(ref)) paths.push('.git/' + tracking);
         }
         const lines: string[] = [];
         for (const path of paths) {
@@ -324,6 +339,13 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
         const upstream = await upstreamRelation(branch || undefined, head);
+        const {changes} = await readChanges(scope, head, filepaths);
+        if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
+        await fs.checkReads();
+        return {branch, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
+            upstream};
+    };
+    const readChanges = async (scope: string, head: string | null, filepaths?: string[]) => {
         const matrix = await git.statusMatrix({...options, cache, refresh: false,
             filepaths: filepaths ?? [scope || '.'], ignored: Boolean(filepaths)});
         const staged = await entries(null, scope);
@@ -344,10 +366,33 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                     oldMode: next?.mode ?? null, newMode: bytes ? (next?.mode ?? 0o100644) : null});
             }
         }
-        if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
+        return {changes, committed};
+    };
+    const readFileStatus = async (scope: string, fingerprint: string) => {
+        fs.clearReads();
+        cache = {};
+        const before = await metadata(true);
+        const {branch, head} = await readRefs();
+        const {changes, committed} = await readChanges(scope, head);
+        const remote = await git.getConfig({...options, path: 'remote.origin.url'});
+        let upstream = new Map<string, Entry>();
+        let pushed: string | undefined;
+        if (remote && branch && !pushNeedsFetch) {
+            const tracking = await statusTrackingRef(branch);
+            if (tracking) {
+                try {
+                    const oid = await git.resolveRef({...options, ref: tracking});
+                    upstream = oid === head ? committed : await entries(oid, scope);
+                    pushed = oid;
+                } catch {
+                    // The tracking ref or some of its objects are not available locally.
+                }
+            }
+        }
+        if (!sameMetadata(before, await metadata(true))) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
-            upstream};
+        if (fingerprint !== await probe(scope, true)) throw new GitPanelError('changed');
+        return {changes, committed, upstream, branch, pushed, remote};
     };
     interface HistoryNode {commit: HistoryCommit; time: number; children: number; expanded: boolean}
     interface HistoryWalk {nodes: Map<string, HistoryNode>; pending: Set<HistoryNode>; frontier: Set<HistoryNode>}
@@ -752,6 +797,9 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             }
         }),
         read: (scope?: string, filepaths?: string[]) => serial(() => read(scope, filepaths)),
+        /** Reads the saved files against the index, HEAD and the last known upstream, under one folder. */
+        readFileStatus: (scope: string, fingerprint: string) =>
+            serial(() => readFileStatus(pathParts(scope).join('/'), fingerprint)),
         /**
          * The current branch, HEAD and the branch names, read from refs only. Cheap enough to follow branch changes made
          * by other tools while nothing else is read; `read` returns the same fields.
