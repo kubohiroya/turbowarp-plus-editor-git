@@ -39,7 +39,7 @@ export {openProjectComparison} from './project-comparison.js';
 export {openProjectSourceTabs} from './project-source-tabs.js';
 export type {ProjectSourceTabsFile, ProjectSourceTabsOptions} from './project-source-tabs.js';
 export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectComparisonSection} from './project-comparison.js';
-export type {BranchRefs, PullRequestBase, PullRequestFetch, PullRequestFiles, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
+export type {BranchRefs, HeadFile, PullRequestBase, PullRequestFetch, PullRequestFiles, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
 export {BranchButton} from './branch-button.js';
 export type {BranchButtonActions, BranchButtonProps, BranchButtonState} from './branch-button.js';
 export {HistoryGraph, laneColors} from './history-graph-view.js';
@@ -970,6 +970,25 @@ function HistoryEntry({vm, locale}: {vm: object; locale: string}) {
 export function renderHistoryView(createElement: (component: any, props: any, ...children: any[]) => any,
     {vm, locale = 'en'}: {vm: object; locale?: string}) {
     return createElement(HistoryEntry, {vm, locale});
+}
+
+/** Reads the baseline of a project-folder file from a repository already accessible to the Editor. */
+export async function readProjectHeadFile(vm: object, directory: FileSystemDirectoryHandle, path: string, limit: number) {
+    const controller = controllers.get(vm);
+    if (!controller) return null;
+    const repository = controller.repository;
+    if (repository) {
+        const scope = await repository.root.resolve(directory);
+        if (scope) return repository.readHeadFile([...scope, path].join('/'), limit);
+    }
+    // The project itself may be the repository root even before a repository is chosen in the Git panel.
+    try {
+        await directory.getDirectoryHandle('.git');
+    } catch (error) {
+        if (['NotFoundError', 'TypeMismatchError'].includes((error as DOMException).name)) return null;
+        throw error;
+    }
+    return (await openRepository(directory)).readHeadFile(path, limit);
 }
 
 /**
