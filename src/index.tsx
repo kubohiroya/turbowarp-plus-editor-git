@@ -14,7 +14,7 @@ import type {BranchButtonState} from './branch-button.js';
 import {HistoryGraph} from './history-graph-view.js';
 import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
-import {GitPanelError} from './filesystem.js';
+import {GitPanelError, pathParts} from './filesystem.js';
 import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
@@ -87,13 +87,21 @@ export interface GitPanelRequest {
     mount(element: HTMLElement, close: () => void): {requestClose(): void; dispose(): void};
 }
 type BranchOperation = Extract<LocalOperation, {kind: 'createBranch' | 'switchBranch'}>;
+type ExplorerEntry = {path: string; kind: 'file' | 'directory'};
+type ExplorerOperation = 'stage' | 'unstage';
+export type ExplorerGitActions = {
+    change(kind: ExplorerOperation, entry: ExplorerEntry, isCurrent: () => boolean): Promise<HistoryActionResult>;
+    refresh(): Promise<void>;
+};
 /** The panel's side of its entries: set by the panel as it renders, used by the branch buttons and `mountGitPanel`'s result. */
 interface Controller {
     open(locale: string): void;
-    refresh(automatic?: boolean): Promise<void>;
+    refresh(automatic?: boolean, whileHidden?: boolean): Promise<void>;
     /** Asks for a repository, then opens the panel on it. */
     choose(locale: string): Promise<void>;
     changeBranch(operation: BranchOperation): Promise<HistoryActionResult>;
+    changeExplorerEntry(repository: Repository, directory: FileSystemDirectoryHandle, kind: ExplorerOperation,
+        entry: ExplorerEntry, isCurrent: () => boolean): Promise<HistoryActionResult>;
     /** Reloads the project folder selected in the panel, as Reload Project does. */
     reload(): void;
     /** What the branch buttons show. */
@@ -112,7 +120,8 @@ interface Controller {
 function createController(): Controller {
     const listeners = new Set<() => void>();
     const controller: Controller = {
-        open() {}, async refresh() {}, async choose() {}, async changeBranch() {return {done: false};}, reload() {},
+        open() {}, async refresh() {}, async choose() {}, async changeBranch() {return {done: false};},
+        async changeExplorerEntry() {return {done: false};}, reload() {},
         branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
             project: false},
         repository: null,
@@ -224,7 +233,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     current.current = state;
     const epoch = useRef(0);
     const running = useRef(false);
-    const refreshPending = useRef(false);
+    const refreshPending = useRef<false | 'panel' | 'explorer'>(false);
     const remoteRequest = useRef<AbortController>();
     const alive = useRef(true);
     const opening = useRef(false);
@@ -275,8 +284,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             }
             if (automatic) {background.current = null; settle();}
             if (refreshPending.current) {
+                const refreshExplorer = refreshPending.current === 'explorer';
                 refreshPending.current = false;
-                queueMicrotask(() => void controller.refresh());
+                queueMicrotask(() => void controller.refresh(false, refreshExplorer));
             }
         }
     };
@@ -295,14 +305,14 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         if (slot) slot.close();
         else setVisible(false);
     };
-    controller.refresh = async (automatic = false) => {
+    controller.refresh = async (automatic = false, whileHidden = false) => {
         if (!alive.current || !current.current.repository) return;
-        if (!shownRef.current) {
+        if (!shownRef.current && !whileHidden) {
             deferred.current = true;
             return;
         }
         if (running.current) {
-            if (!automatic) refreshPending.current = true;
+            if (!automatic) refreshPending.current = whileHidden ? 'explorer' : refreshPending.current || 'panel';
             return;
         }
         await run(async () => {
@@ -478,19 +488,29 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             reviewGranted: () => settings.getView().review === true} : undefined;
     }, [host]);
     const [message, setMessage] = useState('');
-    const localOperation = (operation: LocalOperation, notice?: string) => {
+    const localOperation = (request: LocalOperation | ((repository: Repository, guard: () => void) => Promise<LocalOperation>),
+        notice?: string, isCurrent = () => true) => {
         const repository = current.current.repository;
         if (!repository || !host.localWrite) return Promise.resolve<HistoryActionResult>({done: false});
         return run(async () => {
             const ticket = epoch.current;
-            await repository.localOperation(operation, () => {
-                if (epoch.current !== ticket) throw new GitPanelError('changed');
+            const guard = () => {
+                if (epoch.current !== ticket || current.current.repository !== repository || !isCurrent()) {
+                    throw new GitPanelError('changed');
+                }
+            };
+            guard();
+            const operation = typeof request === 'function' ? await request(repository, guard) : request;
+            const check = () => {
+                guard();
                 // Staging records the saved files; edits still in the Editor would be left out without a word.
                 if (operation.kind === 'stage' && host.isProjectDirty()) throw new GitPanelError('saveFirst');
                 // Switching replaces the files the Editor opened, like pull.
                 if ((operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout)) &&
                     (host.isProjectDirty() || host.isProjectRunning?.())) throw new GitPanelError('switchUnsafe');
-            });
+            };
+            check();
+            if (!('paths' in operation) || operation.paths.length) await repository.localOperation(operation, check);
             if (operation.kind === 'commit') setMessage('');
             const snapshot = await repository.read(current.current.project ?? '');
             return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null, notice};
@@ -577,6 +597,19 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const loadAsset = useMemo(() => state.repository && state.snapshot && state.selected ?
         state.repository.assetLoader(state.snapshot, state.selected) : undefined, [state.repository, state.snapshot, state.selected]);
     controller.changeBranch = changeBranch;
+    controller.changeExplorerEntry = (repository, directory, kind, entry, isCurrent) => localOperation(async (active, guard) => {
+        const parts = await active.root.resolve(directory);
+        const relative = pathParts(entry.path);
+        if (!parts || !relative.length || relative.join('/') !== entry.path) throw new GitPanelError('invalid');
+        const path = [...parts, ...relative].join('/');
+        if (pathParts(path).some(part => part.toLowerCase() === '.git')) throw new GitPanelError('invalid');
+        const snapshot = await active.read(parts.join('/'));
+        guard();
+        if (!snapshot.branch) throw new GitPanelError('unsupported');
+        const paths = snapshot.changes.filter(change => (kind === 'stage' ? change.group !== 'staged' : change.group === 'staged') &&
+            (change.path === path || (entry.kind === 'directory' && change.path.startsWith(`${path}/`)))).map(change => change.path);
+        return {kind, paths};
+    }, undefined, () => current.current.repository === repository && isCurrent());
     controller.reload = () => {
         if (current.current.project !== null) void openProject(current.current.project);
     };
@@ -1039,5 +1072,36 @@ export function followFileStatuses(vm: object, directory: FileSystemDirectoryHan
         unregister();
         unfollow();
         stopWatching();
+    };
+}
+
+/** Gives an explorer write actions only while its directory belongs to the selected writable repository. */
+export function followExplorerGit(vm: object, directory: FileSystemDirectoryHandle,
+    listener: (actions?: ExplorerGitActions) => void) {
+    let ticket = 0;
+    let unfollow = () => {};
+    const unregister = findController(vm, controller => {
+        unfollow();
+        let previous: Repository | null | undefined;
+        const update = async () => {
+            const repository = controller?.branch.writable && controller.branch.branch ? controller.repository : null;
+            if (repository === previous) return;
+            previous = repository;
+            const current = ++ticket;
+            listener();
+            if (!repository || !controller || !await repository.root.resolve(directory).catch(() => null) || current !== ticket) return;
+            listener({
+                change: (kind, entry, isCurrent) => controller.changeExplorerEntry(repository, directory, kind, entry,
+                    () => current === ticket && isCurrent()),
+                refresh: () => current === ticket ? controller.refresh(false, true) : Promise.resolve()
+            });
+        };
+        unfollow = controller?.follow(() => void update()) ?? (() => {});
+        void update();
+    });
+    return () => {
+        ticket++;
+        unregister();
+        unfollow();
     };
 }
