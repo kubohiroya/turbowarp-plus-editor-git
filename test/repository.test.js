@@ -93,6 +93,36 @@ test('reads packed commits and detached HEAD, with commit changes and an unborn 
     assert.ok(initial.changes.every(change => change.group === 'untracked'));
 });
 
+test('reads the index, HEAD and configured upstream versions independently by folder', async t => {
+    const {git, write, handle} = await fixture(t);
+    const path = 'projects/demo/project.source.json';
+    git('remote', 'add', 'origin', 'https://github.com/owner/game.git');
+    git('config', 'branch.main.remote', 'origin');
+    git('config', 'branch.main.merge', 'refs/heads/work');
+    git('update-ref', 'refs/remotes/origin/work', 'HEAD');
+    const repo = await openRepository(handle);
+    const scope = 'projects/demo';
+    const read = async () => repo.readFileStatus(scope, await repo.probe(scope, true));
+    const initial = await read();
+    assert.equal(initial.pushed, git('rev-parse', 'HEAD'));
+    assert.deepEqual([...initial.committed.keys()], [path]);
+    assert.deepEqual(initial.committed.get(path), initial.upstream.get(path));
+    await write(path, '{"targets":[{"name":"Staged"}]}\n');
+    git('add', path);
+    await write(path, '{"targets":[{"name":"Edited"}]}\n');
+    const edits = await read();
+    assert.deepEqual(edits.changes.map(change => change.group), ['staged', 'unstaged']);
+    git('commit', '-qm', 'save index');
+    git('checkout', '--', path);
+    const committed = await read();
+    assert.equal(committed.changes.length, 0);
+    assert.notDeepEqual(committed.committed.get(path), committed.upstream.get(path));
+    git('update-ref', 'refs/remotes/origin/work', 'HEAD');
+    assert.notEqual(await repo.probe(scope, true), initial.probe);
+    const pushed = await read();
+    assert.deepEqual(pushed.committed.get(path), pushed.upstream.get(path));
+});
+
 test('returns both texts beside the diff and keeps project sources readable past the text diff limit', async t => {
     const {root, write, handle} = await fixture(t);
     const source = 'projects/demo/project.source.json';
