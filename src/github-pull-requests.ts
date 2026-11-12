@@ -58,6 +58,40 @@ function readSummary(value: unknown) {
     return {number: Number(value.number), title: value.title};
 }
 
+type PullRequestState = 'open' | 'closed' | 'merged' | 'draft';
+export type PullRequestStatus = PullRequestState | 'mergeable' | 'conflicting' | 'blocked' | 'unknown';
+
+function readState(value: Record<string, unknown>): PullRequestState | undefined {
+    if (value.merged_at) return 'merged';
+    if (value.state === 'closed') return 'closed';
+    if (value.draft === true) return 'draft';
+    if (value.state === 'open') return 'open';
+}
+
+export function readMergeStatus(mergeable: unknown, mergeState: unknown): PullRequestStatus {
+    if (mergeable === false) return 'conflicting';
+    if (mergeState === 'clean' && mergeable === true) return 'mergeable';
+    if (['blocked', 'behind', 'unstable', 'has_hooks'].some(state => state === mergeState)) return 'blocked';
+    return 'open';
+}
+
+function readListItem(value: unknown) {
+    const summary = readSummary(value);
+    if (!isRecord(value)) throw invalidResponse();
+    const state = readState(value);
+    return {...summary, status: state === 'open' ? readMergeStatus(value.mergeable, value.mergeable_state) : state ?? 'unknown',
+        head: isRecord(value.head) && isSha(value.head.sha) ? value.head.sha : undefined,
+        base: isRecord(value.base) && isSha(value.base.sha) ? value.base.sha : undefined};
+}
+
+export type PullRequestListItem = ReturnType<typeof readListItem>;
+export const pullRequestPageSize = 20;
+
+export function readPullRequestList(value: unknown) {
+    if (!Array.isArray(value)) throw invalidResponse();
+    return {items: value.map(readListItem), more: value.length === pullRequestPageSize};
+}
+
 function readRevision(value: unknown) {
     if (!isRecord(value) || !isSha(value.sha) || typeof value.ref !== 'string') throw invalidResponse();
     const repository = isRecord(value.repo) ? value.repo.full_name : null;
@@ -65,13 +99,13 @@ function readRevision(value: unknown) {
     return {sha: value.sha, ref: value.ref, repository};
 }
 
-function readPullRequest(value: unknown) {
+export function readPullRequest(value: unknown) {
     const summary = readSummary(value);
     if (!isRecord(value) || (value.state !== 'open' && value.state !== 'closed') ||
         !Number.isSafeInteger(value.changed_files) || Number(value.changed_files) < 0) throw invalidResponse();
     const author = isRecord(value.user) && typeof value.user.login === 'string' ? value.user.login : undefined;
     const description = typeof value.body_text === 'string' ? value.body_text : typeof value.body === 'string' ? value.body : '';
-    const state: 'open' | 'closed' | 'merged' | 'draft' = value.merged_at ? 'merged' : value.draft ? 'draft' : value.state;
+    const state = readState(value)!;
     return {...summary, author, description, base: readRevision(value.base), head: readRevision(value.head), state,
         changedFiles: Number(value.changed_files)};
 }
@@ -217,9 +251,14 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
             return {...pr, url: 'https://github.com/' + repository + '/pull/' + number};
         },
         async list(page: number, signal: AbortSignal) {
-            const result = await json(repo + '/pulls?state=all&sort=updated&per_page=20&page=' + page, signal);
-            if (!Array.isArray(result)) throw invalidResponse();
-            return {items: result.map(readSummary), more: result.length === 20};
+            const response = await request(repo + '/pulls?state=all&sort=updated&per_page=' + pullRequestPageSize + '&page=' + page, signal);
+            return {...readPullRequestList(JSON.parse(await readText(response, 12 * sourceLimit))),
+                remaining: response.headers.get('X-RateLimit-Remaining')};
+        },
+        async listItemStatus(number: number, signal: AbortSignal) {
+            const item = readListItem(await json(repo + '/pulls/' + number, signal));
+            if (item.number !== number) throw invalidResponse();
+            return item;
         },
         async load(number: number, signal: AbortSignal) {
             if (!Number.isSafeInteger(number) || number < 1) throw invalidResponse();

@@ -73,7 +73,8 @@ test('a fork PR uses the immutable merge base and head source, including renamed
         default: throw new Error('Unexpected endpoint: ' + url);
         }
     });
-    assert.deepEqual(await client.list(2, signal), {items: [{number: 42, title: pr.title}], more: false});
+    assert.deepEqual(await client.list(2, signal), {items: [{number: 42, title: pr.title, status: 'open', head, base}],
+        more: false, remaining: null});
     const review = await client.load(42, signal);
     assert.equal(review.url, 'https://github.com/owner/game/pull/42');
     assert.equal(review.description, pr.body_text);
@@ -82,6 +83,25 @@ test('a fork PR uses the immutable merge base and head source, including renamed
     assert.match(review.files[0].patch, /^-\s+10\r?\n\+\s+25/m);
     assert.equal(review.files[1].status, 'added');
     assert.equal(requests.filter(path => path === '/repos/owner/game/pulls/42').length, 2);
+});
+
+test('PR list distinguishes draft, closed, merged and the available merge states', async () => {
+    const responses = [
+        {state: 'closed', draft: true},
+        {state: 'closed', merged_at: '2026-11-13T00:00:00Z'},
+        {state: 'open', draft: true},
+        {mergeable: true, mergeable_state: 'clean'},
+        {mergeable: false, mergeable_state: 'dirty'},
+        {mergeable: true, mergeable_state: 'blocked'},
+        {mergeable: null, mergeable_state: 'unknown'}
+    ].map((fields, index) => ({...pr, ...fields, number: index + 1}));
+    const client = createGitHubPullRequests('owner/game', async url => Response.json(
+        url.includes('?') ? responses : responses[3], {headers: {'X-RateLimit-Remaining': '32'}}));
+    const list = await client.list(1, signal);
+    assert.deepEqual(list.items.map(item => item.status), ['closed', 'merged', 'draft', 'mergeable', 'conflicting', 'blocked', 'open']);
+    assert.equal(list.remaining, '32');
+    assert.deepEqual(await client.listItemStatus(4, signal), list.items[3]);
+    await assert.rejects(client.listItemStatus(7, signal), {code: 'failed'});
 });
 
 test('a PR updated during the file list read cannot compare mixed revisions', async () => {
