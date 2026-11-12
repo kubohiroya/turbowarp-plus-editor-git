@@ -6,6 +6,19 @@ type Goal = 'pr' | 'merge';
 type IssueChoice = {number: number; closeAfterMerge: boolean} |
     {title: string; body: string; closeAfterMerge: boolean};
 
+export interface PublicationStackParent {
+    number: number;
+    head: string;
+    headOid: string;
+    targetBase: string;
+    stackNumber?: number;
+}
+
+interface StackReceipt {
+    number: number;
+    parent: PublicationStackParent;
+}
+
 export interface PublicationIntent {
     /** The local commit job ID, retained across restarts. */
     id: string;
@@ -21,6 +34,7 @@ export interface PublicationIntent {
     /** Optional, independent approval for a repository with no check runs or statuses. */
     allowNoChecks?: boolean;
     issue?: IssueChoice;
+    stackParent?: PublicationStackParent;
 }
 
 export interface PullRequestReference {
@@ -44,6 +58,7 @@ export interface PullRequestObservation extends PullRequestReference {
     mergeOid?: string;
     /** True when an asynchronous merge can also apply other PRs. */
     downstackOpen?: boolean;
+    stackChanged?: boolean;
     closesOtherIssues?: boolean;
 }
 
@@ -55,6 +70,7 @@ interface MergeCondition {
     baseOid: string;
     diffDigest: string;
     allowNoChecks: boolean;
+    stack?: StackReceipt;
 }
 
 export interface PullRequestPublicationPort {
@@ -63,7 +79,7 @@ export interface PullRequestPublicationPort {
     pushCommit(oid: string, ref: string): Promise<void>;
     findPullRequests(head: string): Promise<readonly PullRequestReference[]>;
     createPullRequest(draft: {head: string; base: string; title: string; body: string}): Promise<PullRequestReference>;
-    observePullRequest(number: number): Promise<PullRequestObservation>;
+    observePullRequest(number: number, stack?: StackReceipt): Promise<PullRequestObservation>;
     /** The privileged implementation rechecks the supplied condition immediately before the merge request. */
     mergePullRequest(expected: MergeCondition): Promise<{state: 'accepted' | 'merged' | 'rejected'; requestId?: string}>;
     observeMergeRequest?(number: number, requestId: string): Promise<'pending' | 'enqueued' | 'merged' | 'failed'>;
@@ -71,13 +87,21 @@ export interface PullRequestPublicationPort {
     findIssues?(marker: string): Promise<readonly {number: number; body: string}[]>;
     createIssue?(draft: {title: string; body: string}): Promise<{number: number; body: string}>;
     closeIssue?(number: number): Promise<void>;
+    stackParent?(number: number): Promise<PublicationStackParent | null>;
+    stackContainsCommit?(parentOid: string, commitOid: string): Promise<boolean>;
+    inspectStackChild?(number: number, parent: PublicationStackParent): Promise<{
+        pull: PullRequestReference; open: boolean; diffDigest: string | null;
+        membership: 'unlinked' | 'linked' | 'changed'; stackNumber?: number;
+    }>;
+    linkStack?(parent: PublicationStackParent, child: PullRequestReference): Promise<void>;
 }
 
 export type PublicationStatus = 'queued' | 'pushed' | 'creatingIssue' | 'issueReady' | 'creatingPull' |
-    'waiting' | 'ready' | 'merging' | 'merged' | 'done';
+    'stacking' | 'waitingForParent' | 'waiting' | 'ready' | 'merging' | 'merged' | 'done';
 export type PublicationPause = 'baseChanged' | 'headChanged' | 'issueUnknown' | 'pullUnknown' | 'issueUnavailable' |
     'pullClosed' | 'comparisonUnavailable' | 'checksFailed' | 'noChecks' | 'reviewChanges' | 'conflicting' |
-    'downstack' | 'closingIssues' | 'mergeRejected' | 'mergeUnknown' | 'requestFailed';
+    'downstack' | 'closingIssues' | 'mergeRejected' | 'mergeUnknown' | 'requestFailed' |
+    'stackUnknown' | 'stackParentChanged' | 'stackDiffChanged' | 'stackHistory';
 
 export interface PublicationJob {
     intent: PublicationIntent;
@@ -89,6 +113,10 @@ export interface PublicationJob {
     mergeRequestId?: string;
     mergeAccepted?: boolean;
     noChecksApproved?: boolean;
+    stackNumber?: number;
+    stackWriteStarted?: boolean;
+    stackDiffDigest?: string;
+    stackMergeRefs?: {headOid: string; baseOid: string};
     pause?: PublicationPause;
 }
 
@@ -113,6 +141,10 @@ const description = (title: string, body: string) =>
     new TextEncoder().encode(body).byteLength <= 62_000 && !body.includes('<!-- tw-plus-');
 const closingKeyword = /\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\b\s*:?\s+(?:(?:[\w.-]+\/[\w.-]+)?#\d+|https:\/\/github\.com\/[^\s/]+\/[^\s/]+\/issues\/\d+)/iu;
 
+export const samePublicationStackParent = (actual: PublicationStackParent | null, expected: PublicationStackParent) =>
+    actual?.number === expected.number && actual.head === expected.head && actual.headOid === expected.headOid &&
+    actual.targetBase === expected.targetBase && actual.stackNumber === expected.stackNumber;
+
 export function validatePublicationIntent(intent: PublicationIntent): PublicationIntent {
     if (!uuid.test(intent.id) || !positive(intent.repositoryId) || !isOid(intent.baseOid) || !isOid(intent.commitOid) ||
         intent.head !== 'tw-plus/pr-' + intent.id || !branchName(intent.base) || intent.base === intent.head ||
@@ -126,11 +158,20 @@ export function validatePublicationIntent(intent: PublicationIntent): Publicatio
         ('number' in issue ? !positive(issue.number) : !description(issue.title, issue.body)))) {
         throw new TypeError('Invalid issue choice');
     }
+    const parent = intent.stackParent;
+    if (parent !== undefined && (!parent || !positive(parent.number) || parent.head !== intent.base ||
+        parent.headOid !== intent.baseOid || typeof parent.targetBase !== 'string' || !branchName(parent.targetBase) ||
+        parent.targetBase === intent.head || parent.targetBase === parent.head ||
+        (parent.stackNumber !== undefined && !positive(parent.stackNumber)) || intent.allowNoChecks === true)) {
+        throw new TypeError('Invalid stack parent');
+    }
     const {id, repositoryId, head, base, baseOid, commitOid, title, body, goal, allowNoChecks} = intent;
     const chosen = issue && ('number' in issue ? {number: issue.number, closeAfterMerge: issue.closeAfterMerge} :
         {title: issue.title, body: issue.body, closeAfterMerge: issue.closeAfterMerge});
+    const stackParent = parent && {number: parent.number, head: parent.head, headOid: parent.headOid,
+        targetBase: parent.targetBase, stackNumber: parent.stackNumber};
     return {id, remote: remoteUrl(intent.remote), repositoryId, head, base, baseOid, commitOid, title, body, goal,
-        allowNoChecks, issue: chosen};
+        allowNoChecks, issue: chosen, stackParent};
 }
 
 /** Advance a durable publication one checkpoint at a time. The host can schedule polls without holding the local Git lock. */
@@ -176,12 +217,18 @@ export function createPullRequestQueue({journal, repository, port}: {
                 return next;
             };
             const pause = (reason: PublicationPause) => save({pause: reason});
-            const samePull = (pull: PullRequestReference) => pull.repositoryId === repositoryId &&
-                pull.headRepositoryId === repositoryId && pull.head === intent.head && pull.base === intent.base &&
+            const sameRepositoryHead = (pull: PullRequestReference) => pull.repositoryId === repositoryId &&
+                pull.headRepositoryId === repositoryId && pull.head === intent.head;
+            const samePull = (pull: PullRequestReference) => sameRepositoryHead(pull) && pull.base === intent.base &&
                 pull.headOid === intent.commitOid;
+            const parent = intent.stackParent;
+            const parentMatches = async () => !parent ||
+                samePublicationStackParent(await port.stackParent?.(parent.number) ?? null, parent);
 
             const rememberPull = async (pull: PullRequestReference) => {
                 if (!positive(pull.number) || !samePull(pull) || !pull.body.includes(pullMarker)) return pause('pullUnknown');
+                if (parent) return save({status: 'stacking', pullNumber: pull.number,
+                    pause: pull.baseOid !== intent.baseOid ? 'baseChanged' : undefined});
                 if (pull.baseOid !== intent.baseOid) return save({status: 'waiting', pullNumber: pull.number, pause: 'baseChanged'});
                 return save({status: intent.goal === 'pr' && !intent.issue?.closeAfterMerge ? 'done' : 'waiting',
                     pullNumber: pull.number});
@@ -202,9 +249,49 @@ export function createPullRequestQueue({journal, repository, port}: {
                     save({status: 'issueReady', issueNumber: found.number}) : pause('issueUnknown');
             }
 
+            async function finishStack() {
+                if (!parent || !port.inspectStackChild || !port.linkStack) return pause('stackUnknown');
+                const number = job!.pullNumber!;
+                const inspect = () => port.inspectStackChild!(number, parent);
+                const saveReceipt = async (child: Awaited<ReturnType<typeof inspect>>) => {
+                    if (child.membership !== 'linked' || !positive(child.stackNumber)) return pause('stackUnknown');
+                    return save({stackNumber: child.stackNumber,
+                        stackDiffDigest: job!.stackDiffDigest ?? child.diffDigest ?? undefined,
+                        status: intent.goal === 'pr' && !intent.issue?.closeAfterMerge ? 'done' : 'waitingForParent'});
+                };
+                const matches = (child: Awaited<ReturnType<typeof inspect>>) => child.open &&
+                    child.pull.number === number && samePull(child.pull) && child.pull.baseOid === intent.baseOid &&
+                    child.pull.body.includes(pullMarker);
+                const child = await inspect();
+                if (!matches(child) || child.membership === 'changed') return pause('stackParentChanged');
+                if (child.membership === 'linked') return saveReceipt(child);
+                if (job!.stackWriteStarted) return pause('stackUnknown');
+                if (!await parentMatches()) return pause('stackParentChanged');
+                await save({stackWriteStarted: true, stackDiffDigest: child.diffDigest ?? undefined});
+                await port.linkStack(parent, child.pull);
+                const after = await inspect();
+                return matches(after) ? saveReceipt(after) : pause('stackParentChanged');
+            }
+
             async function checkPull() {
-                const pull = await port.observePullRequest(job!.pullNumber!);
-                if (pull.number !== job!.pullNumber || !samePull(pull)) return pause('headChanged');
+                const stack = parent && positive(job!.stackNumber) ? {number: job!.stackNumber!, parent} : undefined;
+                if (parent && !stack) return pause('stackUnknown');
+                const pull = await port.observePullRequest(job!.pullNumber!, stack);
+                if (pull.number !== job!.pullNumber || !sameRepositoryHead(pull) || (!stack && !samePull(pull))) {
+                    return pause('headChanged');
+                }
+                if (stack) {
+                    if (pull.stackChanged || !pull.body.includes(pullMarker)) return pause('stackParentChanged');
+                    if (pull.state === 'closed') return pause('pullClosed');
+                    if (pull.downstackOpen || (pull.state === 'open' && pull.base === stack.parent.head)) {
+                        return job!.status === 'merging' ? pause('mergeUnknown') : save({status: 'waitingForParent'});
+                    }
+                    if (pull.base !== stack.parent.targetBase) return pause('stackParentChanged');
+                    if (!isDigest(pull.diffDigest) || !isDigest(job!.stackDiffDigest)) return pause('comparisonUnavailable');
+                    if (pull.diffDigest !== job!.stackDiffDigest) return pause('stackDiffChanged');
+                    if (job!.status === 'merging' && (job!.stackMergeRefs?.headOid !== pull.headOid ||
+                        job!.stackMergeRefs?.baseOid !== pull.baseOid)) return pause('mergeUnknown');
+                }
                 if (pull.state === 'merged') {
                     if (!isOid(pull.mergeOid)) return pause('mergeUnknown');
                     return save({status: 'merged', mergeOid: pull.mergeOid});
@@ -221,7 +308,7 @@ export function createPullRequestQueue({journal, repository, port}: {
                         mergeAccepted: undefined}) :
                         save({status: 'merging'});
                 }
-                if (pull.baseOid !== intent.baseOid) return pause('baseChanged');
+                if (!stack && pull.baseOid !== intent.baseOid) return pause('baseChanged');
                 if (intent.goal === 'pr') return save({status: intent.issue?.closeAfterMerge ? 'waiting' : 'done'});
                 if (pull.downstackOpen) return pause('downstack');
                 if (pull.closesOtherIssues) return pause('closingIssues');
@@ -235,10 +322,14 @@ export function createPullRequestQueue({journal, repository, port}: {
                 const checksReady = pull.checks === 'passed' || pull.checks === 'absent' && allowNoChecks;
                 const reviewReady = pull.review === 'approved' || pull.review === 'none';
                 if (!checksReady || !reviewReady || pull.mergeable !== 'ready') return save({status: 'waiting'});
-                if (job!.status !== 'ready') return save({status: 'ready', diffDigest: pull.diffDigest});
+                if (job!.status !== 'ready' || (stack && (job!.stackMergeRefs?.headOid !== pull.headOid ||
+                    job!.stackMergeRefs?.baseOid !== pull.baseOid))) {
+                    return save({status: 'ready', diffDigest: pull.diffDigest,
+                        stackMergeRefs: stack ? {headOid: pull.headOid, baseOid: pull.baseOid} : undefined});
+                }
                 await save({status: 'merging'});
                 const result = await port.mergePullRequest({number: pull.number, head: pull.head, base: pull.base, headOid: pull.headOid,
-                    baseOid: pull.baseOid, diffDigest: pull.diffDigest, allowNoChecks});
+                    baseOid: pull.baseOid, diffDigest: pull.diffDigest, allowNoChecks, stack});
                 return result.state === 'rejected' ? save({status: 'waiting', pause: 'mergeRejected'}) :
                     save({status: 'merging', mergeRequestId: result.requestId, mergeAccepted: true});
             }
@@ -246,6 +337,7 @@ export function createPullRequestQueue({journal, repository, port}: {
             try {
                 switch (job.status) {
                 case 'queued': {
+                    if (!await parentMatches()) return pause('stackParentChanged');
                     if (await port.branchOid(intent.base) !== intent.baseOid) return pause('baseChanged');
                     const current = await port.branchOid(intent.head);
                     if (current && current !== intent.commitOid) return pause('headChanged');
@@ -253,7 +345,9 @@ export function createPullRequestQueue({journal, repository, port}: {
                     return save({status: 'pushed'});
                 }
                 case 'pushed':
+                    if (!await parentMatches()) return pause('stackParentChanged');
                     if (await port.branchOid(intent.base) !== intent.baseOid) return pause('baseChanged');
+                    if (parent && !await port.stackContainsCommit?.(parent.headOid, intent.commitOid)) return pause('stackHistory');
                     return await prepareIssue();
                 case 'creatingIssue': {
                     const matches = await port.findIssues?.(issueMarker);
@@ -261,6 +355,7 @@ export function createPullRequestQueue({journal, repository, port}: {
                     return exact?.length === 1 ? save({status: 'issueReady', issueNumber: exact[0].number}) : pause('issueUnknown');
                 }
                 case 'issueReady': {
+                    if (!await parentMatches()) return pause('stackParentChanged');
                     if (await port.branchOid(intent.base) !== intent.baseOid) return pause('baseChanged');
                     if (await port.branchOid(intent.head) !== intent.commitOid) return pause('headChanged');
                     const matches = await port.findPullRequests(intent.head);
@@ -274,6 +369,9 @@ export function createPullRequestQueue({journal, repository, port}: {
                     const matches = (await port.findPullRequests(intent.head)).filter(samePull);
                     return matches.length === 1 ? rememberPull(matches[0]) : pause('pullUnknown');
                 }
+                case 'stacking':
+                    return await finishStack();
+                case 'waitingForParent':
                 case 'waiting':
                 case 'ready':
                 case 'merging':
@@ -293,6 +391,7 @@ export function createPullRequestQueue({journal, repository, port}: {
             } catch {
                 const reason = (job! as PublicationJob).status;
                 return pause(reason === 'creatingIssue' ? 'issueUnknown' : reason === 'creatingPull' ? 'pullUnknown' :
+                    reason === 'stacking' ? 'stackUnknown' :
                     reason === 'merging' ? 'mergeUnknown' : 'requestFailed');
             }
         });
@@ -302,7 +401,7 @@ export function createPullRequestQueue({journal, repository, port}: {
         const key = keyFor(id);
         return journal.exclusive(key, async () => {
             const job = await journal.get(key);
-            if (!job || job.intent.goal !== 'merge' || job.pause !== 'noChecks' || !job.pullNumber)
+            if (!job || job.intent.goal !== 'merge' || job.intent.stackParent || job.pause !== 'noChecks' || !job.pullNumber)
                 throw new Error('Publication is not waiting for missing-check approval');
             const {intent} = job;
             const pull = await port.observePullRequest(job.pullNumber);
@@ -326,7 +425,7 @@ export function createPullRequestQueue({journal, repository, port}: {
             const job = await advance(id);
             onProgress(job);
             if (job.status === 'done' || job.pause) return job;
-            if (job.status === 'waiting' || job.status === 'merging') {
+            if (job.status === 'waiting' || job.status === 'waitingForParent' || job.status === 'merging') {
                 await waitForPoll(pollInterval, signal);
                 pollInterval = Math.min(300_000, pollInterval * 2);
             } else pollInterval = 30_000;

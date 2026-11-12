@@ -1,7 +1,9 @@
-import type {PullRequestObservation, PullRequestPublicationPort, PullRequestReference} from './pull-request-queue.js';
+import {samePublicationStackParent} from './pull-request-queue.js';
+import type {PublicationStackParent, PullRequestObservation, PullRequestPublicationPort,
+    PullRequestReference} from './pull-request-queue.js';
 import {remoteUrl} from './smart-http.js';
 
-type Capability = 'pulls-read' | 'pulls-write' | 'issues-read' | 'issues-write' | 'checks-read' | 'merge';
+type Capability = 'pulls-read' | 'pulls-write' | 'issues-read' | 'issues-write' | 'checks-read' | 'merge' | 'stacks';
 type RecordValue = Record<string, unknown>;
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH';
 type Auth = {repositoryId: number; accessToken: string};
@@ -48,7 +50,7 @@ class ApiFailure extends Error {
     constructor(readonly status: number) {super('GitHub API ' + status);}
 }
 
-async function readJson(response: Response) {
+async function readText(response: Response) {
     if (!response.body) return null;
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8', {fatal: true});
@@ -57,7 +59,7 @@ async function readJson(response: Response) {
     try {
         for (;;) {
             const {done, value} = await reader.read();
-            if (done) return JSON.parse(result + decoder.decode());
+            if (done) return result + decoder.decode();
             length += value.byteLength;
             if (length > 8 * 1024 * 1024) throw new Error('GitHub response too large');
             result += decoder.decode(value, {stream: true});
@@ -67,10 +69,45 @@ async function readJson(response: Response) {
     }
 }
 
+async function readJson(response: Response) {
+    const text = await readText(response);
+    return text === null ? null : JSON.parse(text);
+}
+
 async function digest(value: unknown) {
     const data = new TextEncoder().encode(JSON.stringify(value));
     const hashed = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
     return Array.from(hashed, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/** Keep complete textual changes and context, ignoring only hunk offsets after GitHub rebases. */
+function comparablePatch(value: unknown, additions: number, deletions: number) {
+    if (typeof value !== 'string' || !value) return null;
+    const lines = value.split('\n');
+    if (lines.at(-1) === '') lines.pop();
+    const result: string[] = [];
+    let removed = 0;
+    let added = 0;
+    let oldRemaining = 0;
+    let newRemaining = 0;
+    for (const line of lines) {
+        const header = /^@@ -[0-9]+(?:,([0-9]+))? \+[0-9]+(?:,([0-9]+))? @@([^\n]*)$/u.exec(line);
+        if (header) {
+            if (oldRemaining || newRemaining) return null;
+            oldRemaining = Number(header[1] ?? 1);
+            newRemaining = Number(header[2] ?? 1);
+            result.push('@@' + header[3]);
+        } else {
+            if (!result.length) return null;
+            if (line.startsWith('+')) {newRemaining--; added++;}
+            else if (line.startsWith('-')) {oldRemaining--; removed++;}
+            else if (line.startsWith(' ')) {oldRemaining--; newRemaining--;}
+            else if (line !== '\\ No newline at end of file') return null;
+            if (oldRemaining < 0 || newRemaining < 0) return null;
+            result.push(line);
+        }
+    }
+    return !oldRemaining && !newRemaining && added === additions && removed === deletions ? result : null;
 }
 
 /** Fixed upstream calls for a privileged host. Pass a repository-ID-bound, capability-specific grant on each request. */
@@ -86,14 +123,15 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
     const [, owner, repo] = new URL(remoteUrl(remote)).pathname.slice(0, -4).split('/');
     const path = `/repos/${owner}/${repo}`;
 
-    async function sendRequest(capability: Capability, route: string, method: Method, body?: object) {
+    async function sendRequest(capability: Capability, route: string, method: Method, body?: object,
+        accept = 'application/vnd.github+json') {
         signal?.throwIfAborted();
         const auth = await grant(capability);
         if (!auth || auth.repositoryId !== repositoryId || !/^[A-Za-z0-9_]{1,2048}$/u.test(auth.accessToken)) throw new ApiFailure(403);
         const timeout = AbortSignal.timeout(25_000);
         return send('https://api.github.com' + route, {
             method, redirect: 'error', cache: 'no-store', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-            headers: {Accept: 'application/vnd.github+json', Authorization: 'Bearer ' + auth.accessToken,
+            headers: {Accept: accept, Authorization: 'Bearer ' + auth.accessToken,
                 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2026-03-10'},
             body: body === undefined ? undefined : JSON.stringify(body)
         });
@@ -130,7 +168,7 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
         return {raw, reference};
     }
 
-    async function readDiff(number: number, count: unknown) {
+    async function readDiff(number: number, count: unknown, requireCompletePatch = false) {
         if (!positive(count) || count > 3000) return null;
         const entries = new Map<string, unknown>();
         for (let page = 1; page <= Math.ceil(count / 100); page++) {
@@ -140,23 +178,128 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
                 if (typeof file.filename !== 'string' || entries.has(file.filename) || !oid(file.sha) ||
                     typeof file.status !== 'string' || !Number.isSafeInteger(file.additions) ||
                     !Number.isSafeInteger(file.deletions)) return null;
-                entries.set(file.filename, [file.sha, file.status, file.previous_filename ?? null, file.additions, file.deletions]);
+                const patch = requireCompletePatch ? comparablePatch(file.patch, Number(file.additions), Number(file.deletions)) :
+                    undefined;
+                if (requireCompletePatch && !patch) return null;
+                const entry = [file.sha, file.status, file.previous_filename ?? null, file.additions, file.deletions];
+                if (patch) entry.push(patch);
+                entries.set(file.filename, entry);
             }
         }
         return entries.size === count ? digest([...entries].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) : null;
     }
 
-    async function observePullRequest(number: number): Promise<PullRequestObservation> {
+    async function readStackDiff(number: number, count: unknown) {
+        const files = await readDiff(number, count, true);
+        if (!files) return null;
+        // The file-list API omits mode metadata. Bind the complete Git headers as well.
+        const response = await sendRequest('pulls-read', path + '/pulls/' + numberPath(number), 'GET', undefined,
+            'application/vnd.github.diff');
+        if (!response.ok) {
+            await response.body?.cancel().catch(() => {});
+            return null;
+        }
+        const raw = await readText(response);
+        if (!raw?.startsWith('diff --git ')) return null;
+        const sections = raw.split(/(?=^diff --git )/mu);
+        const headers = sections.map(section => section.split(/^@@ /mu, 1)[0]);
+        if (headers.length !== count || headers.some(header => !header || !/^index [0-9a-f]+\.\.[0-9a-f]+(?: [0-7]{6})?$/mu.test(header))) {
+            return null;
+        }
+        return digest([files, headers]);
+    }
+
+    async function readStack(number: number) {
+        const raw = record(await json('stacks', path + '/stacks/' + numberPath(number)));
+        const targetBase = record(raw.base).ref;
+        if (raw.number !== number || typeof targetBase !== 'string' || typeof raw.open !== 'boolean')
+            throw new Error('Unexpected stack identity');
+        const seen = new Set<number>();
+        const members = list(raw.pull_requests).map(value => {
+            const entry = record(value);
+            const pull = pullReference(entry);
+            if (seen.has(pull.number) || (entry.state !== 'open' && entry.state !== 'closed'))
+                throw new Error('Unexpected stack entry');
+            seen.add(pull.number);
+            const state = entry.state === 'open' ? 'open' :
+                typeof entry.merged_at === 'string' && Number.isFinite(Date.parse(entry.merged_at)) ? 'merged' : 'closed';
+            return {pull, state};
+        });
+        return {targetBase: branch(targetBase), open: raw.open, members};
+    }
+
+    const stackNumberOf = (raw: RecordValue) => {
+        const number = raw.stack == null ? undefined : record(raw.stack).number;
+        if (raw.stack != null && !positive(number)) throw new Error('Unexpected stack number');
+        return number as number | undefined;
+    };
+    const sameRefs = (one: PullRequestReference, other: PullRequestReference) => one.number === other.number &&
+        one.head === other.head && one.base === other.base && one.headOid === other.headOid && one.baseOid === other.baseOid;
+
+    async function stackParent(number: number): Promise<PublicationStackParent | null> {
+        const value = await json('stacks', path + '/pulls/' + numberPath(number), 'GET', undefined, true);
+        if (value === null) return null;
+        const raw = record(value);
+        if (raw.state !== 'open' || record(record(raw.head).repo).id !== repositoryId ||
+            record(record(raw.base).repo).id !== repositoryId) return null;
+        const reference = pullReference(raw);
+        if (reference.number !== number) return null;
+        const stackNumber = stackNumberOf(raw);
+        const head = branch(reference.head);
+        if (stackNumber === undefined) return {number, head, headOid: reference.headOid, targetBase: branch(reference.base)};
+        const stack = await readStack(stackNumber);
+        const top = stack.members.at(-1);
+        return stack.open && top?.state === 'open' && sameRefs(top.pull, reference) ?
+            {number, head, headOid: reference.headOid, targetBase: stack.targetBase, stackNumber} : null;
+    }
+
+    async function stackRelation(raw: RecordValue, child: PullRequestReference, parent: PublicationStackParent, expectedNumber?: number) {
+        const number = stackNumberOf(raw);
+        if (number === undefined && expectedNumber === undefined) return {kind: 'unlinked'} as const;
+        const approvedStack = expectedNumber ?? parent.stackNumber;
+        if (number === undefined || (approvedStack !== undefined && number !== approvedStack)) return {kind: 'changed'} as const;
+        const stack = await readStack(number);
+        const index = stack.members.findIndex(member => member.pull.number === child.number);
+        const current = stack.members[index];
+        const immediate = stack.members[index - 1];
+        if (index < 1 || (approvedStack === undefined && index !== 1) || stack.targetBase !== parent.targetBase ||
+            !sameRefs(current.pull, child) || (raw.state === 'open' && (!stack.open || current.state !== 'open')) ||
+            (raw.merged === true && current.state !== 'merged') || immediate?.pull.number !== parent.number ||
+            immediate.pull.head !== parent.head || stack.members.slice(0, index).some(member => member.state === 'closed')) {
+            return {kind: 'changed'} as const;
+        }
+        const downstackOpen = stack.members.slice(0, index).some(member => member.state === 'open');
+        if (downstackOpen && (immediate.pull.headOid !== parent.headOid || child.base !== parent.head ||
+            child.baseOid !== parent.headOid)) return {kind: 'changed'} as const;
+        return {kind: 'linked', number, downstackOpen} as const;
+    }
+
+    async function stackContainsCommit(parentOid: string, commitOid: string) {
+        if (!oid(parentOid) || !oid(commitOid)) throw new TypeError('Invalid comparison');
+        const comparison = record(await json('stacks', path + '/compare/' + parentOid + '...' + commitOid + '?per_page=1'));
+        return comparison.status === 'ahead' && record(comparison.merge_base_commit).sha === parentOid;
+    }
+
+    async function observePullRequest(number: number,
+        expectedStack?: NonNullable<Parameters<PullRequestPublicationPort['observePullRequest']>[1]>): Promise<PullRequestObservation> {
         const {raw, reference} = await readPull(number);
         const baseObservation = {...reference, checks: 'unknown', review: 'unknown', mergeable: 'unknown', diffDigest: null} as const;
+        const state = raw.merged === true ? 'merged' : raw.state === 'closed' ? 'closed' : 'open';
+        if (expectedStack) {
+            const relation = await stackRelation(raw, reference, expectedStack.parent, expectedStack.number);
+            if (relation.kind !== 'linked') return {...baseObservation, state, stackChanged: true};
+            if (relation.downstackOpen) return {...baseObservation, state, downstackOpen: true};
+            if (state === 'open' && reference.base === expectedStack.parent.head) return {...baseObservation, state};
+        }
         if (raw.merged === true) return {...baseObservation, state: 'merged',
+            diffDigest: expectedStack ? await readStackDiff(number, raw.changed_files) : null,
             mergeOid: oid(raw.merge_commit_sha) ? raw.merge_commit_sha : undefined};
         if (raw.state === 'closed') return {...baseObservation, state: 'closed'};
         // Standard PR automation does not request a merge that could include another PR.
-        if (raw.stack != null) return {...baseObservation, state: 'open', downstackOpen: true};
+        if (!expectedStack && raw.stack != null) return {...baseObservation, state: 'open', downstackOpen: true};
         const [graph, diffDigest] = await Promise.all([
             json('checks-read', '/graphql', 'POST', {query: checkQuery, variables: {owner, name: repo, number}}),
-            readDiff(number, raw.changed_files)
+            expectedStack ? readStackDiff(number, raw.changed_files) : readDiff(number, raw.changed_files)
         ]);
         const data = record(graph);
         if (Array.isArray(data.errors) && data.errors.length) throw new Error('GitHub check query failed');
@@ -176,10 +319,15 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
             view.mergeable === 'MERGEABLE' && view.mergeStateStatus === 'CLEAN' && view.isDraft === false ? 'ready' :
                 view.mergeable === 'UNKNOWN' ? 'unknown' : 'blocked';
         const current = await readPull(number);
-        if (current.raw.state !== 'open' || current.raw.stack != null || current.reference.headOid !== reference.headOid ||
-            current.reference.baseOid !== reference.baseOid || current.reference.head !== reference.head ||
-            current.reference.base !== reference.base || current.raw.changed_files !== raw.changed_files) {
+        if (current.raw.state !== 'open' || (!expectedStack && current.raw.stack != null) ||
+            !sameRefs(current.reference, reference) || current.reference.body !== reference.body ||
+            current.raw.changed_files !== raw.changed_files) {
             return {...baseObservation, state: 'open'};
+        }
+        if (expectedStack) {
+            const relation = await stackRelation(current.raw, current.reference, expectedStack.parent, expectedStack.number);
+            if (relation.kind !== 'linked') return {...baseObservation, state: 'open', stackChanged: true};
+            if (relation.downstackOpen) return {...baseObservation, state: 'open', downstackOpen: true};
         }
         const closesOtherIssues = record(view.closingIssuesReferences).totalCount !== 0;
         return {...reference, state: 'open', checks, review, mergeable, diffDigest, closesOtherIssues};
@@ -205,11 +353,35 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
                 {head: publicationBranch(draft.head), base: branch(draft.base), title: draft.title, body: draft.body}));
         },
         observePullRequest,
+        stackParent,
+        stackContainsCommit,
+        async inspectStackChild(number, parent) {
+            const {raw, reference} = await readPull(number);
+            const relation = await stackRelation(raw, reference, parent);
+            const diffDigest = raw.state === 'open' ? await readStackDiff(number, raw.changed_files) : null;
+            const current = await readPull(number);
+            const stable = sameRefs(current.reference, reference) && current.reference.body === reference.body &&
+                current.raw.changed_files === raw.changed_files && current.raw.state === raw.state &&
+                stackNumberOf(current.raw) === stackNumberOf(raw);
+            return {pull: reference, open: raw.state === 'open', diffDigest: stable ? diffDigest : null,
+                membership: stable ? relation.kind : 'changed', stackNumber: relation.kind === 'linked' ? relation.number : undefined};
+        },
+        async linkStack(parent, child) {
+            if (!samePublicationStackParent(await stackParent(parent.number), parent)) throw new Error('Stack parent changed');
+            const current = await readPull(child.number);
+            if (current.raw.state !== 'open' || current.raw.stack != null || !sameRefs(current.reference, child) ||
+                current.reference.body !== child.body || current.reference.base !== parent.head ||
+                current.reference.baseOid !== parent.headOid) throw new Error('Stack child changed');
+            const route = parent.stackNumber === undefined ? '/stacks' : '/stacks/' + numberPath(parent.stackNumber) + '/add';
+            const pull_requests = parent.stackNumber === undefined ? [parent.number, child.number] : [child.number];
+            await json('stacks', path + route, 'POST', {pull_requests});
+        },
         async mergePullRequest(expected) {
-            const current = await observePullRequest(expected.number);
+            const current = await observePullRequest(expected.number, expected.stack);
             if (current.state === 'merged' && current.headOid === expected.headOid && current.base === expected.base &&
                 current.head === expected.head) return {state: 'merged'};
-            if (current.state !== 'open' || current.downstackOpen || current.closesOtherIssues || current.headOid !== expected.headOid ||
+            if (current.state !== 'open' || current.stackChanged || current.downstackOpen || current.closesOtherIssues ||
+                current.headOid !== expected.headOid ||
                 current.head !== expected.head || current.base !== expected.base ||
                 current.baseOid !== expected.baseOid || !expected.diffDigest || current.diffDigest !== expected.diffDigest ||
                 current.mergeable !== 'ready' || !['approved', 'none'].includes(current.review) ||
