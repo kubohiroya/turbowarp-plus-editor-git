@@ -87,6 +87,7 @@ const projectSourceLimit = 16 * 1024 * 1024;
 type Metadata = Map<string, Uint8Array | null>;
 /** The branch fields of a snapshot. */
 export type BranchRefs = Pick<Snapshot, 'branch' | 'head' | 'branches' | 'remoteBranches'>;
+export type HeadFile = Pick<BranchRefs, 'branch' | 'head'> & {bytes: Uint8Array | null};
 export interface Snapshot {
     branch: string | undefined;
     head: string | null;
@@ -315,17 +316,51 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     const assertSnapshot = async (snapshot: Snapshot) => {
         if (!sameMetadata(snapshot.metadata, await metadata())) throw new GitPanelError('changed');
     };
-    const readRefs = async (): Promise<BranchRefs> => {
+    const readHead = async (): Promise<Pick<BranchRefs, 'branch' | 'head'>> => {
         let head: string | null;
         try {head = await git.resolveRef({...options, ref: 'HEAD'});} catch (error) {
             if (errorCode(error) !== 'NotFoundError') throw error;
             head = null;
         }
         const branch = await git.currentBranch(options);
+        return {branch: branch || undefined, head};
+    };
+    const readRefs = async (): Promise<BranchRefs> => {
+        const {branch, head} = await readHead();
         const branches = await git.listBranches(options);
         const remoteBranches = (await git.listBranches({...options, remote: 'origin'}))
             .filter(name => name !== 'HEAD' && !branches.includes(name)).sort();
-        return {branch: branch || undefined, head, branches, remoteBranches};
+        return {branch, head, branches, remoteBranches};
+    };
+    const readHeadFile = async (path: string, limit: number): Promise<HeadFile> => {
+        const parts = pathParts(path);
+        const name = parts.pop();
+        if (!name || [name, ...parts].includes('.git')) throw new GitPanelError('unsupported');
+        fs.clearReads();
+        const {head, branch} = await readHead();
+        let bytes: Uint8Array | null = null;
+        if (head) {
+            let oid = head;
+            for (const part of parts) {
+                const {tree} = await git.readTree({...options, cache, oid});
+                const entry = tree.find(item => item.path === part);
+                oid = entry?.type === 'tree' ? entry.oid : '';
+                if (!oid) break;
+            }
+            if (oid) {
+                const {tree} = await git.readTree({...options, cache, oid});
+                const entry = tree.find(item => item.path === name);
+                if (entry && entry.type !== 'tree') {
+                    if (entry.mode !== '100644' && entry.mode !== '100755') throw new GitPanelError('unsupported');
+                    bytes = (await git.readBlob({...options, cache, oid: entry.oid})).blob;
+                    if (bytes.byteLength > limit) throw new GitPanelError('large');
+                }
+            }
+        }
+        fs.clearReads();
+        const current = await readHead();
+        if (current.head !== head || current.branch !== branch) throw new GitPanelError('changed');
+        return {head, branch, bytes};
     };
     const read = async (scope = ''): Promise<Snapshot> => {
         scope = pathParts(scope).join('/');
@@ -807,6 +842,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             fs.clearReads();
             return readRefs();
         }),
+        /** Reads a regular file from the latest local commit. Missing paths and unborn branches have null bytes. */
+        readHeadFile: (path: string, limit: number) => serial(() => readHeadFile(path, limit)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
         /**
