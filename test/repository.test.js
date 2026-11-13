@@ -380,3 +380,37 @@ test('reports how the branch stands against its tracking branch from local refs,
     git('checkout', '-q', '--orphan', 'unborn');
     assert.deepEqual(await relation(), {state: 'unknown', ahead: 0, behind: 0}, 'unborn branch');
 });
+
+test('reads a complete historical project from Git while the working tree has newer edits', async t => {
+    const {root, git, write, handle} = await fixture(t);
+    await fs.mkdir(path.join(root, 'projects/demo/assets'));
+    await fs.mkdir(path.join(root, 'projects/demo/extensions'));
+    await write('projects/demo/project.source.json', '{"targets":[{"name":"old"}]}');
+    await write('projects/demo/sb3-source.json', '{"formatVersion":1}');
+    await write('projects/demo/embedded-extensions.json', '{"extensions":[]}');
+    await write('projects/demo/assets/a.svg', '<svg/>');
+    await write('projects/demo/extensions/test.js', 'old extension');
+    await write('projects/demo/README.md', 'notes');
+    git('add', '.'); git('commit', '-qm', 'old project');
+    const old = git('rev-parse', 'HEAD');
+    await write('projects/demo/project.source.json', '{"targets":[{"name":"editing"}]}');
+    await fs.rm(path.join(root, 'projects/demo/assets/a.svg'));
+    git('add', 'projects/demo/project.source.json');
+    const metadata = await gitBytes(root);
+
+    const repository = await openRepository(handle);
+    const files = await repository.readProjectVersion(old, 'projects/demo');
+    const decoded = Object.fromEntries([...files].map(([name, bytes]) => [name, new TextDecoder().decode(bytes)]));
+    assert.deepEqual(decoded, {
+        'project.source.json': '{"targets":[{"name":"old"}]}',
+        'sb3-source.json': '{"formatVersion":1}',
+        'embedded-extensions.json': '{"extensions":[]}',
+        'assets/a.svg': '<svg/>',
+        'extensions/test.js': 'old extension'
+    });
+    await assert.rejects(repository.readProjectVersion(old, 'projects/missing'), {code: 'versionMissing'});
+    await assert.rejects(repository.readProjectVersion(old, 'projects/demo/.git'), {code: 'invalid'});
+    assert.deepEqual(await gitBytes(root), metadata);
+    assert.equal(await fs.readFile(path.join(root, 'projects/demo/project.source.json'), 'utf8'),
+        '{"targets":[{"name":"editing"}]}');
+});

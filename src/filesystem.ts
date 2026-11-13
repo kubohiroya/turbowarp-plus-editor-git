@@ -3,7 +3,7 @@ export class GitPanelError extends Error {
         'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed' |
         'saveFirst' | 'author' | 'nothingStaged' | 'commitMessage' | 'ignoredProjectFile' |
         'switchUnsafe' | 'branchExists' | 'branchConflict' | 'pullRequestBranch' | 'branchName' | 'locked' |
-        'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing', message: string = code) {
+        'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }

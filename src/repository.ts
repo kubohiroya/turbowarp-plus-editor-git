@@ -10,6 +10,7 @@ import type {GetRemoteSession, RemoteOperation} from './remote-operations.js';
 import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from './project-asset-paths.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import type {FileVersion} from './change-marks.js';
+import {planProjectRestore, projectScope, projectVersionFile} from './project-version.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
 export {pullRequestRef} from './remote-operations.js';
@@ -245,13 +246,14 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         return lines.join('\n');
     };
 
-    const entries = async (ref: string | null, scope: string): Promise<Map<string, Entry>> => {
+    const entries = async (ref: string | null, scope: string,
+        include: (path: string) => boolean = () => true): Promise<Map<string, Entry>> => {
         const tree = ref === null ? git.STAGE() : git.TREE({ref});
         const result = await git.walk({
             ...options, cache, trees: [tree],
             map: async (path, [entry]) => {
                 if (path !== '.' && !inScope(path, scope) && !scope.startsWith(path + '/')) return null;
-                if (!entry || await entry.type() === 'tree') return;
+                if (!entry || await entry.type() === 'tree' || !include(path)) return;
                 const mode = await entry.mode();
                 if (mode === 0o160000 || mode === 0o120000) throw new GitPanelError('unsupported');
                 return {path, oid: await entry.oid(), mode};
@@ -361,6 +363,37 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const current = await readHead();
         if (current.head !== head || current.branch !== branch) throw new GitPanelError('changed');
         return {head, branch, bytes};
+    };
+    const readRestorePlan = async (oid: string, folder: string) => {
+        fs.clearReads();
+        const before = await readHead();
+        const plan = await planProjectRestore({...options, cache}, oid, folder);
+        const after = await readHead();
+        if (before.head !== plan.head || before.branch !== plan.branch ||
+            after.head !== plan.head || after.branch !== plan.branch) throw new GitPanelError('changed');
+        await fs.checkReads();
+        return plan;
+    };
+    const readProjectVersion = async (oid: string, folder: string) => {
+        const scope = projectScope(folder);
+        if (!isSha(oid)) throw new GitPanelError('invalid');
+        fs.clearReads();
+        await git.readCommit({...options, cache, oid});
+        const prefix = scope ? scope + '/' : '';
+        const tracked = await entries(oid, scope, path => path.startsWith(prefix) &&
+            projectVersionFile(path.slice(prefix.length)));
+        if (!tracked.has(prefix + 'project.source.json')) throw new GitPanelError('versionMissing');
+        const files = new Map<string, Uint8Array<ArrayBuffer>>();
+        let total = 0;
+        for (const [path, entry] of tracked) {
+            const relative = path.slice(prefix.length);
+            const {blob} = await git.readBlob({...options, cache, oid: entry.oid});
+            total += blob.byteLength;
+            if (total > 100 * 1024 * 1024 || files.size >= 20_000) throw new GitPanelError('large');
+            files.set(relative, Uint8Array.from(blob));
+        }
+        await fs.checkReads();
+        return files;
     };
     const read = async (scope = '', filepaths?: string[]): Promise<Snapshot> => {
         scope = pathParts(scope).join('/');
@@ -846,6 +879,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         /** Reads a regular file from the latest local commit. Missing paths and unborn branches have null bytes. */
         readHeadFile: (path: string, limit: number) => serial(() => readHeadFile(path, limit)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
+        planProjectRestore: (oid: string, folder: string) => serial(() => readRestorePlan(oid, folder)),
+        readProjectVersion: (oid: string, folder: string) => serial(() => readProjectVersion(oid, folder)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
         /**
          * Reads one page of the commits reachable from the local branches, `origin/*` and a detached HEAD, newest first

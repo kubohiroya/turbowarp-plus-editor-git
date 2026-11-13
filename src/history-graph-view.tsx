@@ -19,6 +19,8 @@ export interface HistoryGraphProps {
     hasMore?: boolean;
     loadingMore?: boolean;
     onShowMore?(): void;
+    onOpenVersion?(oid: string): Promise<HistoryActionResult>;
+    onRestoreVersion?(oid: string): Promise<HistoryActionResult>;
     /** Local branch names, so `origin/<name>` is offered as a new branch only when there is none yet. */
     localBranches?: readonly string[];
     /**
@@ -97,6 +99,17 @@ export function HistoryGraph(props: HistoryGraphProps) {
     };
     const actionsFor = (commit: HistoryCommit): Action[] => {
         const actions: Action[] = [];
+        const versionAction = (id: string, label: string, action: (oid: string) => Promise<HistoryActionResult>) => ({
+            id, label, run: () => {
+                setStatus('');
+                closeMenu('row');
+                void action(commit.oid).then(result => {
+                    if (!result.done && result.error) setStatus(result.error);
+                }, () => setStatus(labels.failed));
+            }
+        });
+        if (props.onOpenVersion) actions.push(versionAction('open-version', labels.historyOpenVersion, props.onOpenVersion));
+        if (props.onRestoreVersion) actions.push(versionAction('restore-version', labels.historyRestoreVersion, props.onRestoreVersion));
         if (props.onCreateBranch) actions.push({id: 'create', label: labels.historyCreateHere, run: () => {
             setBranchName('');
             setCheckout(true);

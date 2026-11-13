@@ -1,6 +1,8 @@
 import * as git from 'isomorphic-git';
 import {createReadOnlyFs, errorCode, GitPanelError, pathParts} from './filesystem.js';
 import {createMutationFs} from './mutation-fs.js';
+import {planProjectRestore, projectVersionFile} from './project-version.js';
+import type {ProjectRestorePlan} from './project-version.js';
 
 /** The name and email a commit records. */
 export type GitAuthor = {name: string; email: string};
@@ -8,6 +10,7 @@ export type LocalOperation =
     | {kind: 'stage'; paths: readonly string[]}
     | {kind: 'unstage'; paths: readonly string[]}
     | {kind: 'commit'; message: string; author?: GitAuthor}
+    | {kind: 'restoreProject'; plan: ProjectRestorePlan; author?: GitAuthor}
     /**
      * Creates `name` at HEAD, at the commit `at`, or at `origin/<name>` with `fromRemote`, and switches to it with
      * `checkout`. With `reuse` (only with `at`), a branch `name` that already points at `at` is switched to instead of
@@ -50,7 +53,7 @@ export function withGitMutationLock<T>(execute: () => Promise<T>) {
  * objects and the current branch ref are written. The work tree and `.git/config` are never written.
  */
 export async function runLocalOperation(root: FileSystemDirectoryHandle, operation: LocalOperation, guard: () => void) {
-    return withGitMutationLock(async () => {await applyLocalOperation(root, operation, guard);});
+    return withGitMutationLock(() => applyLocalOperation(root, operation, guard));
 }
 
 /** The queue holds the Git mutation lock from its journal read through its final state write. */
@@ -65,7 +68,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
         guard();
         let commitOid: string | undefined;
         const switching = operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout);
-        const transaction = createMutationFs(root, switching);
+        const transaction = createMutationFs(root, switching || operation.kind === 'restoreProject');
         const options = {fs: transaction.fs, dir: '/', gitdir: '/.git', cache: {}};
         const read = createReadOnlyFs(root).promises;
         const exists = async (path: string) => {
@@ -97,7 +100,66 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             '/.git/rebase-merge', '/.git/rebase-apply']) {
             if (await exists(path)) throw new GitPanelError('locked');
         }
-        if (operation.kind === 'createBranch' || operation.kind === 'switchBranch') {
+        if (operation.kind === 'restoreProject') {
+            const {plan} = operation;
+            const fresh = await planProjectRestore(options, plan.oid, plan.folder);
+            if (fresh.branch !== plan.branch || fresh.head !== plan.head ||
+                JSON.stringify(fresh.changes) !== JSON.stringify(plan.changes)) throw new GitPanelError('changed');
+            if (!fresh.changes.length) throw new GitPanelError('versionIdentical');
+            await assertIndex(options, fresh.head, new Map(), false).catch(error => {
+                if (error instanceof GitPanelError && error.code === 'changed') throw new GitPanelError('restoreUnsafe');
+                throw error;
+            });
+            const prefix = plan.folder ? plan.folder + '/' : '';
+            const statuses = await git.statusMatrix({...options, refresh: false,
+                filepaths: plan.folder ? [plan.folder] : undefined,
+                filter: path => path.startsWith(prefix) && projectVersionFile(path.slice(prefix.length))});
+            if (statuses.some(([, head, worktree]) => head && head !== worktree)) throw new GitPanelError('restoreUnsafe');
+
+            for (const {path, before, after} of fresh.changes) {
+                if (!after || before) continue;
+                const parents = pathParts(path);
+                parents.pop();
+                let directory = '';
+                for (const part of parents) {
+                    directory += '/' + part;
+                    const stat = await options.fs.promises.stat(directory).catch(error => {
+                        if (missing(error)) return null;
+                        throw error;
+                    });
+                    if (stat && !stat.isDirectory()) throw new GitPanelError('restoreUnsafe');
+                }
+                if (await exists('/' + path)) throw new GitPanelError('restoreUnsafe');
+            }
+            const oldFiles = fresh.changes.map(({path, before: oid}) => ({path, oid}));
+            await assertWorktree(options.fs, oldFiles).catch(error => {
+                if (error instanceof GitPanelError && error.code === 'changed') throw new GitPanelError('restoreUnsafe');
+                throw error;
+            });
+            const author = await commitAuthor(options, operation.author);
+            for (const {path, after} of fresh.changes) {
+                if (after) {
+                    const {blob} = await git.readBlob({...options, oid: after});
+                    const parents = pathParts(path);
+                    parents.pop();
+                    let directory = '';
+                    for (const part of parents) {
+                        directory += '/' + part;
+                        try {await options.fs.promises.mkdir(directory);}
+                        catch (error) {if (errorCode(error) !== 'EEXIST') throw error;}
+                    }
+                    await options.fs.promises.writeFile('/' + path, blob);
+                    await git.updateIndex({...options, filepath: path, oid: after, mode: 0o100644, add: true});
+                } else {
+                    await options.fs.promises.unlink('/' + path);
+                    await git.remove({...options, filepath: path});
+                }
+            }
+            const selected = new Map(fresh.changes.map(({path, after}) => [path, after]));
+            await assertIndex(options, fresh.head, selected, true);
+            commitOid = await git.commit({...options, author, parent: [fresh.head],
+                message: `Restore ${plan.folder || 'project'} from ${plan.oid}\n`});
+        } else if (operation.kind === 'createBranch' || operation.kind === 'switchBranch') {
             const name = operation.name.trim();
             const local = `refs/heads/${name}`;
             if (switching) {
@@ -170,14 +232,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             if (!message) throw new GitPanelError('commitMessage');
             const ref = await git.currentBranch(options);
             if (!ref) throw new GitPanelError('unsupported');
-            const configured = async (path: string) => {
-                const value = await git.getConfig({...options, path});
-                return typeof value === 'string' && value.trim() ? value : undefined;
-            };
-            // The repository's own identity first; the Editor's setting only fills in what Git does not have.
-            const name = await configured('user.name') ?? operation.author?.name?.trim();
-            const email = await configured('user.email') ?? operation.author?.email?.trim();
-            if (!name || !email) throw new GitPanelError('author');
+            const {name, email} = await commitAuthor(options, operation.author);
             if (queued) {
                 const {head, branch, files} = queued.selection;
                 if (ref !== branch || await readLocalRef(options, 'HEAD') !== head) throw new GitPanelError('changed');
@@ -205,6 +260,17 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
 }
 
 type GitReadOptions = Omit<Parameters<typeof git.resolveRef>[0], 'ref'>;
+
+async function commitAuthor(options: GitReadOptions, fallback?: GitAuthor): Promise<GitAuthor> {
+    const configured = async (path: string) => {
+        const value = await git.getConfig({...options, path});
+        return typeof value === 'string' && value.trim() ? value : undefined;
+    };
+    const name = await configured('user.name') ?? fallback?.name?.trim();
+    const email = await configured('user.email') ?? fallback?.email?.trim();
+    if (!name || !email) throw new GitPanelError('author');
+    return {name, email};
+}
 
 export async function readLocalRef(options: GitReadOptions, ref: string) {
     try {return await git.resolveRef({...options, ref});}

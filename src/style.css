@@ -337,3 +337,19 @@
 .twgit-history-view { box-sizing: border-box; padding: 8px; font: 13px/1.5 system-ui, sans-serif; }
 .twgit-history-view > p { margin: 0 0 8px; }
 .twgit-history-view > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+
+.twgit-restore-dialog {
+    max-width: min(48rem, 90vw);
+    color: CanvasText;
+    background: Canvas;
+}
+.twgit-restore-dialog ul {
+    max-height: 45vh;
+    overflow: auto;
+    overflow-wrap: anywhere;
+}
+.twgit-restore-dialog form {
+    display: flex;
+    justify-content: flex-end;
+    gap: .5rem;
+}
