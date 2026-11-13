@@ -204,7 +204,7 @@ export function ProjectElementView({changes, selection, locale, renderBlock, onS
     return <section className="twgit-element-view" aria-label={elementTitle(element, target, labels, locale)}>
         <h3>{target && <span>{target.isStage ? labels.stage : target.name} · </span>}{elementTitle(element, target, labels, locale)}</h3>
         {element.kind === 'code' && target && renderBlock && <ProjectSourceComparison before={changes.sources.before}
-            after={changes.sources.after} renderBlock={renderBlock} locale={locale} loadAsset={changes.loadAsset}
+            after={changes.sources.after} renderBlock={renderBlock} locale={locale}
             target={{isStage: target.isStage, name: target.name}} locateBlock={locateBlock}/>}
         {element.kind === 'costumes' && <div className="twgit-element-pictures">
             {(['before', 'after'] as const).map(version => <Picture key={version} md5ext={element.md5ext?.[version]} version={version}

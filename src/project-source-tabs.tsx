@@ -104,7 +104,7 @@ export function openProjectSourceTabs(openPanel: ((request: GitPanelRequest) => 
             for (const script of target.scripts) {
                 requests.push(tab(`${targetKey}:${script.id}`, words.script(script),
                     () => <ScriptReviewTab comparison={comparison} script={script} renderBlock={renderBlock} locale={locale}
-                        loadAsset={file.loadAsset} locateBlock={file.locateBlock}
+                        locateBlock={file.locateBlock}
                         mark={{name: rememberAs ?? area, remember: !!rememberAs, file: file.path, target}}/>, tabGroup));
             }
         }

@@ -41,7 +41,7 @@ const en = {
     noMetadata: 'The title and base branch are unavailable. Choose the base branch to compare with.',
     base: 'Base branch', pullRequest: 'Pull request',
     openLocally: 'Open here as {branch}',
-    openLocallyHint: 'Creates the local branch {branch} at this version, switches to it and opens the project, so it can be run. Unsaved edits and unrecorded changes stop it. Switch back in History.'
+    openLocallyHint: 'Creates the local branch {branch} at this version, switches to it and opens the project, so it can be run. Unsaved edits and unrecorded changes stop it. Switch back from “Record locally”.'
 };
 const ja: typeof en = {
     choose: 'PR を選ぶ',
@@ -67,7 +67,7 @@ const ja: typeof en = {
     noMetadata: '題名とベースのブランチを取得できませんでした。比べるベースのブランチを選んでください。',
     base: 'ベースのブランチ', pullRequest: 'プルリクエスト',
     openLocally: '{branch} として手元で開く',
-    openLocallyHint: 'この版にローカルブランチ {branch} を作って切り替え、作品を開き直して実行できるようにします。保存していない編集や記録していない変更があるときは行いません。元に戻すときは「履歴」で切り替えてください。'
+    openLocallyHint: 'この版にローカルブランチ {branch} を作って切り替え、作品を開き直して実行できるようにします。保存していない編集や記録していない変更があるときは行いません。元に戻すときは「手元に記録（コミット）」で切り替えてください。'
 };
 
 const gitErrors = ['session', 'forbidden', 'pullRequestNotFound', 'network', 'remoteFailed', 'baseMissing', 'changed'] as const;

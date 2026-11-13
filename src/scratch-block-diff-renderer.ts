@@ -2,6 +2,7 @@ import {isRecord} from './project-source-patch.js';
 import type {BlockChangeKind, BlockPart, BlockSide, BlockTable} from './project-source-patch.js';
 import {markBlockLocation} from './block-diff-location.js';
 import type {DiffSvgBlock} from './block-diff-location.js';
+import {attachBlockDiffGuides} from './block-diff-guides.js';
 
 interface BlockWorkspace {
     dispose(): void;
@@ -13,7 +14,8 @@ interface BlockWorkspace {
     scrollX?: number;
     scrollY?: number;
     translate?(x: number, y: number): void;
-    getMetrics?(): {absoluteLeft?: number; absoluteTop?: number} | null;
+    getMetrics?(): {absoluteLeft?: number; absoluteTop?: number; contentLeft?: number; contentTop?: number;
+        contentWidth?: number; contentHeight?: number} | null;
     scrollbar?: {resize(): void} | null;
 }
 interface InjectOptions {
@@ -182,7 +184,7 @@ const maxHeight = 420;
  * The frame keeps a gutter on the right for the zoom buttons, and for the minimap and thumbnail when present.
  */
 function createView(workspace: BlockWorkspace, blockly: ScratchBlocksPort, surface: HTMLElement, frame: HTMLElement,
-    startScale: number, navigation: boolean) {
+    startScale: number, navigation: boolean, targets: readonly Element[]) {
     const bounds = workspace.getBlocksBoundingBox();
     const left = bounds.x ?? 0, top = bounds.y ?? 0;
     const gutter = navigation ? 150 : 56;
@@ -190,12 +192,14 @@ function createView(workspace: BlockWorkspace, blockly: ScratchBlocksPort, surfa
     const scale = Math.max(0.25, Math.min(startScale, (width - padding - gutter) / Math.max(1, bounds.width),
         (maxHeight - 2 * padding) / Math.max(1, bounds.height)));
     const fit = {scale, height: Math.min(maxHeight, Math.max(minHeight, Math.ceil(bounds.height * scale + 2 * padding)))};
+    const guides = attachBlockDiffGuides(surface, targets, () => workspace.getMetrics?.(), () => workspace.scale ?? fit.scale);
     const listeners = new Set<() => void>();
     const translate = workspace.translate?.bind(workspace);
     let quiet = false;
     // Scrolling, dragging and every zoom end in translate, which moves the canvas.
     if (translate) workspace.translate = (x, y) => {
         translate(x, y);
+        guides?.schedule();
         if (!quiet) for (const listener of listeners) listener();
     };
     const setViewport = ({scale, x, y}: BlockPreviewViewport) => {
@@ -209,6 +213,7 @@ function createView(workspace: BlockWorkspace, blockly: ScratchBlocksPort, surfa
             const metrics = workspace.getMetrics?.();
             translate(x + (metrics?.absoluteLeft ?? 0), y + (metrics?.absoluteTop ?? 0));
             workspace.scrollbar?.resize();
+            guides?.schedule();
         } finally {
             quiet = false;
         }
@@ -221,7 +226,10 @@ function createView(workspace: BlockWorkspace, blockly: ScratchBlocksPort, surfa
     };
     layout(fit);
     // Keep the drawing area matched to the frame when the panel or the frame is resized.
-    const resize = new (surface.ownerDocument.defaultView ?? globalThis).ResizeObserver(() => blockly.svgResize(workspace));
+    const resize = new (surface.ownerDocument.defaultView ?? globalThis).ResizeObserver(() => {
+        blockly.svgResize(workspace);
+        guides?.resize();
+    });
     resize.observe(surface);
     // A plain wheel scrolls the review; Ctrl and trackpad pinches still zoom the preview.
     const wheel = (event: WheelEvent) => {if (!event.ctrlKey) event.stopPropagation();};
@@ -238,6 +246,7 @@ function createView(workspace: BlockWorkspace, blockly: ScratchBlocksPort, surfa
         frame.style.removeProperty('height');
         listeners.clear();
         resize.disconnect();
+        guides?.dispose();
         surface.removeEventListener('wheel', wheel, {capture: true});
         if (translate) workspace.translate = translate;
     }};
@@ -300,18 +309,19 @@ export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendere
                 zoom: {controls: true, wheel: true, startScale, maxScale: 4, minScale: 0.25, scaleSpeed: 1.2}});
             workspace.markFocused = () => {};
             blockly.Xml.domToWorkspace(dom, workspace);
+            const guideTargets: Element[] = [];
             if (marks) {
                 for (const mark of marks) {
                     const changed = workspace.getBlockById(mark.id === root ? serializedRoot : mark.id);
                     if (!changed) continue;
                     changed.getSvgRoot()?.classList.add('twgit-block-diff-' + mark.kind);
-                    markBlockLocation(changed, mark.parts);
+                    guideTargets.push(...(markBlockLocation(changed, mark.parts)?.targets ?? []));
                 }
             } else {
                 const changed = workspace.getBlockById(id === root ? serializedRoot : id);
-                if (changed) markBlockLocation(changed, parts);
+                if (changed) guideTargets.push(...(markBlockLocation(changed, parts)?.targets ?? []));
             }
-            view = createView(workspace, blockly, surface, container, startScale, !!options.attachNavigation);
+            view = createView(workspace, blockly, surface, container, startScale, !!options.attachNavigation, guideTargets);
             cleanups.push(view.dispose);
             navigation = options.attachNavigation?.(workspace, blockly, watermark);
             if (navigation && watermark) {

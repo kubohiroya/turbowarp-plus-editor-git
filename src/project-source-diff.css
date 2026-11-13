@@ -33,13 +33,12 @@
     border-radius: 6px;
 }
 .twgit-block-diff-surface { position: absolute; inset: 0; }
-.twgit-block-diff-watermark { position: absolute; z-index: 2; top: 10px; right: 12px; pointer-events: none; }
-.twgit-block-diff-watermark[data-navigation] { top: auto; right: var(--plus-watermark-right, 12px); bottom: var(--plus-watermark-bottom, 140px); }
-.twgit-block-diff-watermark > img {
-    display: block;
-    max-width: var(--plus-watermark-size, 48px);
-    max-height: var(--plus-watermark-size, 48px);
-    opacity: .6;
+.twgit-diff-bands, .twgit-diff-scroll-marks { pointer-events: none; fill: #facc15; }
+.twgit-diff-bands rect { fill-opacity: .25; }
+.twgit-diff-bands rect[data-hover] { fill-opacity: .62; }
+.twgit-diff-scroll-marks { fill-opacity: .8; stroke: #986400; stroke-width: .5; }
+@media (forced-colors: active) {
+    .twgit-diff-bands, .twgit-diff-scroll-marks { forced-color-adjust: none; }
 }
 .twgit-block-diff-link { display: block; padding: 6px 12px 0; }
 /* These markers also apply to the live Editor workspace returned by the host. */

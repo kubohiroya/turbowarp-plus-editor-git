@@ -336,7 +336,7 @@ test('the diff and review call blocks code, in Japanese and English', () => {
         /元のコード内で強調/);
 });
 
-test('stage and sprite headings show their names until a costume image is read', () => {
+test('code comparisons show stage and sprite names without loading costume images', () => {
     const withCostumes = structuredClone(project);
     withCostumes.targets[0].costumes = [{name: 'backdrop1', assetId: 'a'.repeat(32), dataFormat: 'svg'}];
     withCostumes.targets[1].costumes = [{name: 'costume1', md5ext: 'b'.repeat(32) + '.svg'}, {name: 'costume2', md5ext: 'c'.repeat(32) + '.png'}];
@@ -346,7 +346,6 @@ test('stage and sprite headings show their names until a costume image is read',
     head.targets[1].currentCostume = 1;
     const requests = [];
     const loadAsset = async request => {requests.push(request); return new Blob(['<svg/>']);};
-    // Server rendering runs no effects, so no asset is read and the heading is the name alone, as without a loader.
     const html = comparison(JSON.stringify(withCostumes), JSON.stringify(head), {loadAsset});
     assert.match(html, /<h5>Cat<small>Code changes · 1<\/small><\/h5>/);
     assert.doesNotMatch(html, /<img|twgit-review-thumbnails/);
