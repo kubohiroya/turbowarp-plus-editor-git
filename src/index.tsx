@@ -4,6 +4,7 @@ import {CloseButton} from './close-button.js';
 import {FileDiffView} from './file-diff-view.js';
 import {FileIdentity, GitStatusBadge} from './file-presentation.js';
 import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
+import {confirmProjectRestore} from './project-restore-dialog.js';
 import type {ChangedFile} from './project-change-model.js';
 import {openRepository} from './repository.js';
 import type {BranchRefs, Repository, Snapshot, FileChange, FileDiff, ChangeGroup, HistoryCommit, HistoryCursor} from './repository.js';
@@ -51,6 +52,7 @@ export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
 export {changeMarks} from './change-marks.js';
 export type {ChangeMark, FileStatus} from './change-marks.js';
+export type {ProjectRestorePlan} from './project-version.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
 export {pullRequestBranch} from './local-operations.js';
 
@@ -58,6 +60,10 @@ export interface GitHost {
     connectionSettings?: GitConnectionSettings;
     renderReviewBlock?: ProjectBlockRenderer;
     openProject(directory: FileSystemDirectoryHandle, confirmReplace: () => boolean): Promise<'opened' | 'cancelled'>;
+    restoreProjectVersions?: boolean;
+    validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
+    projectDirectory?(): FileSystemDirectoryHandle | null;
+    previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>}): Promise<void>;
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
@@ -103,6 +109,8 @@ interface Controller {
     /** Asks for a repository, then opens the panel on it. */
     choose(locale: string): Promise<void>;
     selectRepository(root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle): Promise<boolean>;
+    openVersion?: (oid: string) => Promise<HistoryActionResult>;
+    restoreVersion?: (oid: string) => Promise<HistoryActionResult>;
     changeBranch(operation: BranchOperation): Promise<HistoryActionResult>;
     changeExplorerEntry(repository: Repository, directory: FileSystemDirectoryHandle, kind: ExplorerOperation,
         entry: ExplorerEntry, isCurrent: () => boolean): Promise<HistoryActionResult>;
@@ -660,6 +668,64 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     // One loader per selected change, so thumbnails read each asset once.
     const loadAsset = useMemo(() => state.repository && state.snapshot && selected ?
         state.repository.assetLoader(state.snapshot, selected) : undefined, [state.repository, state.snapshot, selected]);
+    const versionDirectory = host.projectDirectory?.();
+    const hasProject = host.projectDirectory ? !!versionDirectory : state.project !== null;
+    const canUseVersions = !!state.repository && hasProject;
+    const projectVersionScope = async (repository: Repository) => {
+        const project = current.current.project;
+        const directory = host.projectDirectory?.();
+        const ticket = epoch.current;
+        const parts = directory ? await repository.root.resolve(directory) : null;
+        const folder = host.projectDirectory ? parts?.join('/') : project;
+        if (folder === null || folder === undefined) throw new GitPanelError('invalid');
+        const guard = () => {
+            if (!alive.current || epoch.current !== ticket || current.current.repository !== repository ||
+                (host.projectDirectory ? host.projectDirectory() !== directory : current.current.project !== project))
+                throw new GitPanelError('changed');
+        };
+        guard();
+        return {folder, guard};
+    };
+    controller.openVersion = host.previewProjectVersion && canUseVersions ? oid => run(async () => {
+        const repository = current.current.repository!;
+        const {folder, guard} = await projectVersionScope(repository);
+        const files = await repository.readProjectVersion(oid, folder);
+        guard();
+        try {await host.previewProjectVersion!({oid, folder, files});}
+        catch {throw new GitPanelError('versionOpenFailed');}
+        return {};
+    }) : undefined;
+    controller.restoreVersion = host.restoreProjectVersions && host.localWrite && canUseVersions ? async oid => {
+        let cancelled = false;
+        const result = await run(async () => {
+            const repository = current.current.repository!;
+            const {folder, guard} = await projectVersionScope(repository);
+            const check = () => {
+                guard();
+                if (host.isProjectDirty() || host.isProjectRunning?.()) throw new GitPanelError('restoreUnsafe');
+            };
+            check();
+            const plan = await repository.planProjectRestore(oid, folder);
+            check();
+            if (!plan.changes.length) throw new GitPanelError('versionIdentical');
+            if (host.validateProjectVersion) {
+                const files = await repository.readProjectVersion(oid, folder);
+                try {host.validateProjectVersion(files);}
+                catch {throw new GitPanelError('versionOpenFailed');}
+            }
+            check();
+            if (!await confirmProjectRestore(document, plan, labels)) {
+                cancelled = true;
+                return {};
+            }
+            check();
+            await repository.localOperation({kind: 'restoreProject', plan, author: host.localWrite?.author?.()}, check);
+            const snapshot = await repository.read(folder);
+            return {project: folder, snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null, notice: labels.versionRestored};
+        });
+        if (result.done && !cancelled && alive.current && !shownRef.current) controller.open(locale);
+        return result;
+    } : undefined;
     controller.changeBranch = changeBranch;
     controller.changeExplorerEntry = (repository, directory, kind, entry, isCurrent) => localOperation(async (active, guard) => {
         const parts = await active.root.resolve(directory);
@@ -686,7 +752,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     const branchState: BranchButtonState = {repository: !!state.repository, branch: refs?.branch, head: refs?.head ?? null,
         branches: refs?.branches ?? [], remoteBranches: refs?.remoteBranches ?? [], writable: !!host.localWrite && !!refs, busy: state.busy,
-        project: state.project !== null};
+        project: hasProject};
     const published = JSON.stringify(branchState);
     useEffect(() => controller.publish(branchState, state.repository, state.snapshot), [published, state.repository, state.snapshot]);
     if (!shown) return null;
@@ -798,7 +864,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     <h3 className="twgit-section-heading">{labels.history}</h3>
                     {state.snapshot && <HistoryGraph commits={history.commits} selected={state.commit?.oid ?? null} locale={locale} busy={state.busy}
                         onSelect={oid => void selectCommit(oid)} hasMore={!!history.cursor} loadingMore={history.loading}
-                        onShowMore={showMoreHistory} localBranches={state.snapshot.branches}
+                        onShowMore={showMoreHistory} localBranches={state.snapshot.branches} onOpenVersion={controller.openVersion} onRestoreVersion={controller.restoreVersion}
                         {...branching ? {
                             onCreateBranch: (oid: string, name: string, checkout: boolean) =>
                                 changeBranch({kind: 'createBranch', name, at: oid, checkout}),
@@ -1048,6 +1114,7 @@ function HistoryEntry({vm, locale}: {vm: object; locale: string}) {
     return <div className="twgit-history-view" ref={root}>
         <HistoryGraph commits={history.commits} selected={selected} locale={locale} busy={state.busy} onSelect={setSelected}
             hasMore={!!history.cursor} loadingMore={history.loading} onShowMore={showMore} localBranches={state.branches}
+            onOpenVersion={controller.openVersion} onRestoreVersion={controller.restoreVersion}
             {...state.writable ? {
                 // A refused create stays in the graph's form with its reason; only a done one is told in the snackbar.
                 onCreateBranch: async (oid: string, name: string, checkout: boolean) => {
