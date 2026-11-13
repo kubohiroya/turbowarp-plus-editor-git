@@ -99,7 +99,7 @@ function ChangeCard({change, renderBlock, labels, onLocate, location}: {
         <div className="twgit-block-diff-sides">
             {(['before', 'after'] as const).map(version => <BlockPreview key={version} side={change[version]} title={labels[version]}
                 renderBlock={renderBlock} withContext={withContext} labels={labels} parts={change.parts}
-                onLocate={onLocate && (() => onLocate(version))} version={version} sync={sync}
+                onLocate={onLocate && (() => onLocate(version))} sync={sync}
                 locationStatus={location?.version === version ? location.status : undefined}/>)}
         </div>
         {toggle}

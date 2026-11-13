@@ -141,11 +141,11 @@ function scriptReviewTitle(script: ScriptReview, labels: typeof ja) {
 
 type ScriptCommentField = {value: string; set(value: string, heading: string): void};
 
-function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, loadAsset, location, expanded = false, comment, target}: {
+function ScriptComparison({script, labels, reviewed = false, setReviewed, renderBlock, location, expanded = false, comment, target}: {
     script: ScriptReview; labels: typeof ja; reviewed?: boolean; setReviewed?(value: boolean): void;
     /** The person's comment on this code, sent with the review. */
     comment?: ScriptCommentField; target?: TargetReview;
-    renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; location?: BlockLocation;
+    renderBlock: ProjectBlockRenderer; location?: BlockLocation;
     /** Starts open, as in a tab that holds this one script. */
     expanded?: boolean;
 }) {
@@ -171,7 +171,7 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
                     {script[version].length ? script[version].map((side, index, sides) => <BlockPreview key={side.id} side={side}
                         title={sides.length > 1 ? `${labels[version]} ${index + 1}` : labels[version]}
                         marks={side.marks} renderBlock={renderBlock} withContext labels={labels}
-                        version={version} loadAsset={loadAsset} sync={sync}
+                        sync={sync}
                         onLocate={version === 'after' && location?.locate ? () => location.locate!(side) : undefined}
                         locationStatus={version === 'after' ? location?.status(side) : undefined}/>) :
                         <BlockPreview title={labels[version]} renderBlock={renderBlock} withContext labels={labels}/>}
@@ -221,8 +221,8 @@ function TargetThumbnails({target, labels, loadAsset}: {target: TargetReview; la
 }
 
 /** Lists the changed stages and sprites of one project file, each with its code comparisons. */
-function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBlock, review, expandSingle}: {
-    comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
+function ComparisonTargets({comparison, labels, renderBlock, locateBlock, review, expandSingle}: {
+    comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer;
     locateBlock?: ProjectBlockLocator; expandSingle?: boolean;
     review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void;
         comments?: {get(key: string): string; set(key: string, value: string, heading: string): void}};
@@ -232,7 +232,7 @@ function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBl
         {comparison.properties.length > 0 && <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p>}
         {!comparison.targets.length && !comparison.properties.length && <p>{labels.noChanges}</p>}
         {comparison.targets.map(target => <section className="twgit-review-target" key={JSON.stringify([target.isStage, target.name])}>
-            <h5><TargetThumbnails target={target} labels={labels} loadAsset={loadAsset}/>
+            <h5>
                 {target.isStage ? labels.stage : target.name}{target.scripts.length > 0 && <small>{labels.scriptCount(target.scripts.length)}</small>}</h5>
             {target.status !== 'updated' && <p className="twgit-review-target-status">
                 {(target.status === 'added' ? labels.targetAdded : labels.targetRemoved)(target.name, target.isStage)}</p>}
@@ -240,7 +240,7 @@ function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBl
             {target.scripts.map(script => {
                 const key = reviewKey(review?.file, target, script);
                 const comments = review?.comments;
-                return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
+                return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock}
                     expanded={expandSingle && countScripts(comparison) === 1} location={location}
                     reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}
                     target={target} comment={comments && {value: comments.get(key), set: (value, heading) => comments.set(key, value, heading)}}/>;
@@ -305,7 +305,7 @@ export interface ProjectSourceComparisonProps {
     locale?: string;
     /** Shown after an explanation when either version cannot be read as a project. Without it, only an error is shown. */
     fallback?: React.ReactNode;
-    /** Reads the images of both versions for thumbnails. Without it, stages and sprites are shown by name. */
+    /** @deprecated Code comparisons no longer show costume thumbnails. */
     loadAsset?: ProjectAssetLoader;
     /** Offers "Highlight in Editor" on the after version, which the caller has matched with the open project. */
     locateBlock?: ProjectBlockLocator;
@@ -314,7 +314,7 @@ export interface ProjectSourceComparisonProps {
 }
 
 /** Compares two versions of a project.source.json by stage, sprite and code, as the pull request review does. */
-export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, loadAsset, locateBlock, target}: ProjectSourceComparisonProps) {
+export function ProjectSourceComparison({before, after, renderBlock, locale = 'en', fallback, locateBlock, target}: ProjectSourceComparisonProps) {
     const labels = locale.startsWith('ja') ? ja : en;
     const only = target && JSON.stringify([target.isStage, target.isStage || target.name]);
     const comparison = useMemo(() => {
@@ -338,7 +338,7 @@ export function ProjectSourceComparison({before, after, renderBlock, locale = 'e
                 <div><dt>{labels.scripts}</dt><dd>{countScripts(comparison)}</dd></div>
             </dl>
         </header>}
-        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
+        <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
             locateBlock={locateBlock} expandSingle={!!only}/>
     </section>;
 }
@@ -488,7 +488,6 @@ export function ProjectSourceReview({title, description, verification, files, re
             {'status' in file && <RelatedFile file={file} entries={entries} labels={labels}/>}
             {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
             {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
-                loadAsset={'loadAsset' in file ? file.loadAsset : undefined}
                 locateBlock={'locateBlock' in file ? file.locateBlock : undefined}
                 review={{file: file.path, keys: reviewed, set: setReviewed, comments: commentsFor(file.path)}}/>}
         </section>)}
@@ -536,9 +535,9 @@ function useReviewMark(place: ReviewMarkPlace | undefined, script: ScriptReview)
 }
 
 /** One script of a comparison, open, for a tab of its own. */
-export function ScriptReviewTab({comparison, script, renderBlock, locale = 'en', loadAsset, locateBlock, mark}: {
+export function ScriptReviewTab({comparison, script, renderBlock, locale = 'en', locateBlock, mark}: {
     comparison: Comparison; script: ScriptReview; renderBlock: ProjectBlockRenderer; locale?: string;
-    loadAsset?: ProjectAssetLoader; locateBlock?: ProjectBlockLocator;
+    locateBlock?: ProjectBlockLocator;
     /** Offers the reviewed mark, shared with the review panel and other tabs that use the same place. */
     mark?: ReviewMarkPlace;
 }) {
@@ -546,7 +545,7 @@ export function ScriptReviewTab({comparison, script, renderBlock, locale = 'en',
     const location = useBlockLocation(comparison, locateBlock);
     const {reviewed, setReviewed} = useReviewMark(mark, script);
     return <section className="twgit-block-diff twgit-review twgit-review-tab">
-        <ScriptComparison script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset} location={location} expanded
+        <ScriptComparison script={script} labels={labels} renderBlock={renderBlock} location={location} expanded
             reviewed={reviewed} setReviewed={setReviewed}/>
         <Legend labels={labels}/>
     </section>;

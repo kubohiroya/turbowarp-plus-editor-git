@@ -66,7 +66,7 @@ const ja: typeof en = {
     restore: '保存済みの Desktop 接続を復元', noSaved: '保存済みの Desktop 接続がありません。',
     deviceCodeHelp: 'この画面に表示されたコードだけを入力してください。他人から届いたコードは入力しないでください。',
     revokeApp: 'GitHub App の承認を管理',
-    allowPush: 'GitHub に送ることを許可する（push）', fetch: 'GitHub と確かめる（fetch）', pull: 'GitHub から取り込む（pull）', push: 'GitHub に送る（push）'
+    allowPush: 'GitHub に送ることを許可する（push）', fetch: 'GitHub の変更を取得（fetch）', pull: 'GitHub から取り込む（pull）', push: 'GitHub に送る（push）'
 };
 
 export function ConnectionSettings({settings, locale, readOrigin, runOperation}: {

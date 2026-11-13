@@ -15,8 +15,8 @@ import type {BranchButtonState} from './branch-button.js';
 import {HistoryGraph} from './history-graph-view.js';
 import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
-import {GitWorkflow, PanelTabs, panelTabs} from './panel-navigation.js';
-import type {PanelTab} from './panel-navigation.js';
+import {GitWorkflow, PanelIcon, RepositoryContext, panelViews} from './panel-navigation.js';
+import type {PanelView} from './panel-navigation.js';
 import {GitPanelError, pathParts} from './filesystem.js';
 import {ConnectionSettings} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
@@ -235,7 +235,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const locator = useMemo(() => slot && host.openTargetCode && host.getWorkspace ? createEditorBlockLocator({
         vm: vm as LocatorVM, openTargetCode: host.openTargetCode, getWorkspace: host.getWorkspace}) : undefined, [slot !== null, host, vm]);
     const [review, setReview] = useState(false);
-    const [tab, setTab] = useState<PanelTab>('changes');
+    const [activeView, setActiveView] = useState<PanelView>('changes');
     const [panelId] = useState(() => `twgit-${++nextPanelId}`);
     const [locale, setLocale] = useState(document.documentElement.lang || 'en');
     const [dirty, setDirty] = useState(host.isProjectDirty());
@@ -252,8 +252,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     // A closed panel reads nothing; a refresh asked while it is closed waits until it opens again.
     const shownRef = useRef(false);
     const deferred = useRef(false);
-    const panelView = useRef({tab, review});
-    panelView.current = {tab, review};
+    const panelView = useRef({activeView, review});
+    panelView.current = {activeView, review};
     // The last fingerprint acted on, so a failing read or an open diff is not retried on every check.
     const handled = useRef<string | null>(null);
     const labels = labelsFor(locale);
@@ -399,9 +399,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 current.current.snapshot !== snapshot) return;
             handled.current = probe;
             const {selected, commit} = current.current;
-            const {tab, review} = panelView.current;
+            const {activeView, review} = panelView.current;
             // Keep an open diff, commit or review in place and ask for a refresh instead.
-            if (tab === 'changes' && selected || tab === 'history' && commit || tab === 'github' && review) {
+            if (activeView === 'changes' && selected || activeView === 'history' && commit || activeView === 'github' && review) {
                 setState(previous => previous.snapshot === snapshot ? {...previous, notice: labelsFor(locale).outdated} : previous);
             } else await controller.refresh(true);
         });
@@ -464,7 +464,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         const snapshot = await state.repository!.read(path);
         return {project: path, snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
     });
-    const commitView = tab === 'history';
+    const commitView = activeView === 'history';
     const commit = commitView ? state.commit : null;
     const changes = commitView ? commit?.changes ?? noChanges : state.changes;
     const selected = commitView ? commit?.selected : state.selected;
@@ -690,6 +690,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const published = JSON.stringify(branchState);
     useEffect(() => controller.publish(branchState, state.repository, state.snapshot), [published, state.repository, state.snapshot]);
     if (!shown) return null;
+    const changedFileCount = new Set(state.changes.map(change => change.path)).size;
     const groups: ChangeGroup[] = commitView ? ['commit'] : ['staged', 'unstaged', 'untracked'];
     // Branches can be switched and created whenever writes are allowed and the repository has been read.
     const branching = !!host.localWrite && !!state.snapshot;
@@ -731,40 +732,29 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const content = <>
             <header>
                 <h2>{labels.title}</h2>
-                <button onClick={chooseRoot} disabled={state.busy}>{labels.choose}</button>
-                <button onClick={() => void controller.refresh()} disabled={!state.repository || state.busy}>{labels.refresh}</button>
-                {state.project !== null && <button disabled={state.busy} onClick={() => void openProject(state.project!)}>{labels.reload}</button>}
-                <CloseButton label={labels.close} onClick={closePanel}/>
+                <button className="twgit-panel-action" onClick={chooseRoot} disabled={state.busy}>
+                    <PanelIcon name="choose"/>{labels.choose}</button>
+                <button className="twgit-panel-action" onClick={() => void controller.refresh()} disabled={!state.repository || state.busy}>
+                    <PanelIcon name="refresh"/>{labels.refresh}</button>
+                {state.project !== null && <button className="twgit-panel-action" disabled={state.busy} onClick={() => void openProject(state.project!)}>
+                    <PanelIcon name="reload"/>{labels.reload}</button>}
+                {!slot && <CloseButton label={labels.close} onClick={closePanel}/>}
             </header>
-            <div className="twgit-context">
-                <span>{labels.repository} · {state.repository?.root.name || '—'}</span>
-                <span>{labels.project} · {state.project === null ? labels.none : state.project || labels.root}</span>
-                <span data-git-dirty="">{dirty ? labels.dirty : labels.saved}</span>
-                {state.snapshot && <span data-git-upstream={state.snapshot.upstream.state} title={labels.checkedAt}>{upstreamText(state.snapshot, labels)}</span>}
-                {state.snapshot && <details className="twgit-git-details">
-                    <summary>{labels.details}</summary>
-                    <div className="twgit-connection-body">
-                        <p>{labels.branch} · <strong>{state.snapshot.branch || (state.snapshot.head ? labels.detached : labels.unborn)}</strong></p>
-                        <p>{labels.head} · <code>{state.snapshot.head?.slice(0, 12) ?? '—'}</code></p>
-                        <p>{labels.branches} · {state.snapshot.branches.join(', ') || '—'}</p>
-                        <p>{labels.groups} · {labels.gitStaged} = {labels.staged} / {labels.gitUnstaged} = {labels.unstaged} / {labels.gitUntracked} = {labels.untracked}</p>
-                        <p>{labels.permissions}</p>
-                    </div>
-                </details>}
-            </div>
-            <GitWorkflow snapshot={state.snapshot} dirty={dirty} canRecord={canRecord}
-                canShare={!!host.connectionSettings?.getSession} labels={labels}/>
-            <PanelTabs id={panelId} active={tab} onSelect={next => {
-                setTab(next);
-                if (next !== 'github') setReview(false);
-            }} labels={labels}/>
+            <RepositoryContext snapshot={state.snapshot} repositoryName={state.repository?.root.name} projectPath={state.project}
+                dirty={dirty} labels={labels} upstream={state.snapshot ? upstreamText(state.snapshot, labels) : undefined}/>
+            <GitWorkflow id={panelId} snapshot={state.snapshot} dirty={dirty} canRecord={canRecord} staged={staged}
+                canShare={!!host.connectionSettings?.getSession} labels={labels} active={activeView} changedFiles={changedFileCount}
+                reviewPending={!!state.snapshot && !dirty && unrecorded.length > 0} onSelect={next => {
+                    setActiveView(next);
+                    if (next !== 'github') setReview(false);
+                }}/>
             {state.error && <p className="twgit-error" role="alert">{state.error}</p>}
             {state.notice && <p className="twgit-context" role="status">{state.notice}</p>}
             {state.busy && <p className="twgit-status" role="status">{labels.loading}</p>}
-            {panelTabs.map(section => <div key={section} className="twgit-tab-panel" role="tabpanel"
-                id={`${panelId}-view-${section}`} aria-labelledby={`${panelId}-tab-${section}`}
-                hidden={tab !== section} tabIndex={0}>
-                {tab === section && !state.repository && <p className="twgit-status">{labels.empty}</p>}
+            {panelViews.map(section => <div key={section} className="twgit-workflow-view" role="region"
+                id={`${panelId}-view-${section}`} aria-labelledby={`${panelId}-step-${section}`}
+                hidden={activeView !== section}>
+                {activeView === section && !state.repository && <p className="twgit-status">{labels.empty}</p>}
                 {section === 'github' && <>
                     <div className="twgit-github-tools">
                         {host.connectionSettings ? <ConnectionSettings settings={host.connectionSettings} locale={locale}
@@ -778,8 +768,20 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             locateFor={reviewLocator} openTabs={openTabs} connection={pullRequestConnection}
                             openLocally={branching ? {open: openPullRequest, busy: state.busy} : undefined}/>}
                 </>}
-                {section !== 'github' && tab === section && state.repository && <div className="twgit-content">
-                <aside>{!commitView ? <>
+                {section !== 'github' && activeView === section && state.repository && <div className="twgit-content">
+                <aside>{commitView && canRecord && <section className="twgit-commit" aria-label={labels.nextRecord}>
+                    <h3>{labels.nextRecord}</h3>
+                    <p role="status">{labels.selectedFiles.replace('{count}', String(staged))}</p>
+                    {staged > 0 ? <>
+                        {!!state.snapshot?.scope && <p>{labels.recordScope}</p>}
+                        <label>{labels.commitLabel}
+                            <textarea value={message} rows={3} disabled={state.busy} onChange={event => setMessage(event.currentTarget.value)}/></label>
+                        <button className="twgit-primary" type="button" disabled={state.busy || !message.trim()}
+                            onClick={() => void localOperation({kind: 'commit', message, author: host.localWrite?.author?.()},
+                                labels.committed)}>{labels.commitButton}</button>
+                    </> : <p>{labels.recordHint}</p>}
+                </section>}
+                {!commitView ? <>
                     {state.browser && <details ref={projectBrowser} className="twgit-project-browser">
                         <summary>{labels.browse}</summary>
                         <p><code>{state.browser.path || '/'}</code></p>
@@ -790,7 +792,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => void browse([state.browser!.path, name].filter(Boolean).join('/'))}>{name}/</button></li>)}</ul>
                     </details>}
                     <h3 className="twgit-section-heading">{labels.worktree}
-                        <span className="twgit-count">{new Set(changes.map(change => change.path)).size}</span>
+                        <span className="twgit-count">{changedFileCount}</span>
                     </h3>
                 </> : <>
                     <h3 className="twgit-section-heading">{labels.history}</h3>
@@ -841,14 +843,11 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         {unrecorded.length > 0 && <p>{labels.recordHint}</p>}
                         {unrecorded.length > 0 && <button type="button" disabled={state.busy}
                             onClick={() => void localOperation({kind: 'stage', paths: unrecorded})}>{labels.stageAll}</button>}
-                        {staged > 0 ? <>
-                            {!!state.snapshot?.scope && <p>{labels.recordScope}</p>}
-                            <label>{labels.commitLabel}
-                                <textarea value={message} rows={3} disabled={state.busy} onChange={event => setMessage(event.currentTarget.value)}/></label>
-                            <button className="twgit-primary" type="button" disabled={state.busy || !message.trim()}
-                                onClick={() => void localOperation({kind: 'commit', message, author: host.localWrite?.author?.()},
-                                    labels.committed)}>{labels.commitButton}</button>
-                        </> : null}
+                        {staged > 0 && <button type="button" className="twgit-panel-action twgit-primary"
+                            onClick={() => {
+                                setActiveView('history');
+                                dialog.current?.querySelector<HTMLButtonElement>(`#${panelId}-step-history`)?.focus();
+                            }}><PanelIcon name="commit"/>{labels.openCommit}</button>}
                     </section>}
                     {commitView && branching && state.snapshot && <section className="twgit-branches" aria-label={labels.branches}>
                         <h3>{labels.branches}</h3>
@@ -883,7 +882,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         renderBlock={host.renderReviewBlock} onSelectFile={openFile}/> :
                         selected ? <FileDiffView change={selected} diff={diff ?? null} labels={labels} locale={locale}
                             locateBlock={fileLocator(selected)} onOpenTabs={openFileTabs(selected)}
-                            renderBlock={host.renderReviewBlock} loadAsset={loadAsset}/> :
+                            renderBlock={host.renderReviewBlock}/> :
                             <p>{commitView && !commit ? labels.selectRecord : labels.select}</p>}
                     </div>
                     {stageActions.length > 0 && <div className="twgit-diff-actions" role="group" aria-label={labels.recordFileActions}>

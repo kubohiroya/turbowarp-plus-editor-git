@@ -5,7 +5,6 @@ import {FileIdentity, GitStatusBadge} from './file-presentation.js';
 import type {FileChange, FileDiff} from './repository.js';
 import type {labelsFor} from './messages.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
-import type {ProjectAssetLoader} from './project-assets.js';
 import type {ProjectBlockLocator} from './block-diff-location.js';
 
 const en = {view: 'Show changes as', blocks: 'Blocks', text: 'Text', openTabs: 'Open as tabs'};
@@ -17,9 +16,9 @@ export const isProjectSource = (path: string) => path.split('/').pop() === 'proj
 /**
  * Shows one changed file. Project sources are compared as blocks by default, with their text diff one switch away.
  */
-export function FileDiffView({change, diff, labels, locale, renderBlock, loadAsset, locateBlock, onOpenTabs}: {
+export function FileDiffView({change, diff, labels, locale, renderBlock, locateBlock, onOpenTabs}: {
     change: FileChange; diff: FileDiff | null; labels: ReturnType<typeof labelsFor>; locale: string;
-    renderBlock?: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader; locateBlock?: ProjectBlockLocator;
+    renderBlock?: ProjectBlockRenderer; locateBlock?: ProjectBlockLocator;
     /** Opens the comparison as tabs of the host's layout, a tab group for each stage or sprite. */
     onOpenTabs?(before: string | null, after: string | null): void;
 }) {
@@ -27,7 +26,7 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, loadAss
     const names = locale.startsWith('ja') ? ja : en;
     const parsed = diff?.patch ? parseDiff(diff.patch)[0] : null;
     const text = <>
-        <details className="twgit-file-details"><summary>{labels.details}</summary>
+        <details className="twgit-file-details"><summary>{labels.fileDetails}</summary>
             <p>{labels.mode} · {change.oldMode?.toString(8) || '—'} → {change.newMode?.toString(8) || '—'}</p>
             {diff && <p>{diff.beforeSize} → {diff.afterSize} {labels.bytes}</p>}
         </details>
@@ -46,7 +45,7 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, loadAss
             {onOpenTabs && <button type="button" data-git-open-tabs="" onClick={() => onOpenTabs(
                 change.before === null ? null : sources.before, change.after === null ? null : sources.after)}>{names.openTabs}</button>}
         </div>}
-        {sources && view === 'blocks' ? <ProjectSourceComparison renderBlock={renderBlock!} locale={locale} fallback={text} loadAsset={loadAsset} locateBlock={locateBlock}
+        {sources && view === 'blocks' ? <ProjectSourceComparison renderBlock={renderBlock!} locale={locale} fallback={text} locateBlock={locateBlock}
             before={change.before === null ? null : sources.before} after={change.after === null ? null : sources.after}/> : text}
     </>;
 }

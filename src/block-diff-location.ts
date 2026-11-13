@@ -32,9 +32,12 @@ export function markBlockLocation(block: DiffSvgBlock, parts: readonly BlockPart
         element.classList.add('twgit-changed-block-part');
         marked.add(element);
     }
-    return () => {
-        root.classList.remove('twgit-changed-block');
-        for (const element of marked) element.classList.remove('twgit-changed-block-part');
+    return {
+        targets: marked.size ? [...marked] : [root],
+        clear() {
+            root.classList.remove('twgit-changed-block');
+            for (const element of marked) element.classList.remove('twgit-changed-block-part');
+        }
     };
 }
 
@@ -48,16 +51,16 @@ export function createScratchBlocksDiffLocator(
         const block = workspace.getBlockById(location.id);
         const expected = location.target.blocks[location.id];
         if (!block || (isRecord(expected) && typeof expected.opcode === 'string' && block.type !== expected.opcode)) return false;
-        const clear = markBlockLocation(block, location.parts);
-        if (!clear) return false;
+        const mark = markBlockLocation(block, location.parts);
+        if (!mark) return false;
         try {
             workspace.centerOnBlock(location.id);
         } catch (error) {
-            clear();
+            mark.clear();
             throw error;
         }
-        if (location.signal.aborted) {clear(); return false;}
-        location.signal.addEventListener('abort', clear, {once: true});
+        if (location.signal.aborted) {mark.clear(); return false;}
+        location.signal.addEventListener('abort', mark.clear, {once: true});
         return true;
     };
 }
