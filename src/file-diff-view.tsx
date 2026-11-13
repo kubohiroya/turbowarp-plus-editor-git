@@ -1,6 +1,7 @@
 import React, {useState} from 'react';
 import {Diff, Hunk, parseDiff} from 'react-diff-view';
 import {ProjectSourceComparison} from './project-source-review.js';
+import {FileIdentity, GitStatusBadge} from './file-presentation.js';
 import type {FileChange, FileDiff} from './repository.js';
 import type {labelsFor} from './messages.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
@@ -38,7 +39,7 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, loadAss
     </>;
     const sources = renderBlock && diff?.text && isProjectSource(change.path) ? diff.text : null;
     return <>
-        <h3>{change.path}</h3>
+        <h3 className="twgit-file-heading"><FileIdentity path={change.path}/><GitStatusBadge group={change.group} labels={labels}/></h3>
         {sources && <div className="twgit-view-switch" role="group" aria-label={names.view}>
             {(['blocks', 'text'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode}
                 data-git-view={mode} onClick={() => setView(mode)}>{names[mode]}</button>)}

@@ -57,7 +57,7 @@ test('replacing the hat, wrapping existing blocks in a repeat, changing a value 
     assert.deepEqual(script.summary, [
         {kind: 'hatReplaced', before: 'event_whenflagclicked', after: 'event_whenthisspriteclicked'},
         {kind: 'wrapped', opcode: 'control_repeat'},
-        {kind: 'valueChanged', opcode: 'motion_movesteps', name: 'STEPS'},
+        {kind: 'valueChanged', opcode: 'motion_movesteps', name: 'STEPS', values: {before: 10, after: 25}},
         {kind: 'blocksAdded', count: 1}
     ]);
     const marks = allMarks(script);

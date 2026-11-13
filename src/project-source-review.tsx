@@ -10,6 +10,7 @@ import type {LocationStatus} from './block-diff-preview.js';
 import {currentCostume, useAssetImage, useCostumeImage} from './project-assets.js';
 import {assetFileName, projectPropertyLabel} from './project-change-model.js';
 import {hatName, legend, summaryPhrase} from './review-words.js';
+import {FileIdentity} from './file-presentation.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import {changeReviewDraft, useReviewDraft} from './review-composer.js';
 import {reviewLabelsFor} from './messages.js';
@@ -154,7 +155,7 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
     const locale = labels === ja ? 'ja' : 'en';
     const summary = script.summary.map(item => summaryPhrase(item, locale)).join(labels === ja ? '、' : ', ');
     const title = scriptReviewTitle(script, labels);
-    return <details className="twgit-review-script" open={expanded || undefined}
+    return <details className="twgit-review-script" open={open}
         onToggle={event => setOpen((event.currentTarget as HTMLDetailsElement).open)}>
         <summary>
             <span className="twgit-review-status">{labels[status]}</span>
@@ -220,9 +221,9 @@ function TargetThumbnails({target, labels, loadAsset}: {target: TargetReview; la
 }
 
 /** Lists the changed stages and sprites of one project file, each with its code comparisons. */
-function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBlock, review}: {
+function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBlock, review, expandSingle}: {
     comparison: Comparison; labels: typeof ja; renderBlock: ProjectBlockRenderer; loadAsset?: ProjectAssetLoader;
-    locateBlock?: ProjectBlockLocator;
+    locateBlock?: ProjectBlockLocator; expandSingle?: boolean;
     review?: {file: string; keys: ReadonlySet<string>; set(key: string, value: boolean): void;
         comments?: {get(key: string): string; set(key: string, value: string, heading: string): void}};
 }) {
@@ -240,7 +241,8 @@ function ComparisonTargets({comparison, labels, renderBlock, loadAsset, locateBl
                 const key = reviewKey(review?.file, target, script);
                 const comments = review?.comments;
                 return <ScriptComparison key={key} script={script} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
-                    location={location} reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}
+                    expanded={expandSingle && countScripts(comparison) === 1} location={location}
+                    reviewed={review?.keys.has(key)} setReviewed={review && (value => review.set(key, value))}
                     target={target} comment={comments && {value: comments.get(key), set: (value, heading) => comments.set(key, value, heading)}}/>;
             })}
         </section>)}
@@ -337,7 +339,7 @@ export function ProjectSourceComparison({before, after, renderBlock, locale = 'e
             </dl>
         </header>}
         <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock} loadAsset={loadAsset}
-            locateBlock={locateBlock}/>
+            locateBlock={locateBlock} expandSingle={!!only}/>
     </section>;
 }
 
@@ -479,7 +481,10 @@ export function ProjectSourceReview({title, description, verification, files, re
         <Legend labels={labels}/>
         <h3 className="twgit-review-files-title">{labels.files}</h3>
         {entries.map(({file, comparison, invalid}) => <section key={file.path} className="twgit-review-file">
-            <header><h4>{file.previousPath ? file.previousPath + ' → ' + file.path : file.path}</h4>{file.summary && <p>{file.summary}</p>}</header>
+            <header><h4 className="twgit-file-heading">
+                {file.previousPath && <><span>{file.previousPath}</span><span>→</span></>}
+                <FileIdentity path={file.path}/>
+            </h4>{file.summary && <p>{file.summary}</p>}</header>
             {'status' in file && <RelatedFile file={file} entries={entries} labels={labels}/>}
             {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
             {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}

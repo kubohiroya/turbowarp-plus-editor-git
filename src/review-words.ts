@@ -49,8 +49,13 @@ export function summaryPhrase(item: ScriptSummaryItem, locale: string): string {
         `replaced “${blockName(item.before, locale)}” with “${blockName(item.after, locale)}”`;
     case 'wrapped': return ja ? `「${blockName(item.opcode, locale)}」で包んだ` : `wrapped in “${blockName(item.opcode, locale)}”`;
     case 'branchAdded': return ja ? `分岐「${blockName(item.opcode, locale)}」を追加` : `added “${blockName(item.opcode, locale)}”`;
-    case 'valueChanged': return ja ? `「${blockName(item.opcode, locale)}」の ${item.name} を変更` :
-        `changed ${item.name} of “${blockName(item.opcode, locale)}”`;
+    case 'valueChanged':
+        if (item.values && item.opcode === 'motion_movesteps' && item.name === 'STEPS') {
+            const {before, after} = item.values;
+            return ja ? `移動する歩数を ${before} → ${after} に変更` : `Changed the number of steps from ${before} to ${after}`;
+        }
+        return ja ? `「${blockName(item.opcode, locale)}」の ${item.name} を変更` :
+            `changed ${item.name} of “${blockName(item.opcode, locale)}”`;
     case 'blocksAdded': return ja ? `ブロックを ${item.count} 個追加` : `added ${item.count} ${item.count === 1 ? 'block' : 'blocks'}`;
     case 'blocksRemoved': return ja ? `ブロックを ${item.count} 個削除` : `removed ${item.count} ${item.count === 1 ? 'block' : 'blocks'}`;
     case 'reordered': return ja ? 'つなぎ方だけを変更' : 'only reconnected';

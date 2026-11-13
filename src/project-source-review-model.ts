@@ -13,7 +13,7 @@ export type ScriptSummaryItem =
     | {kind: 'hatReplaced'; before: string; after: string}  // hat block opcodes
     | {kind: 'wrapped'; opcode: string}                     // a new C block now holds blocks that existed before
     | {kind: 'branchAdded'; opcode: string}                 // control_if or control_if_else added
-    | {kind: 'valueChanged'; opcode: string; name: string}  // an input or field of an existing block, by its name
+    | {kind: 'valueChanged'; opcode: string; name: string; values?: {before: number; after: number}}
     | {kind: 'blocksAdded'; count: number}
     | {kind: 'blocksRemoved'; count: number}
     | {kind: 'reordered'}
@@ -158,6 +158,20 @@ function inputBlock(block: unknown, name: string) {
     return Array.isArray(input) && typeof input[1] === 'string' ? input[1] : undefined;
 }
 
+function literalNumber(side: BlockSide | undefined, name: string) {
+    const block = blockOf(side);
+    const input = isRecord(block) && isRecord(block.inputs) ? block.inputs[name] : undefined;
+    if (!Array.isArray(input) || input[0] !== 1) return undefined;
+    const value = input[1];
+    const shadow = typeof value === 'string' ? side?.target.blocks[value] : undefined;
+    const field = isRecord(shadow) && shadow.shadow === true && isRecord(shadow.fields) ? shadow.fields.NUM : undefined;
+    const raw = Array.isArray(value) && [4, 5, 6, 7, 8].includes(value[0]) ? value[1] :
+        Array.isArray(field) ? field[0] : undefined;
+    if (typeof raw !== 'number' && (typeof raw !== 'string' || !raw.trim())) return undefined;
+    const number = Number(raw);
+    return Number.isFinite(number) ? number : undefined;
+}
+
 function summarize(group: ScriptReview, changes: readonly BlockChange[], before?: ProjectTarget, after?: ProjectTarget) {
     const items: ScriptSummaryItem[] = [];
     const seen = new Set<string>();
@@ -219,6 +233,13 @@ function summarize(group: ScriptReview, changes: readonly BlockChange[], before?
         for (const part of change.parts) {
             // A C block's slot holds blocks; what changed there is reported as additions, removals or wrapping.
             if (part.kind === 'input' && substackInputs.includes(part.name)) continue;
+            if (part.kind === 'input' && opcode === 'motion_movesteps' && part.name === 'STEPS') {
+                const before = literalNumber(change.before, part.name), after = literalNumber(change.after, part.name);
+                if (before !== undefined && after !== undefined && before !== after) {
+                    add({kind: 'valueChanged', opcode, name: part.name, values: {before, after}});
+                    continue;
+                }
+            }
             add({kind: 'valueChanged', opcode, name: part.name});
         }
     }

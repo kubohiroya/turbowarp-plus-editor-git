@@ -26,9 +26,15 @@ globalThis.mountEntry = ({locale, writable, panelFirst}) => {
     (document.getElementById('workspace') ?? document.body.firstElementChild).replaceWith(bar);
     const vm = {};
     globalThis.host = {dirty: false};
+    let notify;
     const mount = () => mountGitPanel({vm, document, host: {
         openProject: async () => 'cancelled', isProjectDirty: () => host.dirty, isProjectRunning: () => false,
+        subscribe(listener) {
+            notify = listener;
+            return () => {notify = undefined;};
+        },
         ...writable ? {localWrite: {}} : {}}});
+    host.setDirty = dirty => {host.dirty = dirty; notify?.('changed');};
     // The button may be rendered before or after the panel is mounted.
     if (panelFirst) globalThis.panel = mount();
     render(renderBranchButton(React.createElement, {vm, locale}), bar);
