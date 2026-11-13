@@ -5,7 +5,9 @@ import {parseProjectSource} from './project-source-patch.js';
 import {useAssetImage, useCostumeImage} from './project-assets.js';
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import {ProjectSourceComparison} from './project-source-review.js';
-import type {ChangeGroup, FileChange, Repository, Snapshot} from './repository.js';
+import {FileIdentity, FileKindIcon, GitStatusBadge} from './file-presentation.js';
+import {labelsFor} from './messages.js';
+import type {FileChange, Repository, Snapshot} from './repository.js';
 import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ProjectBlockLocator} from './block-diff-location.js';
 
@@ -16,7 +18,7 @@ const en = {
     files: 'Files and Git groups', before: 'Before', after: 'After', absent: 'Not in this version',
     loading: 'Reading the project changes…', unreadable: 'The project data could not be read, so the changes are listed by file.',
     fileList: 'List by file', property: 'Item', format: 'Format', rate: 'Sample rate', samples: 'Samples', file: 'File name',
-    noImage: 'No image', groups: {staged: 'in the next record', unstaged: 'not yet recorded', untracked: 'new file', commit: 'in this record'} as Record<ChangeGroup, string>
+    noImage: 'No image'
 };
 const ja: typeof en = {
     title: '作品の要素ごとの変更', stage: 'ステージ', code: count => `コード · ${count} か所`,
@@ -25,7 +27,7 @@ const ja: typeof en = {
     files: 'ファイルと Git の区分', before: '変更前', after: '変更後', absent: 'この版にはありません',
     loading: '作品の変更を読み込み中…', unreadable: '作品データを読み込めないため、ファイル単位で一覧にします。',
     fileList: 'ファイル単位の一覧', property: '項目', format: '形式', rate: 'サンプリング周波数', samples: 'サンプル数', file: 'ファイル名',
-    noImage: '画像なし', groups: {staged: '次の記録に入る', unstaged: 'まだ記録していない', untracked: '新しいファイル', commit: 'この記録'}
+    noImage: '画像なし'
 };
 type Labels = typeof en;
 export const projectChangeLabels = (locale: string): Labels => locale.startsWith('ja') ? ja : en;
@@ -43,11 +45,13 @@ export interface ProjectChanges {
  */
 export function useProjectChanges(repository: Repository | null, snapshot: Snapshot | null, project: string | null,
     commit: string | null, changes: readonly FileChange[]): ProjectChanges | 'loading' | 'unreadable' | undefined {
-    const [result, setResult] = useState<{changes: readonly FileChange[]; value: ProjectChanges | 'unreadable'}>();
+    const [result, setResult] = useState<{repository: Repository; project: string; commit: string | null;
+        changes: readonly FileChange[]; value: ProjectChanges | 'unreadable'}>();
     const active = !!repository && !!snapshot && project !== null && changes.length > 0;
     useEffect(() => {
         if (!repository || !snapshot || project === null || !changes.length) return;
         let current = true;
+        const publish = (value: ProjectChanges | 'unreadable') => setResult({repository, project, commit, changes, value});
         const comparison = commit ? {kind: 'commit' as const, commit} : {kind: 'worktree' as const};
         void repository.readProject(snapshot, project, comparison).then(read => {
             if (!current) return;
@@ -58,17 +62,18 @@ export function useProjectChanges(repository: Repository | null, snapshot: Snaps
                     after: read.after === null ? null : parseProjectSource(read.after),
                     assetsDirectory: read.assetsDirectory, files: changes.map(({path, group}) => ({path, group}))});
             } catch {
-                setResult({changes, value: 'unreadable'});
+                publish('unreadable');
                 return;
             }
-            setResult({changes, value: {list, sources: {before: read.before, after: read.after},
-                loadAsset: repository.projectAssetLoader(snapshot, project, comparison)}});
-        }, () => {if (current) setResult({changes, value: 'unreadable'});});
+            publish({list, sources: {before: read.before, after: read.after},
+                loadAsset: repository.projectAssetLoader(snapshot, project, comparison)});
+        }, () => {if (current) publish('unreadable');});
         return () => {current = false;};
     }, [repository, snapshot, project, commit, changes]);
     if (!active) return undefined;
     // Keep the last list while a refresh reads again, so the panel does not fall back to files and back.
-    if (result?.changes === changes || (result && typeof result.value === 'object')) return result!.value;
+    if (result?.repository === repository && result.project === project && result.commit === commit &&
+        (result.changes === changes || typeof result.value === 'object')) return result.value;
     return 'loading';
 }
 
@@ -100,21 +105,26 @@ function ElementRow({element, target, labels, locale, loadAsset, selected, busy,
 }) {
     const version: ProjectVersion = element.md5ext?.after ? 'after' : 'before';
     const image = useAssetImage(element.kind === 'costumes' ? element.md5ext?.[version] : undefined, version, loadAsset);
+    const kind = {code: 'code', costumes: 'image', sounds: 'audio', data: 'data', settings: 'data'} as const;
+    const groups = [...new Set(element.files.map(file => file.group))];
+    const gitLabels = labelsFor(locale);
     return <li><button className="twgit-file twgit-element" data-git-element={element.kind} disabled={busy} aria-pressed={selected}
         onClick={onSelect}>
-        {element.kind === 'costumes' && (image ? <img src={image} alt=""/> : <span className="twgit-element-thumbnail"/>)}
+        {image ? <img src={image} alt=""/> : <FileKindIcon kind={kind[element.kind]}/>}
         <span className="twgit-element-name">{elementTitle(element, target, labels, locale)}</span>
         {element.status !== 'updated' && <small className="twgit-review-status">{labels[element.status]}</small>}
+        {groups.map(group => <GitStatusBadge key={group} group={group} labels={gitLabels}/>)}
     </button></li>;
 }
 
 /** The change list arranged by the project's stage, sprites and elements, with files outside the project after them. */
-export function ProjectChangeListView({changes, selected, locale, busy, onSelect, onSelectFile, fileList, fileListOpen, setFileListOpen}: {
-    changes: ProjectChanges; selected: string | null; locale: string; busy: boolean;
+export function ProjectChangeListView({changes, selected, selectedFile, locale, busy, onSelect, onSelectFile, fileList, fileListOpen, setFileListOpen}: {
+    changes: ProjectChanges; selected: string | null; selectedFile?: ChangedFile | null; locale: string; busy: boolean;
     onSelect(key: string): void; onSelectFile(file: ChangedFile): void; fileList: React.ReactNode;
     fileListOpen: boolean; setFileListOpen(open: boolean): void;
 }) {
     const labels = projectChangeLabels(locale);
+    const gitLabels = labelsFor(locale);
     const {list, loadAsset} = changes;
     return <section className="twgit-element-list" aria-label={labels.title}>
         {list.targets.map(target => <section key={target.key}>
@@ -129,8 +139,12 @@ export function ProjectChangeListView({changes, selected, locale, busy, onSelect
         </section>}
         {list.other.length > 0 && <section>
             <h4 className="twgit-element-target"><span>{labels.other}</span></h4>
-            <ul>{list.other.map(file => <li key={file.group + ':' + file.path}><button className="twgit-file" data-git-other={file.group}
-                disabled={busy} onClick={() => onSelectFile(file)}>{file.path} <small>{labels.groups[file.group]}</small></button></li>)}</ul>
+            <ul>{list.other.map(file => <li key={file.group + ':' + file.path}>
+                <button className="twgit-file twgit-file-entry" data-git-other={file.group} disabled={busy}
+                    aria-pressed={selectedFile?.path === file.path && selectedFile.group === file.group} onClick={() => onSelectFile(file)}>
+                    <FileIdentity path={file.path}/><GitStatusBadge group={file.group} labels={gitLabels}/>
+                </button>
+            </li>)}</ul>
         </section>}
         <details className="twgit-file-list" open={fileListOpen}
             onToggle={event => setFileListOpen((event.currentTarget as HTMLDetailsElement).open)}>
@@ -170,6 +184,7 @@ export function ProjectElementView({changes, selection, locale, renderBlock, onS
     renderBlock?: ProjectBlockRenderer; onSelectFile(file: ChangedFile): void; locateBlock?: ProjectBlockLocator;
 }) {
     const labels = projectChangeLabels(locale);
+    const gitLabels = labelsFor(locale);
     const {element, target} = selection;
     const record = (version: ProjectVersion): Record<string, unknown> | undefined => {
         if (element.kind === 'costumes' || element.kind === 'sounds') return element[version];
@@ -204,8 +219,11 @@ export function ProjectElementView({changes, selection, locale, renderBlock, onS
             </tr>)}</tbody>
         </table>}
         <details className="twgit-element-files"><summary>{labels.files}</summary>
-            <ul>{element.files.map(file => <li key={file.group + ':' + file.path}><button className="twgit-file" type="button"
-                onClick={() => onSelectFile(file)}>{file.path} <small>{labels.groups[file.group]}</small></button></li>)}</ul>
+            <ul>{element.files.map(file => <li key={file.group + ':' + file.path}>
+                <button className="twgit-file twgit-file-entry" type="button" onClick={() => onSelectFile(file)}>
+                    <FileIdentity path={file.path}/><GitStatusBadge group={file.group} labels={gitLabels}/>
+                </button>
+            </li>)}</ul>
         </details>
     </section>;
 }

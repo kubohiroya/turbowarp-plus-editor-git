@@ -13,6 +13,191 @@
 .twgit-panel button[aria-pressed="true"] { color: HighlightText; background: Highlight; }
 .twgit-context { display: flex; gap: 8px 20px; flex-wrap: wrap; padding: 8px 16px; }
 .twgit-context { align-items: center; }
+.twgit-panel:has(> .twgit-tabs) {
+    --twgit-accent: #5746bd;
+    --twgit-border: color-mix(in srgb, CanvasText 20%, Canvas);
+    --twgit-tint: color-mix(in srgb, var(--twgit-accent) 16%, Canvas);
+    container-type: inline-size;
+}
+.twgit-workflow {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+    margin: 0;
+    padding: 6px 16px 10px;
+    list-style: none;
+}
+.twgit-workflow li {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: color-mix(in srgb, CanvasText 6%, Canvas);
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+.twgit-workflow li + li::before {
+    position: absolute;
+    inset-inline-end: calc(100% + 3px);
+    content: '→' / '';
+}
+.twgit-workflow li[data-complete] { background: color-mix(in srgb, #399668 18%, Canvas); }
+.twgit-workflow li[aria-current="step"] {
+    border-color: var(--twgit-accent);
+    background: var(--twgit-tint);
+    font-weight: 700;
+}
+.twgit-step-mark {
+    display: grid;
+    place-items: center;
+    width: 1.15em;
+    height: 1.15em;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    flex: none;
+    line-height: 1;
+}
+.twgit-workflow li[data-complete] .twgit-step-mark { color: white; background: #24774e; border-color: #24774e; }
+.twgit-workflow li[aria-current="step"] .twgit-step-mark {
+    background: currentColor;
+    box-shadow: inset 0 0 0 3px var(--twgit-tint);
+}
+.twgit-workflow small { display: block; font-weight: normal; }
+.twgit-tabs { display: flex; padding-inline: 12px; border-bottom: 1px solid var(--twgit-border); }
+.twgit-panel .twgit-tabs button {
+    padding: 6px 14px;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    font-weight: 600;
+}
+.twgit-panel .twgit-tabs button:hover,
+.twgit-panel .twgit-tabs button[aria-selected="true"] { background: var(--twgit-tint); }
+.twgit-panel .twgit-tabs button[aria-selected="true"] { border-bottom-color: var(--twgit-accent); }
+.twgit-tab-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; }
+.twgit-tab-panel[hidden] { display: none; }
+.twgit-tab-panel:focus-visible { outline: 2px solid Highlight; outline-offset: -2px; }
+.twgit-status { margin: 8px 16px; }
+.twgit-tab-panel > .twgit-content > aside,
+.twgit-tab-panel > .twgit-content > .twgit-diff { padding-top: 12px; }
+.twgit-tab-panel > .twgit-content > aside { border-color: var(--twgit-border); }
+.twgit-panel .twgit-section-heading { margin-top: 6px; font-size: 16px; }
+.twgit-project-browser { margin-bottom: 12px; color: color-mix(in srgb, CanvasText 78%, Canvas); }
+.twgit-project-browser[open] { padding-bottom: 8px; border-bottom: 1px solid var(--twgit-border); }
+.twgit-tab-panel .twgit-element-view > h3 { margin-top: 4px; font-size: 18px; }
+.twgit-tab-panel .twgit-element-view .twgit-review-summary {
+    color: CanvasText;
+    background: var(--twgit-tint);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-weight: 600;
+}
+.twgit-count {
+    display: inline-block;
+    min-width: 1.75em;
+    margin-inline-start: 8px;
+    border-radius: 1em;
+    background: var(--twgit-tint);
+    font-size: .8em;
+    text-align: center;
+    vertical-align: middle;
+}
+.twgit-tab-panel .twgit-diff[data-git-actions] {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 0;
+}
+.twgit-diff[data-git-actions] .twgit-diff-scroll { flex: 1; min-height: 0; overflow: auto; }
+.twgit-diff-actions {
+    flex: none;
+    max-height: 40%;
+    overflow: auto;
+    padding-block: 8px;
+    border-top: 1px solid var(--twgit-border);
+}
+.twgit-diff-actions > div {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px 10px;
+    margin-block: 3px;
+}
+.twgit-diff-actions .twgit-file-identity { font-size: 12px; }
+.twgit-file-identity, .twgit-file-heading,
+.twgit-panel .twgit-file-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.twgit-panel .twgit-file-entry, .twgit-file-heading { flex-wrap: wrap; }
+.twgit-panel .twgit-file-entry .twgit-file-identity { flex: 1 1 8em; }
+.twgit-file-name { min-width: 0; overflow-wrap: anywhere; }
+.twgit-file-icon {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
+    background: color-mix(in srgb, CanvasText 8%, Canvas);
+}
+.twgit-file-icon[data-git-file-kind="project"], .twgit-file-icon[data-git-file-kind="code"],
+.twgit-file-icon[data-git-file-kind="markdown"] { background: color-mix(in srgb, #6b55c5 17%, Canvas); }
+.twgit-file-icon[data-git-file-kind="image"], .twgit-file-icon[data-git-file-kind="audio"],
+.twgit-file-icon[data-git-file-kind="video"] { background: color-mix(in srgb, #218b88 18%, Canvas); }
+.twgit-status-badge {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 6px;
+    border: 1px solid color-mix(in srgb, currentColor 33%, transparent);
+    border-radius: 1em;
+    font-size: 11px;
+    line-height: 1.45;
+    font-weight: 600;
+    white-space: nowrap;
+    background: color-mix(in srgb, var(--twgit-status-color) 16%, Canvas);
+}
+.twgit-status-mark { line-height: 1; }
+.twgit-status-badge[data-git-status="staged"] { --twgit-status-color: #399668; }
+.twgit-status-badge[data-git-status="unstaged"] { --twgit-status-color: #d38a21; border-style: dashed; }
+.twgit-status-badge[data-git-status="untracked"] { --twgit-status-color: #397dc0; }
+.twgit-status-badge[data-git-status="commit"] { --twgit-status-color: #7663bd; }
+.twgit-github-tools { padding: 12px 16px; display: grid; gap: 10px; justify-items: start; }
+.twgit-github-tools > p { margin: 0; }
+.twgit-github-tools .twgit-connection-body {
+    position: static;
+    margin-top: 8px;
+    width: auto;
+    max-height: none;
+    box-shadow: none;
+}
+.twgit-commit h3, .twgit-commit p { margin: 0; }
+.twgit-tab-panel .twgit-commit { background: color-mix(in srgb, CanvasText 4%, Canvas); padding: 10px; }
+.twgit-panel button.twgit-primary { color: white; background: var(--twgit-accent); border-color: var(--twgit-accent); }
+.twgit-tab-panel .twgit-file[aria-pressed="true"] { color: CanvasText; background: var(--twgit-tint); }
+.twgit-tab-panel .twgit-file-entry:hover:not(:disabled),
+.twgit-tab-panel .twgit-element:hover:not(:disabled) { background: var(--twgit-tint); }
+@container (max-width: 560px) {
+    .twgit-workflow { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px 18px; }
+    .twgit-workflow li:nth-child(3)::before { content: none; }
+}
+@container (max-width: 450px) {
+    .twgit-tab-panel > .twgit-content { display: block; }
+    .twgit-tab-panel > .twgit-content > aside { border: 0; border-bottom: 1px solid var(--twgit-border); }
+    .twgit-tab-panel > .twgit-content > aside,
+    .twgit-tab-panel > .twgit-content > .twgit-diff { overflow: visible; }
+    .twgit-tab-panel .twgit-diff[data-git-actions] { display: block; overflow: visible; }
+    .twgit-diff[data-git-actions] .twgit-diff-scroll { overflow: visible; }
+}
 .twgit-connection, .twgit-git-details { position: relative; }
 .twgit-connection > summary, .twgit-git-details > summary { cursor: pointer; }
 /* Settings and Git details open over the list, so the list and the diff stay where they are. */
@@ -22,7 +207,7 @@
 .twgit-connection-body > p { margin: 4px 0; overflow-wrap: anywhere; }
 .twgit-connection-body > label { display: block; margin: 4px 0; }
 .twgit-sync { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.twgit-change-kind { display: inline-block; min-width: 2.6em; font-size: 11px; opacity: .8; }
+.twgit-change-kind { flex: none; font-size: 11px; opacity: .8; }
 .twgit-file-details { font-size: 12px; margin-bottom: 6px; }
 .twgit-file-details > p { margin: 2px 0; }
 .twgit-content { display: grid; grid-template-columns: minmax(230px, 30%) minmax(0, 1fr); flex: 1; min-height: 0; }
@@ -33,7 +218,7 @@
 .twgit-panel .twgit-file { width: 100%; border: 0; margin: 1px 0; }
 .twgit-panel .twgit-file-row { display: flex; gap: 6px; align-items: center; }
 .twgit-panel .twgit-file-row .twgit-file { flex: 1; min-width: 0; width: auto; text-align: start; }
-.twgit-panel .twgit-stage { flex: none; font-size: 11px; margin: 0; white-space: nowrap; }
+.twgit-panel .twgit-stage { flex: none; max-width: 55%; font-size: 11px; margin: 0; overflow-wrap: anywhere; }
 .twgit-commit { display: grid; gap: 6px; margin: 10px 0; padding: 8px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px; }
 .twgit-commit label { display: grid; gap: 4px; font-size: 12px; }
 .twgit-commit textarea { font: inherit; resize: vertical; min-height: 3em; }
@@ -49,8 +234,8 @@
 .twgit-element-target { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; font-size: 14px; }
 .twgit-element-target img, .twgit-element img, .twgit-element-thumbnail { width: 28px; height: 28px; object-fit: contain; flex: none; }
 .twgit-element-thumbnail { display: inline-block; border-radius: 4px; background: color-mix(in srgb, CanvasText 8%, Canvas); }
-.twgit-panel .twgit-element { display: flex; align-items: center; gap: 6px; padding-inline-start: 10px; }
-.twgit-element-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.twgit-panel .twgit-element { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding-inline-start: 10px; }
+.twgit-element-name { flex: 1 1 6em; min-width: 0; overflow-wrap: anywhere; }
 .twgit-file-list { margin-top: 10px; }
 .twgit-element-pictures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .twgit-element-picture { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px; }
