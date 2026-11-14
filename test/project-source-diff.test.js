@@ -42,7 +42,7 @@ test('the generated full-context patch is applicable by Git and the React view r
     execFileSync('git', ['apply', '--whitespace=nowarn', '-'], {cwd: directory, input: patch});
     assert.equal(readFileSync(source, 'utf8'), after);
     const html = view(patch);
-    assert.match(html, /Block changes · 3/);
+    assert.match(html, /Block changes: 3/);
     assert.match(html, /1 unchanged blocks omitted/);
     assert.match(html, /twgit-block-diff-updated/);
     assert.match(html, /twgit-block-diff-removed/);
@@ -54,7 +54,7 @@ test('a compact patch needs its original source and invalid input receives an ac
     const compact = createTwoFilesPatch('a/project.source.json', 'b/project.source.json', before, after,
         undefined, undefined, {context: 1});
     assert.match(view(compact), /role="alert"/);
-    assert.match(view(compact, before), /Block changes · 3/);
+    assert.match(view(compact, before), /Block changes: 3/);
     assert.match(view(compact, '{}'), /role="alert"/);
     assert.match(view('invalid diff'), /role="alert"/);
     assert.throws(() => createProjectSourceDiff('{}', after), /project.source.json/);
@@ -187,7 +187,7 @@ test('a review groups all edits to one script and includes related files and non
     assert.match(html, /Start the round together/);
     assert.match(html, /Check the start signal/);
     assert.match(html, /game\/assets\/start.svg/);
-    assert.match(html, /Changes outside the code · <span[^>]*>Broadcast messages/);
+    assert.match(html, /Changes outside the code: <span[^>]*>Broadcast messages/);
     assert.match(html, /Affected stages and sprites<\/dt><dd>2<\/dd>/);
     assert.match(html, /Code changes<\/dt><dd>1<\/dd>/);
     assert.match(html, /Reviewed<\/dt><dd>0 \/ 1<\/dd>/);
@@ -275,7 +275,7 @@ test('a local comparison groups changed scripts by stage and sprite, as the revi
     assert.match(html, /aria-label="Project changes"/);
     assert.match(html, /Affected stages and sprites<\/dt><dd>1<\/dd>/);
     assert.match(html, /Code changes<\/dt><dd>1<\/dd>/);
-    assert.match(html, /<h5>Cat<small>Code changes · 1<\/small><\/h5>/);
+    assert.match(html, /<h5>Cat<small>Code changes: 1<\/small><\/h5>/);
     assert.equal((html.match(/class="twgit-review-script"/g) ?? []).length, 1);
     assert.match(html, /twgit-review-status">Changed<\/span><strong>When green flag clicked/);
     assert.doesNotMatch(html, /Reviewed/);
@@ -322,10 +322,10 @@ test('the diff and review call blocks code, in Japanese and English', () => {
         title: 'Move further', files: [{path: 'game/project.source.json', patch}], renderBlock: async () => {}, locale
     }));
     const ja = reviewOf('ja');
-    assert.match(ja, /<h5>Cat<small>コードの変更 · 1 か所<\/small><\/h5>/);
+    assert.match(ja, /<h5>Cat<small>コードの変更: 1 か所<\/small><\/h5>/);
     assert.match(ja, /コードの変更<\/dt><dd>1<\/dd>/);
     assert.match(ja, /確認済み<\/dt><dd>0 \/ 1<\/dd>/);
-    assert.match(comparison(source(base), source(head), {locale: 'ja'}), /<h5>Cat<small>コードの変更 · 1 か所<\/small><\/h5>/);
+    assert.match(comparison(source(base), source(head), {locale: 'ja'}), /<h5>Cat<small>コードの変更: 1 か所<\/small><\/h5>/);
     for (const html of [ja, reviewOf('en'), comparison(source(base), source(head), {locale: 'ja'}), comparison(source(base), source(head)),
         ReactDOMServer.renderToStaticMarkup(React.createElement(ProjectSourceBlockDiff, {patch, renderBlock: async () => {}, locale: 'ja'})),
         view(patch)]) {
@@ -347,7 +347,7 @@ test('code comparisons show stage and sprite names without loading costume image
     const requests = [];
     const loadAsset = async request => {requests.push(request); return new Blob(['<svg/>']);};
     const html = comparison(JSON.stringify(withCostumes), JSON.stringify(head), {loadAsset});
-    assert.match(html, /<h5>Cat<small>Code changes · 1<\/small><\/h5>/);
+    assert.match(html, /<h5>Cat<small>Code changes: 1<\/small><\/h5>/);
     assert.doesNotMatch(html, /<img|twgit-review-thumbnails/);
     assert.deepEqual(requests, []);
     assert.equal(html, comparison(JSON.stringify(withCostumes), JSON.stringify(head)));
