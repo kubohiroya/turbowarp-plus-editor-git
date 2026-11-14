@@ -22,6 +22,8 @@ export interface FileChange {
     before: string | null;
     after: string | null;
     worktree: boolean;
+    /** Compare the saved file with HEAD even when the index has a different version. */
+    fromHead?: boolean;
     oldMode: number | null;
     newMode: number | null;
     /** For `commit` changes, the commit compared with its first parent. */
@@ -97,6 +99,8 @@ export interface Snapshot {
     remoteBranches: string[];
     commits: Commit[];
     changes: FileChange[];
+    trackedPaths: string[];
+    headChanges: FileChange[];
     scope: string;
     metadata: Metadata;
     /** Size and time fingerprint taken before the read. Compare it with `probe(scope)` to see later changes. */
@@ -407,10 +411,12 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp
         })) : [];
         const upstream = await upstreamRelation(branch || undefined, head);
-        const {changes} = await readChanges(scope, head, filepaths);
+        const {changes, committed} = await readChanges(scope, head, filepaths);
+        const headChanges = head ? await commitChanges(head, scope, committed) : [];
         if (!sameMetadata(before, await metadata())) throw new GitPanelError('changed');
         await fs.checkReads();
-        return {branch, head, branches, remoteBranches, commits, changes, scope, metadata: before, probe: fingerprint,
+        return {branch, head, branches, remoteBranches, commits, changes, trackedPaths: [...committed.keys()], headChanges,
+            scope, metadata: before, probe: fingerprint,
             upstream};
     };
     const readChanges = async (scope: string, head: string | null, filepaths?: string[]) => {
@@ -436,15 +442,16 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         return {changes, committed};
     };
-    const readFileStatus = async (scope: string, fingerprint: string) => {
+    const readFileStatus = async (scope: string, fingerprint: string, includeUpstream: boolean) => {
         fs.clearReads();
         cache = {};
         const before = await metadata(true);
-        const {branch, head} = await readRefs();
+        const {branch, head} = await readHead();
         const {changes, committed} = await readChanges(scope, head);
-        const remote = await git.getConfig({...options, path: 'remote.origin.url'});
+        const remote = includeUpstream ? await git.getConfig({...options, path: 'remote.origin.url'}) : undefined;
         let upstream = new Map<string, Entry>();
         let pushed: string | undefined;
+        let upstreamBranch: string | undefined;
         if (remote && branch && !pushNeedsFetch) {
             const tracking = await statusTrackingRef(branch);
             if (tracking) {
@@ -452,6 +459,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                     const oid = await git.resolveRef({...options, ref: tracking});
                     upstream = oid === head ? committed : await entries(oid, scope);
                     pushed = oid;
+                    upstreamBranch = tracking.slice('refs/remotes/origin/'.length);
                 } catch {
                     // The tracking ref or some of its objects are not available locally.
                 }
@@ -460,7 +468,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         if (!sameMetadata(before, await metadata(true))) throw new GitPanelError('changed');
         await fs.checkReads();
         if (fingerprint !== await probe(scope, true)) throw new GitPanelError('changed');
-        return {changes, committed, upstream, branch, pushed, remote};
+        return {changes, committed, upstream, branch, upstreamBranch, pushed, remote};
     };
     interface HistoryNode {commit: HistoryCommit; time: number; children: number; expanded: boolean}
     interface HistoryWalk {nodes: Map<string, HistoryNode>; pending: Set<HistoryNode>; frontier: Set<HistoryNode>}
@@ -565,12 +573,16 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         walks.set(cursor, walk);
         return {commits, cursor};
     };
-    const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
-        fs.clearReads();
-        await assertSnapshot(snapshot);
+    const commitChanges = async (oid: string, scope: string, after: Map<string, Entry>): Promise<FileChange[]> => {
         const {commit} = await git.readCommit({...options, cache, oid});
-        const before = await entries(commit.parent[0] || emptyTree, snapshot.scope);
-        const after = await entries(oid, snapshot.scope);
+        let before: Map<string, Entry>;
+        try {
+            before = await entries(commit.parent[0] || emptyTree, scope);
+        } catch (error) {
+            // The first parent can be absent in a shallow repository.
+            if (errorCode(error) === 'NotFoundError') return [];
+            throw error;
+        }
         const result: FileChange[] = [];
         for (const path of [...new Set([...before.keys(), ...after.keys()])].sort()) {
             const a = before.get(path), b = after.get(path);
@@ -579,17 +591,25 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                 oldMode: a?.mode ?? null, newMode: b?.mode ?? null, worktree: false, commit: oid
             });
         }
+        return result;
+    };
+    const historyChanges = async (snapshot: Snapshot, oid: string): Promise<FileChange[]> => {
+        fs.clearReads();
+        await assertSnapshot(snapshot);
+        const result = await commitChanges(oid, snapshot.scope, await entries(oid, snapshot.scope));
         await assertSnapshot(snapshot);
         await fs.checkReads();
         return result;
     };
-    const readDiff = async (snapshot: Snapshot, change: FileChange): Promise<FileDiff> => {
+    const readDiff = async (snapshot: Snapshot, change: FileChange, draft?: Uint8Array | null): Promise<FileDiff> => {
         fs.clearReads();
         await assertSnapshot(snapshot);
         pathParts(change.path);
         const before = change.before ? (await git.readBlob({...options, cache, oid: change.before})).blob : new Uint8Array();
         let after: Uint8Array = new Uint8Array();
-        if (change.after) {
+        if (draft !== undefined) {
+            after = draft ?? after;
+        } else if (change.after) {
             if (change.worktree) {
                 const bytes = await readOptional(fs, '/' + change.path);
                 if (!bytes || (await git.hashBlob({object: bytes})).oid !== change.after) throw new GitPanelError('changed');
@@ -610,7 +630,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         try {oldText = decoder.decode(before); newText = decoder.decode(after);} catch {
             return {...base, binary: true, patch: ''};
         }
-        if (change.worktree && await git.getConfig({...options, path: 'core.autocrlf'}) === 'true') {
+        if ((change.worktree || draft !== undefined) && await git.getConfig({...options, path: 'core.autocrlf'}) === 'true') {
             newText = newText.replace(/\r\n/g, '\n');
         }
         const text = {before: oldText, after: newText};
@@ -621,8 +641,21 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         return patch === undefined ? {...base, tooLarge: true, patch: '', text} :
             {...base, patch: 'diff --git a/file b/file\n' + patch.replace(/^=+\n/, ''), text};
     };
+    const readUnsavedDiff = async (snapshot: Snapshot, path: string, draft: Uint8Array | null) => {
+        const parts = pathParts(path);
+        if (!parts.length || parts.join('/') !== path || parts.some(part => part.toLowerCase() === '.git') ||
+            !inScope(path, snapshot.scope)) throw new GitPanelError('invalid');
+        fs.clearReads();
+        await assertSnapshot(snapshot);
+        const entry = snapshot.head ? (await entries(snapshot.head, path)).get(path) : undefined;
+        const change: FileChange = {path, group: entry ? 'unstaged' : 'untracked', before: entry?.oid ?? null,
+            after: draft === null ? null : (await git.hashBlob({object: draft})).oid, worktree: false,
+            oldMode: entry?.mode ?? null, newMode: draft === null ? null : entry?.mode ?? 0o100644};
+        return {change, diff: await readDiff(snapshot, change, draft)};
+    };
     const sourceOf = async (snapshot: Snapshot, change: FileChange, version: ProjectVersion): Promise<Source | null> => {
         if (change[version] === null) return null;
+        if (change.fromHead && version === 'before') return snapshot.head ? {kind: 'tree', ref: snapshot.head} : null;
         switch (change.group) {
         case 'staged': return version === 'after' ? {kind: 'index'} : snapshot.head ? {kind: 'tree', ref: snapshot.head} : null;
         case 'unstaged': return version === 'after' ? {kind: 'worktree'} : {kind: 'index'};
@@ -788,6 +821,34 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }
         return {base: {ref: base.branch ?? null, sha}, head, mergeBase, files};
     };
+    // Walk the same two revisions used by the diff, excluding every commit reachable from the base.
+    const pullRequestCommits = async (head: string, base: string, signal: AbortSignal) => {
+        if (!isSha(head) || !isSha(base)) throw new GitPanelError('invalid');
+        const excluded = new Set<string>();
+        const pending = [base];
+        while (pending.length) {
+            signal.throwIfAborted();
+            const oid = pending.pop()!;
+            if (excluded.has(oid)) continue;
+            if (excluded.size >= 10000) throw new GitPanelError('unsupported');
+            const {commit} = await git.readCommit({...options, cache, oid});
+            excluded.add(oid);
+            pending.push(...commit.parent);
+        }
+        const commits: Commit[] = [];
+        pending.push(head);
+        while (pending.length) {
+            signal.throwIfAborted();
+            const oid = pending.pop()!;
+            if (excluded.has(oid)) continue;
+            if (commits.length === 250) return {commits: commits.reverse(), limited: true};
+            const {commit} = await git.readCommit({...options, cache, oid});
+            excluded.add(oid);
+            commits.push({oid, message: commit.message, author: commit.author.name, timestamp: commit.author.timestamp});
+            pending.push(...commit.parent);
+        }
+        return {commits: commits.reverse(), limited: false};
+    };
     const directoryAt = async (path: string) => {
         let directory = root;
         for (const part of pathParts(path)) directory = await directory.getDirectoryHandle(part);
@@ -818,7 +879,20 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         await directory.getFileHandle('project.source.json');
         return directory;
     };
-    return {root, openProject, browse, probe,
+    const defaultProject = async (rootFolder: Awaited<ReturnType<typeof browse>>) => {
+        if (rootFolder.isProject) return '';
+        if (!rootFolder.children.includes('project')) return null;
+        try {
+            await openProject('project');
+            return 'project';
+        } catch (error) {
+            if (error instanceof GitPanelError && error.code === 'invalid') return null;
+            if (error instanceof DOMException && ['NotFoundError', 'TypeMismatchError', 'NotAllowedError'].includes(error.name)) return null;
+            throw error;
+        }
+    };
+    return {root, openProject, browse, defaultProject, probe,
+        readHead: () => serial(readHead),
         readOrigin: () => serial(() => git.getConfig({...options, path: 'remote.origin.url'})),
         remoteOperation: (operation: RemoteOperation, getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal) =>
             serial(async () => {
@@ -847,6 +921,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
          * from the merge base to the head, and each project file's diff with assets read from the same commits.
          */
         readPullRequest: (head: string, base: PullRequestBase) => serial(() => readPullRequest(head, base)),
+        pullRequestCommits: (head: string, base: string, signal: AbortSignal) =>
+            serial(() => pullRequestCommits(head, base, signal)),
         /** Stages, unstages or commits; see `runLocalOperation`. `guard` throws to stop before each write. */
         localOperation: (operation: LocalOperation, guard: () => void) =>
             serial(() => runLocalOperation(root, operation, guard)),
@@ -866,8 +942,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }),
         read: (scope?: string, filepaths?: string[]) => serial(() => read(scope, filepaths)),
         /** Reads the saved files against the index, HEAD and the last known upstream, under one folder. */
-        readFileStatus: (scope: string, fingerprint: string) =>
-            serial(() => readFileStatus(pathParts(scope).join('/'), fingerprint)),
+        readFileStatus: (scope: string, fingerprint: string, {includeUpstream = true} = {}) =>
+            serial(() => readFileStatus(pathParts(scope).join('/'), fingerprint, includeUpstream)),
         /**
          * The current branch, HEAD and the branch names, read from refs only. Cheap enough to follow branch changes made
          * by other tools while nothing else is read; `read` returns the same fields.
@@ -879,6 +955,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         /** Reads a regular file from the latest local commit. Missing paths and unborn branches have null bytes. */
         readHeadFile: (path: string, limit: number) => serial(() => readHeadFile(path, limit)),
         readDiff: (snapshot: Snapshot, change: FileChange) => serial(() => readDiff(snapshot, change)),
+        readUnsavedDiff: (snapshot: Snapshot, path: string, draft: Uint8Array | null) =>
+            serial(() => readUnsavedDiff(snapshot, path, draft)),
         planProjectRestore: (oid: string, folder: string) => serial(() => readRestorePlan(oid, folder)),
         readProjectVersion: (oid: string, folder: string) => serial(() => readProjectVersion(oid, folder)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),

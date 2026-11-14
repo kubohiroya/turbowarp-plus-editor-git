@@ -169,8 +169,9 @@ export function createMutationFs(root: FileSystemDirectoryHandle, worktree: bool
         return path.startsWith('/.git/refs/heads/') || path === '/.git/HEAD' ? 5000 : 4000;
     }
 
-    return {fs, async commit(guard: () => void) {
-        const pending = [...changes.values()].filter(change => !equal(change.before, change.after))
+    return {fs, async commit(guard: () => void, objectsOnly = false) {
+        const pending = [...changes.values()].filter(change => !equal(change.before, change.after) &&
+            (!objectsOnly || change.path === '/.git/objects' || change.path.startsWith('/.git/objects/')))
             .sort((left, right) => order(left) - order(right));
         await base.checkReads();
         for (const change of pending) {

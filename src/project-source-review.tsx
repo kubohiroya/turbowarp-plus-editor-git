@@ -1,4 +1,6 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
+import {createPortal} from 'react-dom';
+import {PanelIcon} from './panel-navigation.js';
 import {BlockPreview, usePreviewSync} from './block-diff-preview.js';
 import {isRecord, parseProjectSource, readProjectSourceDiff} from './project-source-patch.js';
 import type {BlockSide} from './project-source-patch.js';
@@ -27,9 +29,10 @@ export type ProjectSourceReviewFile = {
     locateBlock?: ProjectBlockLocator} | {status: 'added' | 'removed' | 'updated'});
 
 export interface ProjectSourceReviewProps {
-    title: string;
+    title?: string;
     description?: string;
     verification?: readonly string[];
+    showFileCount?: boolean;
     files: readonly ProjectSourceReviewFile[];
     renderBlock: ProjectBlockRenderer;
     locale?: string;
@@ -48,7 +51,7 @@ export interface ProjectSourceReviewProps {
 // Like the Editor's Code tab, a connected group of blocks is called code, and each item is named by its hat block.
 const ja = {
     review: '変更レビュー', fullDescription: 'PR 本文を表示', checks: '確認してほしいこと', files: '変更ファイル', targets: '影響するステージ・スプライト',
-    scripts: 'コードの変更', scriptCount: (count: number) => `コードの変更 · ${count} か所`,
+    scripts: 'コードの変更', scriptCount: (count: number) => `コードの変更: ${count} か所`,
     reviewed: '確認済み', before: '変更前', after: '変更後',
     updated: '変更', added: '追加', removed: '削除', reorganized: '再編', moved: '位置だけ', reordered: '並べ替え',
     stage: 'ステージ', otherSettings: 'そのほかの設定', legend: '色の見方',
@@ -66,7 +69,7 @@ const ja = {
 };
 const en: typeof ja = {
     review: 'Change review', fullDescription: 'Show full PR description', checks: 'Review checklist', files: 'Changed files', targets: 'Affected stages and sprites',
-    scripts: 'Code changes', scriptCount: count => `Code changes · ${count}`,
+    scripts: 'Code changes', scriptCount: count => `Code changes: ${count}`,
     reviewed: 'Reviewed', before: 'Before', after: 'After',
     updated: 'Changed', added: 'Added', removed: 'Removed', reorganized: 'Reorganized', moved: 'Moved only', reordered: 'Reconnected',
     stage: 'Stage', otherSettings: 'Other settings', legend: 'Colours',
@@ -178,11 +181,11 @@ function ScriptComparison({script, labels, reviewed = false, setReviewed, render
                 </div>)}
             </div>
             {toggle}
-            {setReviewed && <label className="twgit-review-checked"><input type="checkbox" checked={reviewed}
-                onChange={event => setReviewed(event.currentTarget.checked)}/> {labels.reviewed}</label>}
             {comment && <label className="twgit-review-field twgit-review-comment">{reviewLabelsFor(locale).scriptComment}
                 <textarea rows={3} value={comment.value} onChange={event => comment.set(event.currentTarget.value,
                     `${target?.isStage ? labels.stage : target?.name ?? ''} · ${title} · ${script.id}`)}/></label>}
+            {setReviewed && <footer className="twgit-review-footer"><label className="twgit-review-checked"><input type="checkbox" checked={reviewed}
+                onChange={event => setReviewed(event.currentTarget.checked)}/> {labels.reviewed}</label></footer>}
         </>}
     </details>;
 }
@@ -229,14 +232,14 @@ function ComparisonTargets({comparison, labels, renderBlock, locateBlock, review
 }) {
     const location = useBlockLocation(comparison, locateBlock);
     return <>
-        {comparison.properties.length > 0 && <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p>}
+        {comparison.properties.length > 0 && <p>{labels.properties}: {propertyNames(comparison.properties, labels)}</p>}
         {!comparison.targets.length && !comparison.properties.length && <p>{labels.noChanges}</p>}
         {comparison.targets.map(target => <section className="twgit-review-target" key={JSON.stringify([target.isStage, target.name])}>
             <h5>
                 {target.isStage ? labels.stage : target.name}{target.scripts.length > 0 && <small>{labels.scriptCount(target.scripts.length)}</small>}</h5>
             {target.status !== 'updated' && <p className="twgit-review-target-status">
                 {(target.status === 'added' ? labels.targetAdded : labels.targetRemoved)(target.name, target.isStage)}</p>}
-            {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
+            {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties}: {propertyNames(target.properties, labels)}</p>}
             {target.scripts.map(script => {
                 const key = reviewKey(review?.file, target, script);
                 const comments = review?.comments;
@@ -286,7 +289,7 @@ function RelatedFile({file, entries, labels}: {
 }) {
     const owner = assetOwner(file.path, file.status, entries);
     const image = useAssetImage(owner && owner.kind !== 'sound' ? owner.md5ext : undefined, owner?.version ?? 'after', owner?.loadAsset);
-    if (!owner) return <p>{labels.related} · {labels[file.status]}</p>;
+    if (!owner) return <p>{labels.related}: {labels[file.status]}</p>;
     const ownerName = owner.target.isStage ? labels.stage : owner.target.name;
     return <p className="twgit-review-asset">
         {image && <img src={image} alt=""/>}
@@ -403,7 +406,62 @@ const writeMarks = (name: string, marks: Record<string, string>, remember = true
     markListeners.get(name)?.forEach(listener => listener());
 };
 
-export function ProjectSourceReview({title, description, verification, files, renderBlock, locale = 'en', rememberAs, commentAs}: ProjectSourceReviewProps) {
+function ReviewFileWindow({label, path, blockedLabel, children}: {
+    label: string; path: string; blockedLabel: string; children: React.ReactNode;
+}) {
+    const popup = useRef<Window | null>(null);
+    const [mount, setMount] = useState<HTMLElement | null>(null);
+    const [blocked, setBlocked] = useState(false);
+    useEffect(() => () => {
+        const child = popup.current;
+        popup.current = null;
+        child?.close();
+    }, []);
+    const open = (event: React.MouseEvent<HTMLButtonElement>) => {
+        const source = event.currentTarget.ownerDocument;
+        if (popup.current && !popup.current.closed) {
+            popup.current.focus();
+            return;
+        }
+        const child = source.defaultView?.open('about:blank', '_blank', 'popup,width=1200,height=860');
+        if (!child) {
+            setBlocked(true);
+            return;
+        }
+        const doc = child.document;
+        doc.title = path;
+        doc.documentElement.lang = source.documentElement.lang;
+        const base = doc.createElement('base');
+        base.href = source.baseURI;
+        doc.head.append(base);
+        for (const style of source.head.querySelectorAll('link[rel="stylesheet"], style')) {
+            doc.head.append(doc.importNode(style, true));
+        }
+        doc.body.className = 'twgit-review-window';
+        const root = doc.createElement('main');
+        doc.body.append(root);
+        popup.current = child;
+        child.opener = null;
+        child.addEventListener('pagehide', () => {
+            if (popup.current !== child) return;
+            popup.current = null;
+            setMount(null);
+        }, {once: true});
+        setBlocked(false);
+        setMount(root);
+    };
+    return <>
+        <button type="button" className="twgit-review-open-window" aria-label={label} title={label}
+            onClick={open}><PanelIcon name="openWindow"/></button>
+        {blocked && <span role="status">{blockedLabel}</span>}
+        {mount && createPortal(<div className="twgit-block-diff twgit-review">
+            <h2>{path}</h2>
+            {children}
+        </div>, mount)}
+    </>;
+}
+
+export function ProjectSourceReview({title, description, verification, showFileCount = true, files, renderBlock, locale = 'en', rememberAs, commentAs}: ProjectSourceReviewProps) {
     const labels = locale.startsWith('ja') ? ja : en;
     const draft = useReviewDraft(commentAs);
     const commentsFor = (file: string) => commentAs && draft ? {
@@ -461,10 +519,10 @@ export function ProjectSourceReview({title, description, verification, files, re
     return <section className="twgit-block-diff twgit-review" aria-label={labels.review}>
         <header className="twgit-review-overview">
             <p>{labels.review}</p>
-            <h2>{title}</h2>
+            {title && <h2>{title}</h2>}
             {excerpt && <p className="twgit-review-description">{excerpt}</p>}
             <dl>
-                <div><dt>{labels.files}</dt><dd>{entries.length}</dd></div>
+                {showFileCount && <div><dt>{labels.files}</dt><dd>{entries.length}</dd></div>}
                 <div><dt>{labels.targets}</dt><dd>{targets}</dd></div>
                 <div><dt>{labels.scripts}</dt><dd>{scripts}</dd></div>
                 {scripts > 0 && <div><dt>{labels.reviewed}</dt><dd>{reviewed.size} / {scripts}</dd></div>}
@@ -480,17 +538,30 @@ export function ProjectSourceReview({title, description, verification, files, re
         </header>
         <Legend labels={labels}/>
         <h3 className="twgit-review-files-title">{labels.files}</h3>
-        {entries.map(({file, comparison, invalid}) => <section key={file.path} className="twgit-review-file">
-            <header><h4 className="twgit-file-heading">
-                {file.previousPath && <><span>{file.previousPath}</span><span>→</span></>}
-                <FileIdentity path={file.path}/>
-            </h4>{file.summary && <p>{file.summary}</p>}</header>
-            {'status' in file && <RelatedFile file={file} entries={entries} labels={labels}/>}
-            {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
-            {comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
+        {entries.map(({file, comparison, invalid}) => {
+            const content = comparison && <ComparisonTargets comparison={comparison} labels={labels} renderBlock={renderBlock}
                 locateBlock={'locateBlock' in file ? file.locateBlock : undefined}
-                review={{file: file.path, keys: reviewed, set: setReviewed, comments: commentsFor(file.path)}}/>}
-        </section>)}
+                review={{file: file.path, keys: reviewed, set: setReviewed, comments: commentsFor(file.path)}}/>;
+            return <section key={file.path} className="twgit-review-file">
+                <header>
+                    <div className="twgit-review-file-heading">
+                        <h4 className="twgit-file-heading">
+                            {file.previousPath && <><span>{file.previousPath}</span><span>→</span></>}
+                            <FileIdentity path={file.path}/>
+                        </h4>
+                        {content && <ReviewFileWindow path={file.path}
+                            label={labels === ja ? '別ウィンドウで開く' : 'Open in another window'}
+                            blockedLabel={labels === ja ? '別ウィンドウを開けませんでした。' : 'Could not open another window.'}>
+                            {content}
+                        </ReviewFileWindow>}
+                    </div>
+                    {file.summary && <p>{file.summary}</p>}
+                </header>
+                {'status' in file && <RelatedFile file={file} entries={entries} labels={labels}/>}
+                {(invalid || file.unavailable) && <p role="alert">{labels.invalid}</p>}
+                {content}
+            </section>;
+        })}
     </section>;
 }
 
@@ -561,7 +632,7 @@ export function TargetReviewTab({comparison, target, locale = 'en', loadAsset}: 
     const labels = locale.startsWith('ja') ? ja : en;
     if (!target) {
         return <section className="twgit-block-diff twgit-review twgit-review-tab">
-            {comparison.properties.length > 0 ? <p>{labels.properties} · {propertyNames(comparison.properties, labels)}</p> :
+            {comparison.properties.length > 0 ? <p>{labels.properties}: {propertyNames(comparison.properties, labels)}</p> :
                 <p>{labels.noChanges}</p>}
         </section>;
     }
@@ -569,7 +640,7 @@ export function TargetReviewTab({comparison, target, locale = 'en', loadAsset}: 
         <h5><TargetThumbnails target={target} labels={labels} loadAsset={loadAsset}/>{target.isStage ? labels.stage : target.name}</h5>
         {target.status !== 'updated' && <p className="twgit-review-target-status">
             {(target.status === 'added' ? labels.targetAdded : labels.targetRemoved)(target.name, target.isStage)}</p>}
-        {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties} · {propertyNames(target.properties, labels)}</p>}
+        {target.status === 'updated' && target.properties.length > 0 && <p>{labels.properties}: {propertyNames(target.properties, labels)}</p>}
         {target.scripts.length > 0 && <p>{labels.scriptCount(target.scripts.length)}</p>}
     </section>;
 }

@@ -1,8 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createPullRequestQueue, inspectPublicationRepository, pushPublicationCommit} from '../dist/pull-request-queue.js';
+import {createPullRequestQueue, inspectPublicationRepository, preparePublicationCommit, publicationCommits,
+    pushPublicationCommit} from '../dist/pull-request-queue.js';
 import {createGitHubPublicationHost} from '../dist/github-publication-host.js';
 import {directoryHandle} from './directory.js';
 import {adapterOptions, commit, git, remote, startFixture, writeDiscovery} from './smart-http-fixture.js';
@@ -31,7 +33,7 @@ function fixture({existingIssue} = {}) {
     let pullBody;
     const pull = () => ({
         number: 28, state: state.merged ? 'closed' : 'open', merged: state.merged, merge_commit_sha: mergedOid, body: pullBody,
-        head: {ref: head, sha: state.headOid, repo: {id: 7}},
+        head: {ref: head, sha: state.headOid, repo: {id: state.forkId ?? 7}},
         base: {ref: state.base, sha: state.baseOid, repo: {id: 7}}, changed_files: 1,
         ...(state.downstack && {stack: {number: 2, position: 2}})
     });
@@ -256,4 +258,55 @@ test('pushes the journaled OID without moving local HEAD, and refuses a conflict
         return fetch(url, init);
     }), {code: 'diverged'});
     assert.equal(git(server.bare, 'rev-parse', ref), other);
+});
+
+test('publishes just the selected commits without changing HEAD, the worktree or the index', async t => {
+    const folder = await mkdtemp(join(tmpdir(), 'tw-publish-selection-'));
+    t.after(() => rm(folder, {force: true, recursive: true}));
+    const run = (...args) => git(folder, ...args);
+    run('init', '-q', '-b', 'main');
+    run('config', 'user.name', 'Commit fixture');
+    run('config', 'user.email', 'fixture@example.invalid');
+    const add = async (file, text, message) => {
+        await writeFile(join(folder, file), text);
+        run('add', file);
+        run('commit', '-qm', message);
+        return run('rev-parse', 'HEAD');
+    };
+    const base = await add('base.txt', 'base\n', 'Base');
+    const first = await add('one.txt', 'one\n', 'First');
+    const skipped = await add('skip.txt', 'skipped\n', 'Skipped');
+    const last = await add('two.txt', 'two\n', 'Last');
+    await writeFile(join(folder, 'skip.txt'), 'modified locally\n');
+    run('add', 'skip.txt');
+    const index = await readFile(join(folder, '.git', 'index'));
+    const root = directoryHandle(folder);
+    const commits = await publicationCommits(root, last, {name: 'main', oid: base}, async () => null, () => {});
+    assert.deepEqual(commits.map(item => item.oid), [last, skipped, first]);
+    const result = await preparePublicationCommit(root, base, [first, last], () => {});
+    assert.equal(run('rev-list', '--count', base + '..' + result), '2');
+    assert.equal(run('diff', '--name-only', base, result), 'one.txt\ntwo.txt');
+    assert.equal(run('rev-parse', 'HEAD'), last);
+    assert.equal(run('show', result + ':two.txt'), 'two');
+    assert.deepEqual(await readFile(join(folder, '.git', 'index')), index);
+    assert.equal(await readFile(join(folder, 'skip.txt'), 'utf8'), 'modified locally\n');
+});
+
+test('a manual merge checks the selected revision and supports a PR from a fork', async () => {
+    const {state, host, openQueue, calls} = fixture();
+    const queue = openQueue();
+    await queue.enqueue({...intent, goal: 'pr', issue: undefined});
+    for (let i = 0; i < 3; i++) await queue.advance(id);
+    state.forkId = 9;
+    state.checks = 'SUCCESS';
+    const observation = await host.readMergeStatus(28);
+    assert.deepEqual(await host.readPullRequestChecks(28), {head: headOid, base: baseOid, checks: 'passed'});
+    assert.equal(observation.headRepositoryId, 9);
+    const expected = {number: 28, head, base: 'main', headOid, baseOid, diffDigest: observation.diffDigest, allowNoChecks: false};
+    state.checks = 'PENDING';
+    assert.deepEqual(await host.mergeSelectedPullRequest(expected), {state: 'rejected'});
+    assert.deepEqual(calls, ['push', 'pull']);
+    state.checks = 'SUCCESS';
+    assert.deepEqual(await host.mergeSelectedPullRequest(expected), {state: 'accepted', requestId: mergeId});
+    assert.deepEqual(calls, ['push', 'pull', 'merge']);
 });

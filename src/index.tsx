@@ -2,29 +2,34 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {createPortal, render, unmountComponentAtNode} from 'react-dom';
 import {CloseButton} from './close-button.js';
 import {FileDiffView} from './file-diff-view.js';
+import {SaveFilesView} from './save-files-view.js';
 import {FileIdentity, GitStatusBadge} from './file-presentation.js';
 import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
 import {confirmProjectRestore} from './project-restore-dialog.js';
 import type {ChangedFile} from './project-change-model.js';
 import {openRepository} from './repository.js';
-import type {BranchRefs, Repository, Snapshot, FileChange, FileDiff, ChangeGroup, HistoryCommit, HistoryCursor} from './repository.js';
+import type {BranchRefs, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor} from './repository.js';
 import {BranchButton, useBranchSnackbar} from './branch-button.js';
 import {changeMarks, fileStatuses} from './change-marks.js';
 import type {ChangeMark, FileStatus, MergedFileVersions} from './change-marks.js';
-import {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
 import type {BranchButtonState} from './branch-button.js';
 import {HistoryGraph} from './history-graph-view.js';
 import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
-import {GitWorkflow, PanelIcon, RepositoryContext, panelViews} from './panel-navigation.js';
+import {GitWorkflow, PanelIcon, RepositoryIdentity, panelViews} from './panel-navigation.js';
 import type {PanelView} from './panel-navigation.js';
 import {GitPanelError, pathParts} from './filesystem.js';
-import {ConnectionSettings} from './connection-settings.js';
+import {ConnectionSettings, GitHubSync} from './connection-settings.js';
+export {GitConnectionPreferences} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
 import type {GitAuthor, LocalOperation} from './local-operations.js';
 import {pullRequestBranch} from './local-operations.js';
 import {PullRequestReviewPanel} from './pull-request-panel.js';
+import {createGitHubPullRequests, gitHubRepositoryFromOrigin} from './github-pull-requests.js';
+import {ReleaseDialog} from './release-menu.js';
+import {PullRequestCreation} from './pull-request-creation.js';
+import type {PullRequestPublication} from './publication-ui-port.js';
 import {openProjectSourceTabs} from './project-source-tabs.js';
 import type {ProjectSourceTabsFile} from './project-source-tabs.js';
 import {parseProjectSource} from './project-source-patch.js';
@@ -55,18 +60,25 @@ export type {ChangeMark, FileStatus} from './change-marks.js';
 export type {ProjectRestorePlan} from './project-version.js';
 export type {GitAuthor, LocalOperation} from './local-operations.js';
 export {pullRequestBranch} from './local-operations.js';
+export {inspectPublicationRepository, pushPublicationCommit} from './publish-ref.js';
+export type {PullRequestPublication} from './publication-ui-port.js';
 
 export interface GitHost {
     connectionSettings?: GitConnectionSettings;
+    pullRequestPublication?(): PullRequestPublication | undefined;
     renderReviewBlock?: ProjectBlockRenderer;
     openProject(directory: FileSystemDirectoryHandle, confirmReplace: () => boolean): Promise<'opened' | 'cancelled'>;
+    projectDirectory?(): FileSystemDirectoryHandle | null;
+    unsavedProjectPaths?(): ReadonlySet<string> | null;
+    readUnsavedProjectFile?(path: string): Uint8Array | null | undefined;
+    subscribeProjectEdits?(listener: () => void): () => void;
+    saveProjectFiles?(): Promise<void>;
     restoreProjectVersions?: boolean;
     validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
-    projectDirectory?(): FileSystemDirectoryHandle | null;
     previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>}): Promise<void>;
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
-    subscribe?(listener: (event: 'loaded' | 'changed') => void): () => void;
+    subscribe?(listener: (event: 'loaded' | 'changed' | 'folder') => void): () => void;
     /**
      * Opens the panel as a tab of the host's layout, with the same shape as the layout package's DocumentPanelRequest.
      * Returning `false` keeps the modal dialog.
@@ -104,10 +116,12 @@ export type ExplorerGitActions = {
 };
 /** The panel's side of its entries: set by the panel as it renders, used by the branch buttons and `mountGitPanel`'s result. */
 interface Controller {
-    open(locale: string): void;
+    open(locale: string, inactive?: boolean): void;
+    openCommit(locale: string, repository: Repository, oid: string): void;
     refresh(automatic?: boolean, whileHidden?: boolean): Promise<void>;
     /** Asks for a repository, then opens the panel on it. */
     choose(locale: string): Promise<void>;
+    openRelease(locale: string, github: string | null, exportProject?: () => void): void;
     selectRepository(root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle): Promise<boolean>;
     openVersion?: (oid: string) => Promise<HistoryActionResult>;
     restoreVersion?: (oid: string) => Promise<HistoryActionResult>;
@@ -132,7 +146,7 @@ interface Controller {
 function createController(): Controller {
     const listeners = new Set<() => void>();
     const controller: Controller = {
-        open() {}, async refresh() {}, async choose() {}, async selectRepository() {return false;},
+        open() {}, openCommit() {}, openRelease() {}, async refresh() {}, async choose() {}, async selectRepository() {return false;},
         async changeBranch() {return {done: false};},
         async changeExplorerEntry() {return {done: false};}, reload() {},
         branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
@@ -167,13 +181,13 @@ interface State extends ChangeSelection {
     repository: Repository | null;
     snapshot: Snapshot | null;
     project: string | null;
-    browser: {path: string; children: string[]; isProject: boolean} | null;
+    defaultProject: string | null;
     commit: (ChangeSelection & {oid: string}) | null;
     error: string | null;
     notice?: string;
     busy: boolean;
 }
-const initial: State = {repository: null, snapshot: null, project: null, browser: null,
+const initial: State = {repository: null, snapshot: null, project: null, defaultProject: null,
     changes: [], selected: null, diff: null, commit: null, error: null, busy: false};
 const controllers = new WeakMap<object, Controller>();
 // Branch buttons rendered before the panel is mounted, or after it is disposed, wait for the VM's controller here.
@@ -242,11 +256,26 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     // Only a tab leaves the Editor visible, so only a tab offers to point at blocks in it.
     const locator = useMemo(() => slot && host.openTargetCode && host.getWorkspace ? createEditorBlockLocator({
         vm: vm as LocatorVM, openTargetCode: host.openTargetCode, getWorkspace: host.getWorkspace}) : undefined, [slot !== null, host, vm]);
-    const [review, setReview] = useState(false);
     const [activeView, setActiveView] = useState<PanelView>('changes');
+    const [, updateConnection] = useState(0);
+    const [connectionBusy, setConnectionBusy] = useState(false);
+    const [connectionOpen, setConnectionOpen] = useState(false);
+    const [release, setRelease] = useState<{github: string | null; exportProject?: () => void}>();
     const [panelId] = useState(() => `twgit-${++nextPanelId}`);
     const [locale, setLocale] = useState(document.documentElement.lang || 'en');
-    const [dirty, setDirty] = useState(host.isProjectDirty());
+    const [unsavedPaths, setUnsavedPaths] = useState<ReadonlySet<string>>(new Set());
+    useEffect(() => {
+        if (!shown || !host.unsavedProjectPaths) return;
+        const update = () => {
+            const paths = host.unsavedProjectPaths?.();
+            if (paths) setUnsavedPaths(paths);
+        };
+        let timer: ReturnType<typeof setTimeout>;
+        const schedule = () => {clearTimeout(timer); timer = setTimeout(update, 100);};
+        update();
+        const stop = host.subscribeProjectEdits?.(schedule);
+        return () => {clearTimeout(timer); stop?.();};
+    }, [shown, host]);
     const [state, setState] = useState<State>(initial);
     const current = useRef(state);
     current.current = state;
@@ -260,8 +289,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     // A closed panel reads nothing; a refresh asked while it is closed waits until it opens again.
     const shownRef = useRef(false);
     const deferred = useRef(false);
-    const panelView = useRef({activeView, review});
-    panelView.current = {activeView, review};
+    const panelView = useRef(activeView);
+    panelView.current = activeView;
     // The last fingerprint acted on, so a failing read or an open diff is not retried on every check.
     const handled = useRef<string | null>(null);
     const labels = labelsFor(locale);
@@ -311,20 +340,24 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             }
         }
     };
-    controller.open = language => {
+    controller.open = (language, inactive = false) => {
         setLocale(language);
         const opened = host.openPanel?.({reference: {providerId: 'turbowarp-plus-git', documentId: 'local-git'},
-            filename: 'Git', title: labelsFor(language).title, transient: true,
+            filename: 'Git', title: labelsFor(language).title, transient: true, inactive,
             mount(element, close) {
                 setVisible(false);
                 setSlot({element, close});
                 return {requestClose: close, dispose() {setSlot(previous => previous?.element === element ? null : previous);}};
             }});
-        if (!opened) setVisible(true);
+        if (!opened && !inactive) setVisible(true);
     };
     const closePanel = () => {
         if (slot) slot.close();
         else setVisible(false);
+    };
+    const openProjectPath = async (root: FileSystemDirectoryHandle) => {
+        const directory = host.projectDirectory?.();
+        return directory ? (await root.resolve(directory))?.join('/') ?? null : null;
     };
     controller.refresh = async (automatic = false, whileHidden = false) => {
         if (!alive.current || !current.current.repository) return;
@@ -337,12 +370,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             return;
         }
         await run(async () => {
-            const {repository, project} = current.current;
+            const {repository} = current.current;
+            const project = current.current.project ?? await openProjectPath(repository!.root);
             // A save or a Git command may still be finishing its writes; read again briefly before reporting a change.
             for (let attempt = 1; ; attempt++) {
                 try {
                     const snapshot = await repository!.read(project ?? '');
-                    return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
+                    return {project, snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
                 } catch (error) {
                     if (!(error instanceof GitPanelError && error.code === 'changed') || attempt >= 5) throw error;
                     await new Promise(resolve => setTimeout(resolve, 200 * attempt));
@@ -353,8 +387,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     useEffect(() => {
         alive.current = true;
         const unsubscribe = host.subscribe?.(event => {
-            setDirty(host.isProjectDirty());
-            if (event === 'loaded' && !opening.current) {
+            if ((event === 'loaded' || event === 'folder') && !opening.current) {
                 epoch.current++;
                 // An operation still running stays busy; its end, or the refresh queued after it, clears the flag.
                 setState(previous => ({...previous, project: null, snapshot: null, changes: [],
@@ -407,9 +440,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 current.current.snapshot !== snapshot) return;
             handled.current = probe;
             const {selected, commit} = current.current;
-            const {activeView, review} = panelView.current;
+            const activeView = panelView.current;
             // Keep an open diff, commit or review in place and ask for a refresh instead.
-            if (activeView === 'changes' && selected || activeView === 'history' && commit || activeView === 'github' && review) {
+            if (activeView === 'changes' && selected || activeView === 'history' && commit) {
                 setState(previous => previous.snapshot === snapshot ? {...previous, notice: labelsFor(locale).outdated} : previous);
             } else await controller.refresh(true);
         });
@@ -423,11 +456,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const loadRepository = async (root: FileSystemDirectoryHandle, project: string | null, disconnect = true) => {
         const repository = await openRepository(root);
         const snapshot = await repository.read(project ?? '');
-        const browser = await repository.browse(project ?? '');
+        const defaultProject = await repository.defaultProject(await repository.browse());
         if (disconnect) await host.connectionSettings?.disconnect();
-        setReview(false);
         setElements({});
-        return {...initial, repository, snapshot, project, browser, changes: snapshot.changes};
+        return {...initial, repository, snapshot, project, defaultProject, changes: snapshot.changes};
     };
     controller.selectRepository = async (root, directory) => {
         const result = await run(async () => {
@@ -447,27 +479,19 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 if ((error as DOMException).name === 'AbortError') return {};
                 throw error;
             }
-            return loadRepository(root, null);
+            return loadRepository(root, await openProjectPath(root));
         });
     };
-    const browse = (path: string) => run(async () => ({browser: await state.repository!.browse(path)}));
     const openProject = (path: string) => run(async () => {
         const directory = await state.repository!.openProject(path);
         opening.current = true;
         try {
             const result = await host.openProject(directory, () => document.defaultView!.confirm(labels.replace));
-            if (result === 'cancelled') return {};
+            if (result === 'cancelled') return {notice: state.notice};
         } finally {opening.current = false;}
         // Loading the project brings its code to the front; keep the panel the person is working in in front of it.
         if (slot) controller.open(locale);
         if (!alive.current) return {};
-        const browser = projectBrowser.current;
-        if (browser?.open) {
-            const restoreFocus = browser.contains(document.activeElement);
-            browser.open = false;
-            if (restoreFocus) browser.querySelector('summary')?.focus({preventScroll: true});
-        }
-        setDirty(host.isProjectDirty());
         setState(previous => ({...previous, project: path, snapshot: null, changes: [], selected: null, diff: null, commit: null}));
         const snapshot = await state.repository!.read(path);
         return {project: path, snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
@@ -482,30 +506,77 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         return commit ? {commit: {...commit, ...file}} : file;
     });
     const [elements, setElements] = useState<{changes?: string; history?: string}>({});
-    const projectBrowser = useRef<HTMLDetailsElement>(null);
+    const commitChangeList = useRef<HTMLDivElement>(null);
+    const revealCommit = useRef<string | null>(null);
+    useEffect(() => {
+        if (!shown || !commit || revealCommit.current !== commit.oid || !commitChangeList.current) return;
+        revealCommit.current = null;
+        commitChangeList.current.scrollIntoView({block: 'start'});
+    }, [shown, commit]);
     const view = commitView ? 'history' : 'changes';
     const element = elements[view] ?? null;
     const [fileListOpen, setFileListOpen] = useState(false);
-    const worktreeChanges = useProjectChanges(state.repository, state.snapshot, state.project, null, state.changes);
+    const pending = useMemo(() => {
+        const files = new Map<string, FileChange>();
+        // Compose HEAD → index and index → working tree for paths changed in both.
+        for (const change of state.changes) {
+            const earlier = files.get(change.path);
+            const combined = earlier ? {...change, before: earlier.before, oldMode: earlier.oldMode, fromHead: true} : change;
+            if (combined.before === combined.after && combined.oldMode === combined.newMode) files.delete(change.path);
+            else files.set(change.path, combined);
+        }
+        return files;
+    }, [state.changes]);
+    const prefix = state.project ? state.project + '/' : '';
+    const unsaved = useMemo(() => new Set(state.project !== null ? [...unsavedPaths].map(path => prefix + path) : []),
+        [state.project, prefix, unsavedPaths]);
+    const savedFiles = useMemo(() => [...pending.values()].filter(change => !unsaved.has(change.path))
+        .sort((first, second) => first.path.localeCompare(second.path)), [pending, unsaved]);
+    const worktreeChanges = useProjectChanges(state.repository, state.snapshot, state.project, null, savedFiles);
     const historyChanges = useProjectChanges(state.repository, state.snapshot, state.project,
         state.commit?.oid ?? null, state.commit?.changes ?? noChanges);
     const projectChanges = commitView ? historyChanges : worktreeChanges;
-    const openFile = (file: ChangedFile | FileChange) => {
-        const change = changes.find(item => item.path === file.path && item.group === file.group);
-        if (!change) return;
+    const openDiff = (change: FileChange) => {
         setElements(previous => ({...previous, [view]: undefined}));
         void selectFile(change);
+    };
+    const openFile = (file: ChangedFile) => {
+        const change = commitView ? changes.find(item => item.path === file.path && item.group === file.group) : pending.get(file.path);
+        if (change) openDiff(change);
     };
     const openElement = (key: string) => {
         setElements(previous => ({...previous, [view]: key}));
         setState(previous => commitView ? {...previous, commit: previous.commit &&
             {...previous.commit, selected: null, diff: null}} : {...previous, selected: null, diff: null});
     };
-    const selectCommit = (oid: string) => run(async () => {
-        const changes = await state.repository!.historyChanges(state.snapshot!, oid);
+    const selectCommit = (oid: string, request?: {repository: Repository; refresh: boolean}) => run(async () => {
+        const {repository, snapshot, project} = current.current;
+        if (!repository || (request && repository !== request.repository)) throw new GitPanelError('changed');
+        if (request) setState(previous => ({...previous, commit: null}));
+        const readSnapshot = () => repository.read(project ?? '');
+        let baseline = request?.refresh || !snapshot ? await readSnapshot() : snapshot;
+        const changes = await repository.historyChanges(baseline, oid).catch(async error => {
+            // The drawer follows Git refs even while the panel's snapshot is out of date.
+            if (!request || !(error instanceof GitPanelError) || error.code !== 'changed') throw error;
+            baseline = await readSnapshot();
+            return repository.historyChanges(baseline, oid);
+        });
         setElements(previous => ({...previous, history: undefined}));
-        return {commit: {oid, changes, selected: null, diff: null}};
+        if (request) revealCommit.current = oid;
+        return {
+            ...(baseline !== snapshot ? {snapshot: baseline, changes: baseline.changes, selected: null, diff: null} : {}),
+            commit: {oid, changes, selected: null, diff: null}
+        };
     });
+    controller.openCommit = (language, repository, oid) => {
+        if (current.current.repository !== repository) return;
+        // Read a deferred refresh together with the commit so reopening cannot clear the new selection.
+        const refresh = deferred.current;
+        deferred.current = false;
+        setActiveView('history');
+        controller.open(language);
+        void selectCommit(oid, {repository, refresh});
+    };
     const remoteOperation = async (operation: RemoteOperation) => {
         const repository = current.current.repository;
         const getSession = host.connectionSettings?.getSession;
@@ -546,6 +617,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             reviewGranted: () => settings.getView().review === true} : undefined;
     }, [host]);
     const [message, setMessage] = useState('');
+    const [commitSelection, setCommitSelection] = useState<{
+        repository: Repository; branch: string; head: string | null; scope: string; paths: ReadonlySet<string>;
+    } | null>(null);
     const localOperation = (request: LocalOperation | ((repository: Repository, guard: () => void) => Promise<LocalOperation>),
         notice?: string, isCurrent = () => true) => {
         const repository = current.current.repository;
@@ -563,6 +637,14 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 guard();
                 // Staging records the saved files; edits still in the Editor would be left out without a word.
                 if (operation.kind === 'stage' && host.isProjectDirty()) throw new GitPanelError('saveFirst');
+                if (operation.kind === 'commit' && operation.selection) {
+                    const {project} = current.current;
+                    const pending = host.unsavedProjectPaths?.();
+                    const prefix = project ? project + '/' : '';
+                    if (project !== null && operation.selection.files.some(({path}) => path.startsWith(prefix) &&
+                        (pending ? pending.has(path.slice(prefix.length)) : host.isProjectDirty())))
+                        throw new GitPanelError('saveFirst');
+                }
                 // Switching replaces the files the Editor opened, like pull.
                 if ((operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout)) &&
                     (host.isProjectDirty() || host.isProjectRunning?.())) throw new GitPanelError('switchUnsafe');
@@ -743,7 +825,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     controller.reload = () => {
         if (current.current.project !== null) void openProject(current.current.project);
     };
+    controller.openRelease = (language, github, exportProject) => {
+        setLocale(language);
+        setRelease({github, exportProject});
+    };
     controller.choose = async language => {
+        if (connectionBusy) return;
         setLocale(language);
         const before = current.current.repository;
         const result = await chooseRoot();
@@ -755,17 +842,39 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         project: hasProject};
     const published = JSON.stringify(branchState);
     useEffect(() => controller.publish(branchState, state.repository, state.snapshot), [published, state.repository, state.snapshot]);
-    if (!shown) return null;
-    const changedFileCount = new Set(state.changes.map(change => change.path)).size;
-    const groups: ChangeGroup[] = commitView ? ['commit'] : ['staged', 'unstaged', 'untracked'];
-    // Branches can be switched and created whenever writes are allowed and the repository has been read.
-    const branching = !!host.localWrite && !!state.snapshot;
-    // Writing works on the current changes, not on a record from the history, and only on a branch.
-    const canRecord = !!host.localWrite && !!state.snapshot?.branch;
+    const connectionDialog = connectionOpen && host.connectionSettings && <ConnectionSettings
+        view={document.defaultView!} settings={host.connectionSettings}
+        locale={locale} readOrigin={readOrigin} busy={connectionBusy} setBusy={setConnectionBusy}
+        onChange={() => updateConnection(value => value + 1)} onClose={() => setConnectionOpen(false)}/>;
+    const releaseDialog = release && <ReleaseDialog locale={locale} repository={state.repository}
+        github={release.github} connection={host.connectionSettings} exportProject={release.exportProject} onClose={() => setRelease(undefined)}/>;
+    if (!shown) return <>{null}{connectionDialog}{releaseDialog}</>;
+    const snapshot = state.snapshot;
+    const branching = !!host.localWrite && !!snapshot;
+    const canRecord = !!host.localWrite && !!snapshot?.branch;
     const writable = canRecord && !commitView;
-    const unrecorded = [...new Set(state.changes.filter(change => change.group === 'unstaged' || change.group === 'untracked')
-        .map(change => change.path))];
-    const staged = state.changes.filter(change => change.group === 'staged').length;
+    const filesToSave = [...unsaved].sort();
+    const publication = host.pullRequestPublication?.();
+    const selectedPaths = commitSelection && commitSelection.repository === state.repository &&
+        snapshot && commitSelection.branch === snapshot.branch && commitSelection.head === snapshot.head &&
+        commitSelection.scope === snapshot.scope ? commitSelection.paths : new Set<string>();
+    const filesToCommit = [...selectedPaths].flatMap(path => {
+        const change = pending.get(path);
+        return change && !unsaved.has(path) ? [{path, oid: change.after}] : [];
+    });
+    const toggleCommitFile = (path: string, included: boolean) => {
+        if (!state.repository || !snapshot?.branch) return;
+        const paths = new Set(selectedPaths);
+        if (included) paths.add(path);
+        else paths.delete(path);
+        setCommitSelection({repository: state.repository, branch: snapshot.branch, head: snapshot.head, scope: snapshot.scope, paths});
+    };
+    const saveFiles = () => run(async () => {
+        try {await host.saveProjectFiles?.();}
+        catch {throw new GitPanelError('saveFilesFailed');}
+        const next = await state.repository!.read(state.project ?? '');
+        return {snapshot: next, changes: next.changes, selected: null, diff: null};
+    });
     const projectList = typeof projectChanges === 'object' ? projectChanges : null;
     // The open project matches the working tree, so only the working-tree side of its project file can be located.
     const projectFile = state.project === null ? null : [state.project, 'project.source.json'].filter(Boolean).join('/');
@@ -777,10 +886,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         !state.changes.length ? locator : undefined;
     const selection = projectList && !selected ? findElement(projectList.list, element) : null;
     const selectedFiles = selected ? [selected] : selection?.element.files ?? [];
-    const stageActions = writable ? selectedFiles.filter(file =>
+    const stageActions = writable ? selectedFiles.filter(file => pending.has(file.path) &&
         state.changes.some(change => change.path === file.path && change.group === file.group) &&
         // The project comparison shows the working copy when a path has both versions.
-        (selected || file.group !== 'staged' || !unrecorded.includes(file.path))) : [];
+        (selected || pending.get(file.path)?.group === file.group)) : [];
     // Only a tab leaves room for more tabs beside it; the modal dialog keeps its comparisons inside.
     const openTabs = slot && host.openPanel && host.renderReviewBlock ?
         (key: string, files: readonly ProjectSourceTabsFile[], rememberAs?: string) =>
@@ -795,72 +904,108 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         }
         openTabs(`${commit?.oid ?? change.group}:${change.path}`, files);
     });
+    const savedFileRow = (change: FileChange) => <li key={change.path}>
+        {writable && <input type="checkbox" checked={selectedPaths.has(change.path)}
+            aria-label={labels.includeFile.replace('{path}', change.path)} disabled={state.busy}
+            onChange={event => toggleCommitFile(change.path, event.currentTarget.checked)}/>}
+        <button type="button" className="twgit-file twgit-file-entry" data-git-group={change.group} disabled={state.busy}
+            aria-pressed={selected?.path === change.path} onClick={() => openDiff(change)}>
+            <FileIdentity path={change.path}/>
+            <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small>
+            <GitStatusBadge group={change.group} labels={labels}/>
+        </button>
+    </li>;
+    const savedFileList = (files: readonly FileChange[]) =>
+        <ul className="twgit-file-state-list">{files.map(savedFileRow)}</ul>;
+    const otherPaths = new Set(projectList?.list.other.map(file => file.path));
+    const projectFiles = savedFiles.filter(change => !otherPaths.has(change.path));
+    const fileDetails = commitView && commit ? <section>
+        <h3>{labels.commit}: {changes.length}</h3>
+        <ul>{changes.map(change => <li key={change.path}>
+            <button className="twgit-file twgit-file-entry" data-git-group="commit" disabled={state.busy}
+                aria-pressed={selected === change} onClick={() => openDiff(change)}>
+                <FileIdentity path={change.path}/>
+                <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small>
+                <GitStatusBadge group="commit" labels={labels}/>
+            </button>
+        </li>)}</ul>
+    </section> : null;
+    const projectChangeList = projectList && <ProjectChangeListView changes={projectList}
+        selected={selection ? element : null} selectedFile={selected} locale={locale} busy={state.busy}
+        onSelect={openElement} onSelectFile={openFile} fileListOpen={fileListOpen} setFileListOpen={setFileListOpen}
+        fileList={commitView ? fileDetails : projectFiles.length > 0 && savedFileList(projectFiles)}
+        renderOtherFile={commitView ? undefined : file => {
+            const change = pending.get(file.path);
+            return change && !unsaved.has(file.path) ? savedFileRow(change) : null;
+        }}/>;
     const content = <>
             <header>
-                <h2>{labels.title}</h2>
-                <button className="twgit-panel-action" onClick={chooseRoot} disabled={state.busy}>
-                    <PanelIcon name="choose"/>{labels.choose}</button>
-                <button className="twgit-panel-action" onClick={() => void controller.refresh()} disabled={!state.repository || state.busy}>
-                    <PanelIcon name="refresh"/>{labels.refresh}</button>
-                {state.project !== null && <button className="twgit-panel-action" disabled={state.busy} onClick={() => void openProject(state.project!)}>
-                    <PanelIcon name="reload"/>{labels.reload}</button>}
+                {!slot && <h2>{labels.title}</h2>}
+                <div className="twgit-repository-heading">
+                    <RepositoryIdentity repositoryName={state.repository?.root.name} labels={labels}
+                        repositoryAction={<button type="button" className="twgit-panel-action"
+                            onClick={() => void controller.refresh()} disabled={!state.repository || state.busy}>
+                            <PanelIcon name="refresh"/>{labels.refresh}</button>}/>
+                    {state.project === null && state.defaultProject !== null &&
+                        <button type="button" className="twgit-panel-action" disabled={state.busy}
+                            onClick={() => void openProject(state.defaultProject!)}><PanelIcon name="choose"/>{labels.openDefault}</button>}
+                    {state.repository && !!host.connectionSettings?.modes.length &&
+                        <button type="button" className="twgit-panel-action" disabled={state.busy || connectionBusy}
+                            onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>
+                            {locale.startsWith('ja') ? 'GitHub に接続…' : 'Connect to GitHub…'}</button>}
+                </div>
                 {!slot && <CloseButton label={labels.close} onClick={closePanel}/>}
             </header>
-            <RepositoryContext snapshot={state.snapshot} repositoryName={state.repository?.root.name} projectPath={state.project}
-                dirty={dirty} labels={labels} upstream={state.snapshot ? upstreamText(state.snapshot, labels) : undefined}/>
-            <GitWorkflow id={panelId} snapshot={state.snapshot} dirty={dirty} canRecord={canRecord} staged={staged}
-                canShare={!!host.connectionSettings?.getSession} labels={labels} active={activeView} changedFiles={changedFileCount}
-                reviewPending={!!state.snapshot && !dirty && unrecorded.length > 0} onSelect={next => {
-                    setActiveView(next);
-                    if (next !== 'github') setReview(false);
-                }}/>
+            <GitWorkflow id={panelId} snapshot={state.snapshot}
+                labels={labels} active={activeView} unsavedFiles={filesToSave.length} savedFiles={savedFiles.length} onSelect={setActiveView}/>
             {state.error && <p className="twgit-error" role="alert">{state.error}</p>}
-            {state.notice && <p className="twgit-context" role="status">{state.notice}</p>}
+            {state.notice && <div className="twgit-context">
+                <span role="status">{state.notice}</span>
+                {state.project !== null && (state.notice === labels.pulledProject || state.notice === labels.switched || state.notice === labels.versionRestored) &&
+                    <button type="button" className="twgit-panel-action" disabled={state.busy} onClick={() => controller.reload()}>
+                        <PanelIcon name="reload"/>{labels.reload}</button>}
+            </div>}
             {state.busy && <p className="twgit-status" role="status">{labels.loading}</p>}
             {panelViews.map(section => <div key={section} className="twgit-workflow-view" role="region"
                 id={`${panelId}-view-${section}`} aria-labelledby={`${panelId}-step-${section}`}
                 hidden={activeView !== section}>
                 {activeView === section && !state.repository && <p className="twgit-status">{labels.empty}</p>}
-                {section === 'github' && <>
-                    <div className="twgit-github-tools">
-                        {host.connectionSettings ? <ConnectionSettings settings={host.connectionSettings} locale={locale}
-                            runOperation={host.connectionSettings.getSession ? remoteOperation : undefined}
-                            readOrigin={readOrigin}/> : <p>{labels.githubUnavailable}</p>}
-                        {state.repository && host.renderReviewBlock && <button type="button" disabled={state.busy}
-                            aria-expanded={review} onClick={() => setReview(!review)}>{labels.pullRequests}</button>}
-                    </div>
-                    {review && state.repository && host.renderReviewBlock &&
+                {(section === 'history' || section === 'github') && activeView === section &&
+                    (host.connectionSettings ? <GitHubSync settings={host.connectionSettings} locale={locale} branch={snapshot?.branch}
+                        busy={state.busy || connectionBusy || !readOrigin} runOperation={remoteOperation}
+                        syncStatus={snapshot && snapshot.upstream.state !== 'unknown' ?
+                            {state: snapshot.upstream.state, text: upstreamText(snapshot, labels), title: labels.checkedAt} :
+                            undefined}/> : <p className="twgit-status">{labels.githubUnavailable}</p>)}
+                {section === 'github' && activeView === section && state.repository && host.renderReviewBlock &&
                         <PullRequestReviewPanel repository={state.repository} locale={locale} renderBlock={host.renderReviewBlock}
                             locateFor={reviewLocator} openTabs={openTabs} connection={pullRequestConnection}
+                            publication={publication}
                             openLocally={branching ? {open: openPullRequest, busy: state.busy} : undefined}/>}
-                </>}
-                {section !== 'github' && activeView === section && state.repository && <div className="twgit-content">
-                <aside>{commitView && canRecord && <section className="twgit-commit" aria-label={labels.nextRecord}>
-                    <h3>{labels.nextRecord}</h3>
-                    <p role="status">{labels.selectedFiles.replace('{count}', String(staged))}</p>
-                    {staged > 0 ? <>
-                        {!!state.snapshot?.scope && <p>{labels.recordScope}</p>}
-                        <label>{labels.commitLabel}
-                            <textarea value={message} rows={3} disabled={state.busy} onChange={event => setMessage(event.currentTarget.value)}/></label>
-                        <button className="twgit-primary" type="button" disabled={state.busy || !message.trim()}
-                            onClick={() => void localOperation({kind: 'commit', message, author: host.localWrite?.author?.()},
-                                labels.committed)}>{labels.commitButton}</button>
-                    </> : <p>{labels.recordHint}</p>}
-                </section>}
+                {section === 'save' && activeView === section && snapshot && state.repository &&
+                    <SaveFilesView repository={state.repository} snapshot={snapshot} project={state.project}
+                        unsavedPaths={unsavedPaths} paths={filesToSave} busy={state.busy} locale={locale} labels={labels}
+                        readUnsaved={host.readUnsavedProjectFile} renderBlock={host.renderReviewBlock}
+                        onSave={host.saveProjectFiles ? saveFiles : undefined}/>}
+                {(section === 'changes' || section === 'history') && activeView === section && state.repository &&
+                    <div className="twgit-content" data-commit-view={commitView ? undefined : ''}>
+                <aside className={commitView ? undefined : 'twgit-commit-changes'}>
                 {!commitView ? <>
-                    {state.browser && <details ref={projectBrowser} className="twgit-project-browser">
-                        <summary>{labels.browse}</summary>
-                        <p><code>{state.browser.path || '/'}</code></p>
-                        <button disabled={state.busy || !state.browser.path} onClick={() => void browse(state.browser!.path.split('/').slice(0, -1).join('/'))}>{labels.up}</button>
-                        <button data-git-open-project="" disabled={state.busy || !state.browser.isProject}
-                            onClick={() => void openProject(state.browser!.path)}>{labels.open}</button>
-                        <ul>{state.browser.children.map(name => <li key={name}><button disabled={state.busy}
-                            onClick={() => void browse([state.browser!.path, name].filter(Boolean).join('/'))}>{name}/</button></li>)}</ul>
-                    </details>}
-                    <h3 className="twgit-section-heading">{labels.worktree}
-                        <span className="twgit-count">{changedFileCount}</span>
-                    </h3>
+                    {host.projectDirectory && state.project === null && state.defaultProject === null &&
+                        <p>{labels.openProjectFromMenu}</p>}
+                    {snapshot && (savedFiles.length ? <>
+                        {projectChanges === 'loading' && <p role="status">{projectChangeLabels(locale).loading}</p>}
+                        {projectChanges === 'unreadable' && <p>{projectChangeLabels(locale).unreadable}</p>}
+                        {projectChangeList ?? <section>
+                            <h4 className="twgit-element-target">{projectChangeLabels(locale).other}</h4>
+                            {savedFileList(savedFiles)}
+                        </section>}
+                    </> : <p>{labels.noFilesToCommit}</p>)}
                 </> : <>
+                    {state.repository && snapshot && <PullRequestCreation repository={state.repository} head={snapshot.head}
+                        locale={locale} publication={publication} getSession={host.connectionSettings?.getSession}
+                        connected={pullRequestConnection?.connected() === true}
+                        isCurrent={() => current.current.repository === state.repository &&
+                            current.current.snapshot?.head === snapshot.head && current.current.snapshot?.branch === snapshot.branch}/>}
                     <h3 className="twgit-section-heading">{labels.history}</h3>
                     {state.snapshot && <HistoryGraph commits={history.commits} selected={state.commit?.oid ?? null} locale={locale} busy={state.busy}
                         onSelect={oid => void selectCommit(oid)} hasMore={!!history.cursor} loadingMore={history.loading}
@@ -875,46 +1020,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     {history.failed && <p>{labels.historyFailed}</p>}
                     {state.snapshot && !history.loading && !history.failed && !history.commits.length && <p>{labels.unborn}</p>}
                 </>}
-                {(!commitView || commit) && <>
+                {commitView && commit && <div ref={commitChangeList}>
                     {projectChanges === 'loading' && <p role="status">{projectChangeLabels(locale).loading}</p>}
                     {projectChanges === 'unreadable' && <p>{projectChangeLabels(locale).unreadable}</p>}
-                    {(() => {
-                        const fileList = groups.map(group => {
-                            const files = changes.filter(change => change.group === group);
-                            return files.length > 0 && <section key={group}>
-                            <h3>{labels[group]} · {files.length}</h3>
-                            <ul>{files.map(change => <li key={change.path}
-                                className={writable ? 'twgit-file-row' : undefined}>
-                                <button className="twgit-file twgit-file-entry" data-git-group={group} disabled={state.busy}
-                                    aria-pressed={selected === change} onClick={() => openFile(change)}>
-                                    <FileIdentity path={change.path}/>
-                                    <small className="twgit-change-kind">{!change.after ? labels.deleted : !change.before ? labels.added : labels.modified}</small>
-                                    <GitStatusBadge group={group} labels={labels}/>
-                                </button>
-                                {writable && <button type="button" className="twgit-stage" disabled={state.busy}
-                                    aria-label={`${group === 'staged' ? labels.unstage : labels.stage}: ${change.path}`}
-                                    onClick={() => void localOperation({kind: group === 'staged' ? 'unstage' : 'stage', paths: [change.path]})}>
-                                    {group === 'staged' ? labels.unstage : labels.stage}</button>}
-                            </li>)}</ul>
-                        </section>;});
-                        return projectList ? <ProjectChangeListView changes={projectList} selected={selection ? element : null} selectedFile={selected}
-                            locale={locale} busy={state.busy} onSelect={openElement} onSelectFile={openFile} fileList={fileList}
-                            fileListOpen={fileListOpen} setFileListOpen={setFileListOpen}/> : fileList;
-                    })()}
+                    {projectChangeList ?? fileDetails}
                     {!changes.length && <p>{labels.clean}</p>}
-                </>}
-                    {writable && <section className="twgit-commit" aria-label={labels.commitButton}>
-                        <h3>{labels.nextRecord}</h3>
-                        <p role="status">{labels.selectedFiles.replace('{count}', String(staged))}</p>
-                        {unrecorded.length > 0 && <p>{labels.recordHint}</p>}
-                        {unrecorded.length > 0 && <button type="button" disabled={state.busy}
-                            onClick={() => void localOperation({kind: 'stage', paths: unrecorded})}>{labels.stageAll}</button>}
-                        {staged > 0 && <button type="button" className="twgit-panel-action twgit-primary"
-                            onClick={() => {
-                                setActiveView('history');
-                                dialog.current?.querySelector<HTMLButtonElement>(`#${panelId}-step-history`)?.focus();
-                            }}><PanelIcon name="commit"/>{labels.openCommit}</button>}
-                    </section>}
+                </div>}
                     {commitView && branching && state.snapshot && <section className="twgit-branches" aria-label={labels.branches}>
                         <h3>{labels.branches}</h3>
                         <ul>{state.snapshot.branches.map(name => <li key={name}><code>{name}</code>
@@ -953,39 +1064,55 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     </div>
                     {stageActions.length > 0 && <div className="twgit-diff-actions" role="group" aria-label={labels.recordFileActions}>
                         {stageActions.map(file => {
-                            const kind = file.group === 'staged' ? 'unstage' : 'stage';
+                            const kind = selectedPaths.has(file.path) ? 'unstage' : 'stage';
                             const descriptionId = `${panelId}-target-${kind}-${encodeURIComponent(file.path)}`;
                             return <div key={file.group + ':' + file.path}>
                                 <FileIdentity path={file.path} id={descriptionId}/>
-                                <GitStatusBadge group={file.group} labels={labels}/>
                                 <button className={kind === 'stage' ? 'twgit-primary' : undefined} type="button"
-                                    aria-describedby={descriptionId} disabled={state.busy || kind === 'stage' && dirty}
-                                    onClick={() => void localOperation({kind, paths: [file.path]})}>
+                                    aria-describedby={descriptionId} disabled={state.busy || kind === 'stage' && (unsaved.has(file.path) || !pending.has(file.path))}
+                                    onClick={() => toggleCommitFile(file.path, kind === 'stage')}>
                                     {labels[kind]}</button>
                             </div>;
                         })}
                     </div>}
                 </main>
+                {writable && snapshot?.branch && savedFiles.length > 0 && <footer className="twgit-commit-footer">
+                    <form className="twgit-commit" aria-label={labels.nextRecord} onSubmit={event => {
+                        event.preventDefault();
+                        if (!filesToCommit.length || !message.trim() || state.busy) return;
+                        void localOperation({kind: 'commit', message, author: host.localWrite?.author?.(),
+                            selection: {branch: snapshot.branch!, head: snapshot.head, files: filesToCommit}}, labels.committed);
+                    }}>
+                        <p role="status">{labels.selectedFiles.replace('{count}', String(filesToCommit.length))}</p>
+                        <label>{labels.commitLabel}<textarea value={message} rows={3} disabled={state.busy}
+                            onChange={event => setMessage(event.currentTarget.value)}/></label>
+                        <button className="twgit-primary" type="submit" disabled={state.busy || !filesToCommit.length || !message.trim()}>
+                            {labels.commitButton}</button>
+                    </form>
+                </footer>}
                 </div>}
             </div>)}
     </>;
     // In a tab the Editor stays usable beside the panel, so there is no backdrop, focus trap or Escape to close.
-    if (slot) return createPortal(<div className="twgit-panel twgit-panel-tab" ref={dialog} role="region" aria-label={labels.title}>{content}</div>,
-        slot.element);
-    return <div className="twgit-backdrop">
-        <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
-            onKeyDown={focusTrap}>{content}</div>
-    </div>;
+    return <>
+        {slot ? createPortal(<div className="twgit-panel twgit-panel-tab" ref={dialog} role="region" aria-label={labels.title}>{content}</div>,
+            slot.element) : <div className="twgit-backdrop">
+            <div className="twgit-panel" ref={dialog} tabIndex={-1} role="dialog" aria-modal="true" aria-label={labels.title}
+                onKeyDown={focusTrap}>{content}</div>
+        </div>}
+        {connectionDialog}
+        {releaseDialog}
+    </>;
 }
 
 /** The GitHub relation in plain words, with the number of records where it helps. */
 function upstreamText({upstream}: Snapshot, labels: ReturnType<typeof labelsFor>) {
     switch (upstream.state) {
     case 'same': return labels.upstreamSame;
-    case 'ahead': return `${labels.upstreamAhead} · ${upstream.ahead} ${labels.records}`;
-    case 'behind': return `${labels.upstreamBehind} · ${upstream.behind} ${labels.records}`;
-    case 'diverged': return `${labels.upstreamDiverged} · +${upstream.ahead} / −${upstream.behind}`;
-    default: return labels.upstreamUnknown;
+    case 'ahead': return `${labels.upstreamAhead}: ${upstream.ahead} ${labels.records}`;
+    case 'behind': return `${labels.upstreamBehind}: ${upstream.behind} ${labels.records}`;
+    case 'diverged': return `${labels.upstreamDiverged}: +${upstream.ahead} / −${upstream.behind}`;
+    default: return '';
     }
 }
 
@@ -1000,7 +1127,7 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     controllers.set(vm, controller);
     render(<GitPanel vm={vm} document={document} host={host} controller={controller}/>, root);
     announce();
-    return {refresh: () => controller.refresh(), open: (locale: string) => controller.open(locale),
+    return {refresh: () => controller.refresh(), open: (locale: string, inactive?: boolean) => controller.open(locale, inactive),
         selectRepository: (root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle) =>
             controller.selectRepository(root, project), getCommitRepository() {
         const repository = controller.repository;
@@ -1061,10 +1188,50 @@ export function renderBranchButton(createElement: (component: any, props: any, .
     return createElement(BranchEntry, {vm, locale});
 }
 
+/** Adds Git commands next to the host's project-folder command. */
+export function GitFileMenu({vm, locale = 'en', MenuItem, onRequestClose, exportProject}: {
+    vm: object; locale?: string; MenuItem: React.ElementType; onRequestClose(): void; exportProject?: () => void;
+}) {
+    const {controller} = useController(vm);
+    const repository = controller?.repository;
+    const [release, setRelease] = useState<{repository: Repository; url: string | null}>();
+    useEffect(() => {
+        if (!repository) return;
+        let current = true;
+        const update = (url: string | null) => {if (current) setRelease({repository, url});};
+        void repository.readOrigin().then(origin => {
+            const name = gitHubRepositoryFromOrigin(origin);
+            update(name ? `https://github.com/${name}` : null);
+        }, () => update(null));
+        return () => {current = false;};
+    }, [repository]);
+    if (!controller) return null;
+    const releaseUrl = release && release.repository === repository ? release.url : null;
+    const japanese = locale.startsWith('ja');
+    const item = (command: string, label: string, icon: 'choose' | 'tag', action?: () => void) => {
+        const run = action && (() => {onRequestClose(); action();});
+        return <MenuItem command={command} onClick={run}>
+            <span role="button" tabIndex={run ? 0 : -1} aria-disabled={!run || undefined}
+                className="twgit-file-menu-item" onKeyDown={event => {
+                    if (!run || (event.key !== 'Enter' && event.key !== ' ')) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    run();
+                }}><PanelIcon name={icon}/>{label}</span>
+        </MenuItem>;
+    };
+    return <>
+        {item('git-choose-repository', labelsFor(locale).choose, 'choose', () => void controller.choose(locale))}
+        {item('git-releases', japanese ? 'リリース…' : 'Releases…', 'tag',
+            !repository || release?.repository === repository ?
+                () => controller.openRelease(locale, releaseUrl || null, exportProject) : undefined)}
+    </>;
+}
+
 type History = {commits: HistoryCommit[]; cursor: HistoryCursor | null; loading: boolean; failed: boolean};
 
 /** The history of the panel's repository, read again whenever its branches move. */
-function HistoryEntry({vm, locale}: {vm: object; locale: string}) {
+function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: string}) {
     const {controller, state} = useController(vm);
     const labels = labelsFor(locale);
     const repository = state && controller?.repository || null;
@@ -1111,8 +1278,15 @@ function HistoryEntry({vm, locale}: {vm: object; locale: string}) {
         report(result, operation.kind === 'switchBranch' || !!operation.checkout);
         return result;
     };
+    const term = query.trim().toLowerCase();
+    const matches = term ? history.commits.filter(commit => [commit.message, commit.author, commit.oid, ...commit.refs.map(ref => ref.name)]
+        .some(value => value.toLowerCase().includes(term))) : history.commits;
     return <div className="twgit-history-view" ref={root}>
-        <HistoryGraph commits={history.commits} selected={selected} locale={locale} busy={state.busy} onSelect={setSelected}
+        {term && !history.loading && !matches.length && <p role="status">{history.cursor ? labels.historySearchMore : labels.historyNoMatches}</p>}
+        <HistoryGraph commits={matches} flat={Boolean(term)} selected={selected} locale={locale} busy={state.busy} onSelect={oid => {
+            setSelected(oid);
+            controller.openCommit(locale, repository, oid);
+        }}
             hasMore={!!history.cursor} loadingMore={history.loading} onShowMore={showMore} localBranches={state.branches}
             onOpenVersion={controller.openVersion} onRestoreVersion={controller.restoreVersion}
             {...state.writable ? {
@@ -1133,13 +1307,13 @@ function HistoryEntry({vm, locale}: {vm: object; locale: string}) {
 
 /**
  * Renders the history graph of the repository chosen in the panel mounted for `vm`, for a side panel of the host. It
- * follows branch changes made anywhere, offers the graph's branch actions when the panel allows writes and tells their
- * results in the branch button's snackbar. Before a repository is chosen it offers to choose one; it renders nothing
- * while no panel is mounted for `vm`.
+ * opens the commit's changes in the panel on selection. It follows branch changes made anywhere, offers the graph's
+ * branch actions when the panel allows writes and tells their results in the branch button's snackbar. Before a
+ * repository is chosen it offers to choose one; it renders nothing while no panel is mounted for `vm`.
  */
 export function renderHistoryView(createElement: (component: any, props: any, ...children: any[]) => any,
-    {vm, locale = 'en'}: {vm: object; locale?: string}) {
-    return createElement(HistoryEntry, {vm, locale});
+    {vm, locale = 'en', query = ''}: {vm: object; locale?: string; query?: string}) {
+    return createElement(HistoryEntry, {vm, locale, query});
 }
 
 /** Reads the baseline of a project-folder file from a repository already accessible to the Editor. */
@@ -1210,7 +1384,6 @@ export function followFileStatuses(vm: object, directory: FileSystemDirectoryHan
         let fingerprint: string | undefined;
         let local: Awaited<ReturnType<Repository['readFileStatus']>> | undefined;
         let merged: MergedFileVersions = new Map();
-        let remoteBranch = '';
         let remoteKey = '';
         let remoteRequest: AbortController | undefined;
         let checkAgain = 0;
@@ -1219,30 +1392,26 @@ export function followFileStatuses(vm: object, directory: FileSystemDirectoryHan
         };
         const checkRemote = () => {
             const name = gitHubRepositoryFromOrigin(local?.remote);
-            const pushed = local?.pushed;
-            const branch = name && pushed ? name + '@' + local?.branch : '';
-            const key = branch && pushed ? branch + '@' + pushed : '';
-            if (branch !== remoteBranch) {
-                remoteBranch = branch;
-                merged = new Map();
-            }
+            const {branch, upstreamBranch, pushed} = local ?? {};
+            const key = name && branch && upstreamBranch && pushed ? JSON.stringify([name, branch, upstreamBranch, pushed]) : '';
             if (key !== remoteKey) {
                 remoteRequest?.abort();
                 remoteRequest = undefined;
                 remoteKey = key;
+                merged = new Map();
                 checkAgain = 0;
             }
-            if (!name || !pushed || remoteRequest || Date.now() < checkAgain) return;
+            if (!name || !upstreamBranch || !pushed || remoteRequest || Date.now() < checkAgain) return;
             const request = new AbortController();
             remoteRequest = request;
             const timeout = setTimeout(() => request.abort(), 10000);
-            void createGitHubPullRequests(name).mergedFileVersions(pushed, scope, request.signal).then(result => {
+            void createGitHubPullRequests(name).mergedFileVersions(pushed, scope, request.signal, upstreamBranch).then(result => {
                 if (!request.signal.aborted) {
-                    merged = new Map([...merged, ...result]);
+                    merged = result;
                     publish();
                 }
             }).catch(() => {
-                // The local statuses are still usable when GitHub can't confirm a merge.
+                // Keep the local status when GitHub cannot confirm the merge.
             }).finally(() => {
                 clearTimeout(timeout);
                 if (remoteRequest === request) {
@@ -1269,6 +1438,7 @@ export function followFileStatuses(vm: object, directory: FileSystemDirectoryHan
                 if (stopped()) return;
                 local = undefined;
                 fingerprint = undefined;
+                checkRemote();
                 listener(new Map());
             }
         });

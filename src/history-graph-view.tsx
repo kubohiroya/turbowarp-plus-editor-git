@@ -11,6 +11,8 @@ export interface HistoryGraphProps {
     commits: readonly HistoryCommit[];
     /** The commit shown as selected. */
     selected?: string | null;
+    /** Search results omit lane connectors because intermediate commits can be missing. */
+    flat?: boolean;
     onSelect(oid: string): void;
     locale?: string;
     /** While true, selecting and the write actions wait; focus and copying still work. */
@@ -62,7 +64,7 @@ type Menu = {oid: string; mode: 'menu' | 'create'};
 export function HistoryGraph(props: HistoryGraphProps) {
     const {commits, selected = null, onSelect, locale = 'en', busy = false} = props;
     const labels = labelsFor(locale);
-    const layout = useMemo(() => layoutHistory(commits), [commits]);
+    const layout = useMemo(() => props.flat ? null : layoutHistory(commits), [commits, props.flat]);
     const rows = useRef<(HTMLButtonElement | null)[]>([]);
     const menuButtons = useRef<(HTMLButtonElement | null)[]>([]);
     const popup = useRef<HTMLDivElement>(null);
@@ -189,14 +191,13 @@ export function HistoryGraph(props: HistoryGraphProps) {
     menuButtons.current.length = commits.length;
     return <div className="twgit-graph">
         <ol className="twgit-graph-list">{commits.map((commit, index) => {
-            const row = layout.rows[index];
             const refs = commit.refs.map(refName);
             const name = [commit.message, commit.author, date(commit.timestamp),
                 ...(refs.length ? [`${labels.historyRefs}: ${refs.join(', ')}`] : [])].join(', ');
             const open = menu?.oid === commit.oid ? menu : null;
             const actions = open?.mode === 'menu' ? actionsFor(commit) : [];
             return <li key={commit.oid} className="twgit-graph-row">
-                <Lanes row={row} width={layout.width}/>
+                {layout ? <Lanes row={layout.rows[index]} width={layout.width}/> : <span aria-hidden="true"/>}
                 <button type="button" className="twgit-graph-commit" ref={element => {rows.current[index] = element;}}
                     tabIndex={index === focusIndex ? 0 : -1} aria-pressed={selected === commit.oid} aria-disabled={busy || undefined}
                     aria-label={name} title={commit.oid} data-oid={commit.oid}

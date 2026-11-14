@@ -69,6 +69,15 @@ test('matches CLI changes, separates staged and working bytes, and keeps Git met
     const working = snapshot.changes.find(change => change.path === 'notes.txt' && change.group === 'unstaged');
     assert.match((await repo.readDiff(snapshot, staged)).patch, /-initial\n\+staged/);
     assert.match((await repo.readDiff(snapshot, working)).patch, /-staged\n\+working/);
+    const unsaved = await repo.readUnsavedDiff(snapshot, 'notes.txt', new TextEncoder().encode('draft\n'));
+    assert.deepEqual(unsaved.diff.text, {before: 'initial\n', after: 'draft\n'});
+    const added = await repo.readUnsavedDiff(snapshot, 'untracked.txt', new TextEncoder().encode('new draft\n'));
+    assert.equal(added.change.before, null);
+    assert.deepEqual(added.diff.text, {before: '', after: 'new draft\n'});
+    const removed = await repo.readUnsavedDiff(snapshot, 'deleted.txt', null);
+    assert.equal(removed.change.after, null);
+    assert.deepEqual(removed.diff.text, {before: 'delete\n', after: ''});
+    assert.equal(await fs.readFile(path.join(root, 'notes.txt'), 'utf8'), 'working\n');
     const binary = snapshot.changes.find(change => change.path === 'image.png');
     assert.equal((await repo.readDiff(snapshot, binary)).binary, true);
     assert.deepEqual(await gitBytes(root), before);

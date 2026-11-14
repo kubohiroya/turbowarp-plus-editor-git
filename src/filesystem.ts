@@ -1,9 +1,9 @@
 export class GitPanelError extends Error {
     constructor(public code: 'invalid' | 'changed' | 'large' | 'unsupported' | 'pullUnsafe' | 'diverged' |
         'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed' |
-        'saveFirst' | 'author' | 'nothingStaged' | 'commitMessage' | 'ignoredProjectFile' |
+        'saveFirst' | 'saveFilesFailed' | 'author' | 'nothingStaged' | 'commitMessage' | 'ignoredProjectFile' |
         'switchUnsafe' | 'branchExists' | 'branchConflict' | 'pullRequestBranch' | 'branchName' | 'locked' |
-        'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe', message: string = code) {
+        'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'publicationConflict' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }

@@ -305,10 +305,42 @@ export function createScratchBlocksDiffRenderer(options: ScratchBlockDiffRendere
                 element.setAttribute('type', alias);
             }
             const startScale = main?.options?.zoomOptions?.startScale ?? defaultScale;
-            workspace = blockly.inject(surface, {readOnly: true, sounds: false, media: main?.options?.pathToMedia, scrollbars: true,
-                zoom: {controls: true, wheel: true, startScale, maxScale: 4, minScale: 0.25, scaleSpeed: 1.2}});
+            // Scratch Blocks checks that its injection host belongs to the Editor document.
+            // Initialize there, then move the read-only workspace into the comparison window.
+            const editorDocument = globalThis.document;
+            const external = editorDocument && surface.ownerDocument !== editorDocument;
+            if (external) editorDocument.body.append(surface);
+            try {
+                workspace = blockly.inject(surface, {readOnly: true, sounds: false, media: main?.options?.pathToMedia, scrollbars: true,
+                    zoom: {controls: true, wheel: true, startScale, maxScale: 4, minScale: 0.25, scaleSpeed: 1.2}});
+            } finally {
+                if (external) container.append(surface);
+            }
             workspace.markFocused = () => {};
             blockly.Xml.domToWorkspace(dom, workspace);
+            if (external) {
+                // Load Blockly's media from the Editor and embed it in the about:blank window.
+                const xlink = 'http://www.w3.org/1999/xlink';
+                for (const image of surface.querySelectorAll('image')) {
+                    const href = image.getAttributeNS(xlink, 'href');
+                    if (!href || href.startsWith('#')) continue;
+                    const url = new URL(href, editorDocument.baseURI);
+                    if (url.origin !== editorDocument.location.origin) continue;
+                    void fetch(url, {signal}).then(response => {
+                        if (!response.ok) return;
+                        return response.blob().then(blob => {
+                            if (signal.aborted) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                                if (!signal.aborted && typeof reader.result === 'string') {
+                                    image.setAttributeNS(xlink, 'xlink:href', reader.result);
+                                }
+                            };
+                            reader.readAsDataURL(blob);
+                        });
+                    }).catch(() => {});
+                }
+            }
             const guideTargets: Element[] = [];
             if (marks) {
                 for (const mark of marks) {

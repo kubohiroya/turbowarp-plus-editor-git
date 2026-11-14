@@ -9,7 +9,7 @@ export type GitAuthor = {name: string; email: string};
 export type LocalOperation =
     | {kind: 'stage'; paths: readonly string[]}
     | {kind: 'unstage'; paths: readonly string[]}
-    | {kind: 'commit'; message: string; author?: GitAuthor}
+    | {kind: 'commit'; message: string; author?: GitAuthor; selection?: CommitSelection}
     | {kind: 'restoreProject'; plan: ProjectRestorePlan; author?: GitAuthor}
     /**
      * Creates `name` at HEAD, at the commit `at`, or at `origin/<name>` with `fromRemote`, and switches to it with
@@ -242,10 +242,22 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
                 await stage([...selected.keys()]);
                 await assertIndex(options, head, selected, true);
             }
+            const selection = operation.selection;
+            let restoreIndex: (() => Promise<void>) | undefined;
+            if (selection) {
+                if (ref !== selection.branch || await readLocalRef(options, 'HEAD') !== selection.head)
+                    throw new GitPanelError('changed');
+                await assertWorktree(options.fs, selection.files);
+                restoreIndex = await prepareSelectedCommit(options, selection);
+                await stage(selection.files.map(file => file.path));
+                await assertIndex(options, selection.head, new Map(selection.files.map(file => [file.path, file.oid])), true);
+            }
             const staged = (await git.statusMatrix({...options, refresh: false})).some(([, head, , stage]) => head !== stage);
             if (!staged) throw new GitPanelError('nothingStaged');
             const author = queued ? {name, email, timestamp: queued.timestamp, timezoneOffset: 0} : {name, email};
             commitOid = await git.commit({...options, message: message + '\n', author, committer: queued ? author : undefined});
+            await restoreIndex?.();
+            if (selection) await assertWorktree(createReadOnlyFs(root), selection.files);
             if (queued) {
                 await queued.prepared(commitOid);
                 // A journal write can yield to another editor or a command-line tool.
@@ -257,6 +269,40 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
         return commitOid;
     };
     return execute();
+}
+
+const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+async function prepareSelectedCommit(options: GitReadOptions, selection: CommitSelection) {
+    const included = new Set(selection.files.map(file => file.path));
+    const other: {path: string; head: IndexVersion; index: IndexVersion}[] = [];
+    await git.walk({...options, trees: [git.TREE({ref: selection.head ?? emptyTree}), git.STAGE()],
+        map: async (path, [headEntry, indexEntry]) => {
+            if (path === '.') return;
+            const head = await indexVersion(headEntry), index = await indexVersion(indexEntry);
+            if (head?.oid === index?.oid && head?.mode === index?.mode) return;
+            if (included.has(path)) {
+                if ((head && head.mode !== 0o100644) || (index && index.mode !== 0o100644))
+                    throw new GitPanelError('unsupported');
+                return;
+            }
+            other.push({path, head, index});
+        }});
+    const write = async (path: string, version: IndexVersion) => {
+        const args = {...options, dir: '/', filepath: path};
+        if (version) await git.updateIndex({...args, ...version, add: true});
+        else await git.updateIndex({...args, remove: true, force: true});
+    };
+    // Build the commit with the selected files, then restore the other index entries in the same transaction.
+    for (const {path, head} of other) await write(path, head);
+    return async () => {
+        for (const {path, index} of other) await write(path, index);
+    };
+}
+
+type IndexVersion = {oid: string; mode: number} | null;
+async function indexVersion(entry: {type(): Promise<string>; oid(): Promise<string>; mode(): Promise<number>} | null): Promise<IndexVersion> {
+    return entry && await entry.type() !== 'tree' ? {oid: await entry.oid(), mode: await entry.mode()} : null;
 }
 
 type GitReadOptions = Omit<Parameters<typeof git.resolveRef>[0], 'ref'>;
@@ -297,7 +343,6 @@ async function assertWorktree(fs: {promises: Pick<ReturnType<typeof createReadOn
 /** Refuse unrelated staged changes and any staged version that the approved worktree bytes would replace. */
 async function assertIndex(options: GitReadOptions, head: string | null, selected: Map<string, string | null>, prepared: boolean) {
     const seen = new Set<string>();
-    const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
     await git.walk({...options, trees: [git.TREE({ref: head ?? emptyTree}), git.STAGE()],
         map: async (path, [before, staged]) => {
             if (path === '.') return true;

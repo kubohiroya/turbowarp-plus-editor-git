@@ -1,5 +1,6 @@
 import {remoteUrl} from './smart-http.js';
 export {inspectPublicationRepository, pushPublicationCommit} from './publish-ref.js';
+export {preparePublicationCommit, publicationCommits} from './publish-ref.js';
 export type {PublicationRepository} from './publish-ref.js';
 
 type Goal = 'pr' | 'merge';
@@ -62,7 +63,7 @@ export interface PullRequestObservation extends PullRequestReference {
     closesOtherIssues?: boolean;
 }
 
-interface MergeCondition {
+export interface MergeCondition {
     number: number;
     head: string;
     base: string;
