@@ -221,8 +221,8 @@ test('the branch button tells each repository state apart, and only lists the br
 
     // A branch without records yet says so, and offers no new branch, since there is no commit to start one at.
     await mount({...repository, head: null, branches: [], remoteBranches: []});
-    const unborn = page.getByRole('button', {name: 'ブランチ: main (まだ記録がありません)'});
-    assert.match(await unborn.textContent(), /^mainまだ記録がありません▾$/u);
+    const unborn = page.getByRole('button', {name: 'ブランチ: main (コミットはまだありません)'});
+    assert.match(await unborn.textContent(), /^mainコミットはまだありません▾$/u);
     await unborn.click();
     assert.deepEqual(await menu.locator('[role^="menuitem"]').allTextContents(), ['ローカル Git を開く']);
     await page.keyboard.press('Escape');
@@ -291,32 +291,33 @@ test('the branch button shares the panel\'s repository, switches as the panel do
             await page.getByRole('button', {name: 'Local Git', exact: true}).click();
             await menu.getByRole('menuitem', {name: 'Choose Repository…'}).click();
             await panel.getByText('Repository: ' + path.basename(root)).waitFor();
-            await panel.getByText('Branch and Git status', {exact: true}).click();
-            await panel.getByText('HEAD:', {exact: false}).waitFor();
-            await panel.getByText('Branch and Git status', {exact: true}).click();
+            assert.equal(await panel.getByText('Branch and Git status', {exact: true}).count(), 0);
+            assert.equal(await panel.locator('[data-git-upstream]').count(), 0);
             await page.getByRole('button', {name: 'Branch: main', exact: true}).waitFor();
-            const workflow = panel.getByRole('list', {name: 'Work steps'});
-            const changes = workflow.getByRole('button', {name: 'Review changes', exact: true});
-            const history = workflow.getByRole('button', {name: 'Record locally', exact: true});
-            const github = workflow.getByRole('button', {name: 'Send to GitHub', exact: true});
+            const workflow = panel.getByRole('list', {name: 'Local Git views'});
+            const changes = workflow.getByRole('button', {name: 'Commit saved changes', exact: true});
+            const history = workflow.getByRole('button', {name: 'Create PR', exact: true});
+            const github = workflow.getByRole('button', {name: 'Merge', exact: true});
             const fileCount = (count) => changes.locator('.twgit-count').filter({hasText: new RegExp(`^${count}$`)});
+            assert.deepEqual(await workflow.getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))),
+                ['Save files', 'Commit saved changes', 'Create PR', 'Merge']);
             assert.equal(await panel.getByRole('tablist').count(), 0);
-            for (const name of ['Choose Repository…', 'Refresh']) {
+            await workflow.getByRole('button', {name: 'Save files'}).press('Enter');
+            await panel.getByRole('region', {name: 'Save files'}).getByText('No unsaved files.').waitFor();
+            await changes.press('Space');
+            for (const name of ['Refresh local status']) {
                 await panel.getByRole('button', {name, exact: true}).locator('svg[aria-hidden="true"]').waitFor();
             }
             await fileCount(0).waitFor();
             const currentStep = workflow.locator('[aria-current="step"]');
             assert.equal(await changes.getAttribute('aria-expanded'), 'true');
             await page.evaluate(() => host.setDirty(true));
-            await currentStep.getByText('Save project').waitFor();
             await fs.writeFile(path.join(root, 'notes.txt'), `Updated ${panelFirst}\n`);
             await page.evaluate(() => host.setDirty(false));
-            await panel.getByRole('button', {name: 'Refresh', exact: true}).click();
+            await panel.getByRole('button', {name: 'Refresh local status', exact: true}).click();
             await fileCount(1).and(changes.locator('[data-review-pending]')).waitFor();
             for (const step of [changes, history, github]) await step.locator('svg[aria-hidden="true"]').waitFor();
-            await currentStep.getByRole('button', {name: 'Review changes'}).waitFor();
-            const description = await changes.getAttribute('aria-describedby');
-            assert.equal(await panel.locator(`#${description}`).textContent(), 'Saved files · 1. Unstaged changes');
+            await currentStep.getByRole('button', {name: 'Commit saved changes'}).waitFor();
             const notes = panel.locator('[data-git-group="unstaged"]').filter({hasText: 'notes.txt'});
             await notes.locator('[data-git-file-kind="text"]').waitFor();
             await notes.locator('[data-git-status="unstaged"]').getByText('Unstaged').waitFor();
@@ -326,7 +327,7 @@ test('the branch button shares the panel\'s repository, switches as the panel do
             assert.equal(await panel.getByRole('button', {name: 'Switch: jump'}).count(), 0);
             await github.press('Enter');
             assert.equal(await github.getAttribute('aria-expanded'), 'true');
-            await panel.getByRole('region', {name: 'Send to GitHub'}).getByText('GitHub sync is unavailable in this Editor.').waitFor();
+            await panel.getByRole('region', {name: 'Merge'}).getByText('GitHub sync is unavailable in this Editor.').waitFor();
             await history.press('Space');
             assert.equal(await history.getAttribute('aria-expanded'), 'true');
             await panel.getByRole('button', {name: /^first, /}).click();
@@ -340,20 +341,13 @@ test('the branch button shares the panel\'s repository, switches as the panel do
             await history.click();
             await panel.locator('.twgit-diff .diff').getByText('main', {exact: true}).waitFor();
             await changes.click();
-            await panel.getByRole('button', {name: 'Add to Next Record: notes.txt'}).click();
-            await currentStep.getByText('Record locally').waitFor();
-            await currentStep.getByText('Create a commit and view history').waitFor();
-            await currentStep.getByText('Files selected: 1').waitFor();
-            await fileCount(1).waitFor();
-            await panel.getByRole('button', {name: 'Open commit form', exact: true}).click();
-            assert.equal(await history.getAttribute('aria-expanded'), 'true');
-            await panel.getByLabel('Message for this record').fill('Record the saved notes');
-            await panel.getByRole('button', {name: 'Record (Commit)'}).click();
+            await panel.getByRole('checkbox', {name: 'Include in commit: notes.txt'}).check();
+            await panel.getByLabel('Commit message').fill('Record the saved notes');
+            await panel.getByRole('button', {name: 'Commit', exact: true}).click();
             await panel.getByText('Recorded the changes (commit).').waitFor();
             await fileCount(0).waitFor();
             assert.equal(git('log', '-1', '--format=%s'), 'Record the saved notes');
-            assert.equal(await currentStep.count(), 0);
-            assert.equal(await history.getAttribute('aria-expanded'), 'true');
+            await history.click();
             await panel.locator(`[data-oid="${git('rev-parse', 'HEAD')}"]`).waitFor();
             // A switch from the panel moves the button.
             await panel.getByRole('button', {name: 'Switch: jump'}).click();
