@@ -16,9 +16,10 @@ export const isProjectSource = (path: string) => path.split('/').pop() === 'proj
 /**
  * Shows one changed file. Project sources are compared as blocks by default, with their text diff one switch away.
  */
-export function FileDiffView({change, diff, labels, locale, renderBlock, locateBlock, onOpenTabs}: {
+export function FileDiffView({change, diff, labels, locale, renderBlock, locateBlock, onOpenTabs, unsaved = false}: {
     change: FileChange; diff: FileDiff | null; labels: ReturnType<typeof labelsFor>; locale: string;
     renderBlock?: ProjectBlockRenderer; locateBlock?: ProjectBlockLocator;
+    unsaved?: boolean;
     /** Opens the comparison as tabs of the host's layout, a tab group for each stage or sprite. */
     onOpenTabs?(before: string | null, after: string | null): void;
 }) {
@@ -27,7 +28,7 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, locateB
     const parsed = diff?.patch ? parseDiff(diff.patch)[0] : null;
     const text = <>
         <details className="twgit-file-details"><summary>{labels.fileDetails}</summary>
-            <p>{labels.mode} · {change.oldMode?.toString(8) || '—'} → {change.newMode?.toString(8) || '—'}</p>
+            <p>{labels.mode}: {change.oldMode?.toString(8) || '—'} → {change.newMode?.toString(8) || '—'}</p>
             {diff && <p>{diff.beforeSize} → {diff.afterSize} {labels.bytes}</p>}
         </details>
         {diff?.binary && <p>{labels.binary}</p>}
@@ -38,7 +39,8 @@ export function FileDiffView({change, diff, labels, locale, renderBlock, locateB
     </>;
     const sources = renderBlock && diff?.text && isProjectSource(change.path) ? diff.text : null;
     return <>
-        <h3 className="twgit-file-heading"><FileIdentity path={change.path}/><GitStatusBadge group={change.group} labels={labels}/></h3>
+        <h3 className="twgit-file-heading"><FileIdentity path={change.path}/>
+            {unsaved ? <small>{labels.unsavedComparison}</small> : <GitStatusBadge group={change.group} labels={labels}/>}</h3>
         {sources && <div className="twgit-view-switch" role="group" aria-label={names.view}>
             {(['blocks', 'text'] as const).map(mode => <button key={mode} type="button" aria-pressed={view === mode}
                 data-git-view={mode} onClick={() => setView(mode)}>{names[mode]}</button>)}

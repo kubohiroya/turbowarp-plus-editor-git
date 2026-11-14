@@ -2,6 +2,7 @@ import type {GitProxySession} from '@kubohiroya/turbowarp-plus-editor-auth';
 import {checkConnection, remoteUrl} from './smart-http.js';
 import {readMergeStatus, readPullRequest, readPullRequestList} from './github-pull-requests.js';
 import type {PullRequestStatus} from './github-pull-requests.js';
+import type {PullRequestObservation} from './pull-request-queue.js';
 
 /**
  * The pull request review routes of the GitHub connection's proxy, under `/v1/github/<owner>/<repo>/`. The proxy keeps
@@ -293,7 +294,13 @@ export function createGitHubReviewApi({remote, getSession, fetch: send = (...arg
                 const mergeState = typeof value.mergeStateStatus === 'string' ? value.mergeStateStatus.toLowerCase() : null;
                 status = readMergeStatus(mergeable, mergeState);
             }
-            return {head: value.head.sha, base: value.base.sha, status};
+            const checks = isRecord(value.checks) ? value.checks : undefined;
+            const state = checks?.state;
+            const ci: PullRequestObservation['checks'] | undefined = !checks ? undefined :
+                checks.totalCount === 0 && state === null ? 'absent' : state === 'SUCCESS' ? 'passed' :
+                    state === 'FAILURE' || state === 'ERROR' ? 'failed' :
+                        state === 'PENDING' || state === 'EXPECTED' ? 'pending' : 'unknown';
+            return {head: value.head.sha, base: value.base.sha, status, ...(ci === undefined ? {} : {checks: ci})};
         },
         /** Reads the Worker status for a specific repository ID. Check the returned head before using its CI result. */
         async publicationStatus(number: number, repositoryId: number, signal?: AbortSignal) {

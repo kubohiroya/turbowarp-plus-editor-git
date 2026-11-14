@@ -201,7 +201,7 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
 
     return {
         /** File versions actually integrated by a merged PR associated with one of the known commits. */
-        async mergedFileVersions(sha: string, scope: string, signal: AbortSignal): Promise<MergedFileVersions> {
+        async mergedFileVersions(sha: string, scope: string, signal: AbortSignal, branch?: string): Promise<MergedFileVersions> {
             if (!isSha(sha)) throw invalidResponse();
             const associated = await json(repo + '/commits/' + sha + '/pulls?per_page=10', signal);
             if (!Array.isArray(associated)) throw invalidResponse();
@@ -210,7 +210,14 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
                 if (!isRecord(value) || typeof value.merged_at !== 'string' || !isSha(value.merge_commit_sha)) continue;
                 const {number} = readSummary(value);
                 const base = readRevision(value.base);
-                if (base.repository?.toLowerCase() === repository.toLowerCase()) pulls.set(number, value.merge_commit_sha);
+                if (base.repository?.toLowerCase() !== repository.toLowerCase()) continue;
+                if (branch) {
+                    const head = readRevision(value.head);
+                    const sourceMatches = head.ref === branch && head.repository?.toLowerCase() === repository.toLowerCase();
+                    const destinationMatches = base.ref === branch && value.merge_commit_sha === sha;
+                    if (!sourceMatches && !destinationMatches) continue;
+                }
+                pulls.set(number, value.merge_commit_sha);
             }
             const versions = new Map<string, FileVersion[]>();
             for (const [number, merge] of pulls) {
@@ -249,6 +256,37 @@ export function createGitHubPullRequests(repository: string, send: typeof fetch 
             const pr = await metadata(number, signal);
             if (pr.number !== number) throw invalidResponse();
             return {...pr, url: 'https://github.com/' + repository + '/pull/' + number};
+        },
+        async commits(number: number, head: string, base: string, signal: AbortSignal) {
+            const commits: {oid: string; message: string; author: string; timestamp: number}[] = [];
+            for (let page = 1; page <= 3; page++) {
+                const rows = await json(repo + '/pulls/' + number + '/commits?per_page=100&page=' + page, signal);
+                if (!Array.isArray(rows)) throw invalidResponse();
+                for (const row of rows) {
+                    if (!isRecord(row) || !isSha(row.sha) || !isRecord(row.commit) || typeof row.commit.message !== 'string')
+                        throw invalidResponse();
+                    const author = isRecord(row.commit.author) ? row.commit.author : undefined;
+                    commits.push({oid: row.sha, message: row.commit.message,
+                        author: typeof author?.name === 'string' ? author.name : '',
+                        timestamp: typeof author?.date === 'string' ? Date.parse(author.date) / 1000 : NaN});
+                }
+                if (rows.length < 100) break;
+            }
+            const current = await metadata(number, signal);
+            if (current.head.sha !== head || current.base.sha !== base) throw new PullRequestError('changed');
+            return {commits, limited: commits.length >= 250};
+        },
+        async checks(head: string, signal: AbortSignal) {
+            if (!isSha(head)) throw invalidResponse();
+            const rows = await json(repo + '/commits/' + head + '/check-runs?per_page=100', signal);
+            if (!isRecord(rows) || !Array.isArray(rows.check_runs) || !Number.isSafeInteger(rows.total_count))
+                throw invalidResponse();
+            return {total: Number(rows.total_count), runs: rows.check_runs.map(run => {
+                if (!isRecord(run) || !Number.isSafeInteger(run.id) || typeof run.name !== 'string' || typeof run.status !== 'string')
+                    throw invalidResponse();
+                return {id: Number(run.id), name: run.name, status: run.status,
+                    conclusion: typeof run.conclusion === 'string' ? run.conclusion : null};
+            })};
         },
         async list(page: number, signal: AbortSignal) {
             const response = await request(repo + '/pulls?state=all&sort=updated&per_page=' + pullRequestPageSize + '&page=' + page, signal);

@@ -143,7 +143,7 @@ export function ProjectSourceBlockDiff({patch, beforeSource, renderBlock, locate
     if (!result) return <p role="alert">{labels.invalid}</p>;
     const visible = page.result === result ? page.visible : pageSize;
     return <section className="twgit-block-diff" aria-label={labels.title}>
-        <h2>{labels.title} · {result.changes.length}</h2>
+        <h2>{labels.title}: {result.changes.length}</h2>
         {result.unchanged > 0 && <p>{labels.omitted(result.unchanged)}</p>}
         {result.otherChanges && <p>{labels.otherChanges}</p>}
         {!result.changes.length && <p>{labels.noChanges}</p>}

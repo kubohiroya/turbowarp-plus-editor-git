@@ -67,6 +67,12 @@
 .twgit-review-files-title { margin: 13px 0 6px; }
 .twgit-review-file { border: 1px solid var(--twgit-review-line); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
 .twgit-review-file > header { background: color-mix(in srgb, CanvasText 5%, Canvas); padding: 8px 12px; }
+.twgit-review-file-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.twgit-review-file-heading h4 { min-width: 0; }
+.twgit-review button.twgit-review-open-window { display: inline-grid; place-items: center; flex: none;
+    width: 30px; height: 30px; padding: 0; }
+body.twgit-review-window { margin: 0; padding: 16px; color: CanvasText; background: Canvas; }
+.twgit-review-window .twgit-block-diff-preview { min-height: min(48vh, 440px); }
 .twgit-review-file > header h4, .twgit-review-file > header p { margin: 0; overflow-wrap: anywhere; }
 .twgit-review-file > p, .twgit-review-target > p { margin: 6px 12px; }
 .twgit-review-target { padding: 6px 12px 10px; }
@@ -84,7 +90,14 @@
 .twgit-review-script .twgit-block-diff-side + .twgit-block-diff-side { border-inline-start: 0; border-block-start: 1px solid var(--twgit-review-line); }
 .twgit-review-script .twgit-block-diff-sides > div + div { border-inline-start: 1px solid var(--twgit-review-line); }
 .twgit-review-status { font-size: .85em; padding: 2px 5px; border: 1px solid var(--twgit-review-line); border-radius: 4px; }
-.twgit-review-checked { display: block; padding: 6px 12px 9px; }
+.twgit-review-footer { display: flex; justify-content: flex-end; margin-top: 8px; padding: 8px 12px;
+    border-top: 1px solid var(--twgit-review-line); }
+.twgit-review-checked { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; min-height: 24px;
+    border: 1px solid #25875d; border-radius: 6px; background: color-mix(in srgb, #25875d 12%, Canvas);
+    color: CanvasText; font-weight: 650; cursor: pointer; }
+.twgit-review-checked:has(input:checked) { background: color-mix(in srgb, #25875d 26%, Canvas); }
+.twgit-review-checked:has(input:focus-visible) { outline: 2px solid Highlight; outline-offset: 2px; }
+.twgit-review-checked input { width: 20px; height: 20px; margin: 0; accent-color: #1f783d; cursor: inherit; }
 @container (max-width: 440px) {
     .twgit-review-script .twgit-block-diff-sides > div + div { border-inline-start: 0; border-block-start: 1px solid var(--twgit-review-line); }
 }
@@ -137,6 +150,24 @@
     .twgit-pr-content > .twgit-diff { grid-column: 1 / -1; }
 }
 .twgit-pr-paging, .twgit-pr-revision { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.twgit-pr-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.twgit-pr-header-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-inline-start: auto; }
+.twgit-pr-header-actions button[aria-disabled="true"] { opacity: .5; cursor: default; }
+.twgit-pr-heading h2 { margin: 0; font-size: 1.4em; overflow-wrap: anywhere; }
+.twgit-panel button.twgit-open-pr-tabs { display: inline-grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; }
+.twgit-pr-revision { margin-bottom: 8px; }
+.twgit-pr-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--twgit-border); margin-block: 8px 12px; }
+.twgit-panel .twgit-pr-tabs button { border: 0; border-radius: 0; padding: 8px 10px; border-bottom: 2px solid transparent; }
+.twgit-panel .twgit-pr-tabs button[aria-selected="true"] { border-bottom-color: var(--twgit-accent); font-weight: 650; }
+.twgit-pr-tabs span { margin-inline-start: 5px; border-radius: 1em; padding: 1px 7px; background: color-mix(in srgb, CanvasText 9%, Canvas); }
+.twgit-pr-description { border: 1px solid var(--twgit-border); border-radius: 6px; padding: 12px; }
+.twgit-pr-description h3 { margin: 0 0 8px; }
+.twgit-pr-description p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.twgit-pr-details-list { list-style: none; padding: 0; }
+.twgit-pr-details-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; overflow-wrap: anywhere;
+    padding: 10px 12px; border: 1px solid var(--twgit-border); }
+.twgit-pr-details-list li + li { border-top: 0; }
+.twgit-pr-details-list small { grid-column: 1 / -1; }
 .twgit-pr-revision code { overflow-wrap: anywhere; }
 .twgit-review .twgit-block-diff-side h4 { font-size: 1em; }
 

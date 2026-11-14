@@ -1,5 +1,5 @@
 import {samePublicationStackParent} from './pull-request-queue.js';
-import type {PublicationStackParent, PullRequestObservation, PullRequestPublicationPort,
+import type {MergeCondition, PublicationStackParent, PullRequestObservation, PullRequestPublicationPort,
     PullRequestReference} from './pull-request-queue.js';
 import {remoteUrl} from './smart-http.js';
 
@@ -7,6 +7,11 @@ type Capability = 'pulls-read' | 'pulls-write' | 'issues-read' | 'issues-write' 
 type RecordValue = Record<string, unknown>;
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH';
 type Auth = {repositoryId: number; accessToken: string};
+export type GitHubPublicationHost = PullRequestPublicationPort & {
+    readPullRequestChecks(number: number): Promise<{head: string; base: string; checks: PullRequestObservation['checks']}>;
+    readMergeStatus(number: number): Promise<PullRequestObservation>;
+    mergeSelectedPullRequest(expected: MergeCondition): ReturnType<PullRequestPublicationPort['mergePullRequest']>;
+};
 
 const oid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{40}$/u.test(value);
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0;
@@ -33,6 +38,15 @@ const publicationBranch = (name: string) => {
     if (!name.startsWith('tw-plus/pr-') || !mergeUuid.test(name.slice(11))) throw new TypeError('Invalid publication branch');
     return branch(name);
 };
+
+export function validateSelectedMerge(value: unknown): MergeCondition {
+    const expected = record(value);
+    const {number, head, base, headOid, baseOid, diffDigest, allowNoChecks} = expected;
+    if (!positive(number) || typeof head !== 'string' || typeof base !== 'string' || !oid(headOid) || !oid(baseOid) ||
+        typeof diffDigest !== 'string' || !/^[0-9a-f]{64}$/u.test(diffDigest) || typeof allowNoChecks !== 'boolean')
+        throw new TypeError('Invalid merge target');
+    return {number, head: branch(head), base: branch(base), headOid, baseOid, diffDigest, allowNoChecks};
+}
 const checkQuery = `query PublicationChecks($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     databaseId
@@ -118,7 +132,7 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
     pushCommit: PullRequestPublicationPort['pushCommit'];
     fetch?: typeof fetch;
     signal?: AbortSignal;
-}): PullRequestPublicationPort {
+}): GitHubPublicationHost {
     if (!positive(repositoryId)) throw new TypeError('Invalid repository ID');
     const [, owner, repo] = new URL(remoteUrl(remote)).pathname.slice(0, -4).split('/');
     const path = `/repos/${owner}/${repo}`;
@@ -147,12 +161,13 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
         return readJson(response);
     }
 
-    function pullReference(value: unknown): PullRequestReference {
+    function pullReference(value: unknown, allowFork = false): PullRequestReference {
         const pull = record(value);
         const head = record(pull.head);
         const base = record(pull.base);
         const headRepositoryId = record(head.repo).id;
-        if (!positive(pull.number) || record(base.repo).id !== repositoryId || headRepositoryId !== repositoryId ||
+        if (!positive(pull.number) || record(base.repo).id !== repositoryId || !positive(headRepositoryId) ||
+            (!allowFork && headRepositoryId !== repositoryId) ||
             typeof head.ref !== 'string' || typeof base.ref !== 'string' || !oid(head.sha) || !oid(base.sha)) {
             throw new Error('Unexpected pull request identity');
         }
@@ -160,9 +175,9 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
             headOid: head.sha, baseOid: base.sha, body: typeof pull.body === 'string' ? pull.body : ''};
     }
 
-    async function readPull(number: number) {
+    async function readPull(number: number, allowFork = false) {
         const raw = record(await json('pulls-read', path + '/pulls/' + numberPath(number)));
-        const reference = pullReference(raw);
+        const reference = pullReference(raw, allowFork);
         if (reference.number !== number || (raw.state !== 'open' && raw.state !== 'closed'))
             throw new Error('Unexpected pull request state');
         return {raw, reference};
@@ -236,6 +251,22 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
     const sameRefs = (one: PullRequestReference, other: PullRequestReference) => one.number === other.number &&
         one.head === other.head && one.base === other.base && one.headOid === other.headOid && one.baseOid === other.baseOid;
 
+    async function checkView(number: number) {
+        const data = record(await json('checks-read', '/graphql', 'POST', {query: checkQuery, variables: {owner, name: repo, number}}));
+        if (Array.isArray(data.errors) && data.errors.length) throw new Error('GitHub check query failed');
+        const target = record(record(data.data).repository);
+        const view = record(target.pullRequest);
+        const last = record(record(list(record(view.commits).nodes).at(-1)).commit);
+        if (target.databaseId !== repositoryId || !oid(view.headRefOid) || !oid(view.baseRefOid) || last.oid !== view.headRefOid)
+            throw new Error('Unexpected check revision');
+        const rollup = last.statusCheckRollup === null ? null : record(last.statusCheckRollup);
+        const total = rollup ? record(rollup.contexts).totalCount : 0;
+        const checks = total === 0 ? 'absent' : !positive(total) ? 'unknown' : rollup?.state === 'SUCCESS' ? 'passed' :
+            ['ERROR', 'FAILURE'].includes(String(rollup?.state)) ? 'failed' :
+                ['EXPECTED', 'PENDING'].includes(String(rollup?.state)) ? 'pending' : 'unknown';
+        return {view, head: view.headRefOid, base: view.baseRefOid, checks} as const;
+    }
+
     async function stackParent(number: number): Promise<PublicationStackParent | null> {
         const value = await json('stacks', path + '/pulls/' + numberPath(number), 'GET', undefined, true);
         if (value === null) return null;
@@ -281,8 +312,9 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
     }
 
     async function observePullRequest(number: number,
-        expectedStack?: NonNullable<Parameters<PullRequestPublicationPort['observePullRequest']>[1]>): Promise<PullRequestObservation> {
-        const {raw, reference} = await readPull(number);
+        expectedStack?: NonNullable<Parameters<PullRequestPublicationPort['observePullRequest']>[1]>,
+        allowFork = false): Promise<PullRequestObservation> {
+        const {raw, reference} = await readPull(number, allowFork);
         const baseObservation = {...reference, checks: 'unknown', review: 'unknown', mergeable: 'unknown', diffDigest: null} as const;
         const state = raw.merged === true ? 'merged' : raw.state === 'closed' ? 'closed' : 'open';
         if (expectedStack) {
@@ -297,28 +329,17 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
         if (raw.state === 'closed') return {...baseObservation, state: 'closed'};
         // Standard PR automation does not request a merge that could include another PR.
         if (!expectedStack && raw.stack != null) return {...baseObservation, state: 'open', downstackOpen: true};
-        const [graph, diffDigest] = await Promise.all([
-            json('checks-read', '/graphql', 'POST', {query: checkQuery, variables: {owner, name: repo, number}}),
+        const [{view, head, base, checks}, diffDigest] = await Promise.all([
+            checkView(number),
             expectedStack ? readStackDiff(number, raw.changed_files) : readDiff(number, raw.changed_files)
         ]);
-        const data = record(graph);
-        if (Array.isArray(data.errors) && data.errors.length) throw new Error('GitHub check query failed');
-        const target = record(record(data.data).repository);
-        const view = record(target.pullRequest);
-        const last = record(record(list(record(view.commits).nodes).at(-1)).commit);
-        if (target.databaseId !== repositoryId || view.headRefOid !== reference.headOid || view.baseRefOid !== reference.baseOid ||
-            last.oid !== reference.headOid) return {...baseObservation, state: 'open'};
-        const rollup = last.statusCheckRollup === null ? null : record(last.statusCheckRollup);
-        const total = rollup ? record(rollup.contexts).totalCount : 0;
-        const checks = total === 0 ? 'absent' : !positive(total) ? 'unknown' : rollup?.state === 'SUCCESS' ? 'passed' :
-            ['ERROR', 'FAILURE'].includes(String(rollup?.state)) ? 'failed' :
-                ['EXPECTED', 'PENDING'].includes(String(rollup?.state)) ? 'pending' : 'unknown';
+        if (head !== reference.headOid || base !== reference.baseOid) return {...baseObservation, state: 'open'};
         const review = view.reviewDecision === 'APPROVED' ? 'approved' : view.reviewDecision === 'REVIEW_REQUIRED' ? 'required' :
             view.reviewDecision === 'CHANGES_REQUESTED' ? 'changesRequested' : view.reviewDecision === null ? 'none' : 'unknown';
         const mergeable = view.mergeable === 'CONFLICTING' ? 'conflicting' :
             view.mergeable === 'MERGEABLE' && view.mergeStateStatus === 'CLEAN' && view.isDraft === false ? 'ready' :
                 view.mergeable === 'UNKNOWN' ? 'unknown' : 'blocked';
-        const current = await readPull(number);
+        const current = await readPull(number, allowFork);
         if (current.raw.state !== 'open' || (!expectedStack && current.raw.stack != null) ||
             !sameRefs(current.reference, reference) || current.reference.body !== reference.body ||
             current.raw.changed_files !== raw.changed_files) {
@@ -331,6 +352,38 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
         }
         const closesOtherIssues = record(view.closingIssuesReferences).totalCount !== 0;
         return {...reference, state: 'open', checks, review, mergeable, diffDigest, closesOtherIssues};
+    }
+
+    async function mergePullRequest(expected: MergeCondition, selected = false): ReturnType<PullRequestPublicationPort['mergePullRequest']> {
+        const current = await observePullRequest(expected.number, expected.stack, selected);
+        if (current.state === 'merged' && current.headOid === expected.headOid && current.base === expected.base &&
+            current.head === expected.head) return {state: 'merged'};
+        if (current.state !== 'open' || current.stackChanged || current.downstackOpen || (!selected && current.closesOtherIssues) ||
+            current.headOid !== expected.headOid || current.head !== expected.head || current.base !== expected.base ||
+            current.baseOid !== expected.baseOid || !expected.diffDigest || current.diffDigest !== expected.diffDigest ||
+            current.mergeable !== 'ready' || !['approved', 'none'].includes(current.review) ||
+            !(current.checks === 'passed' || current.checks === 'absent' && expected.allowNoChecks)) return {state: 'rejected'};
+        const route = path + '/pulls/' + numberPath(expected.number) + '/merge-async';
+        const response = await sendRequest('merge', route, 'PUT',
+            {sha: expected.headOid, merge_method: 'squash', merge_action: 'default', bypass_rules: false});
+        if ([400, 403, 404, 422].includes(response.status)) {
+            await response.body?.cancel().catch(() => {});
+            return {state: 'rejected'};
+        }
+        if (![200, 202, 409].includes(response.status)) {
+            await response.body?.cancel().catch(() => {});
+            throw new ApiFailure(response.status);
+        }
+        const result = record(await readJson(response));
+        if (response.status === 200 && result.status === 'merged') return {state: 'merged'};
+        if (response.status === 200 && result.status === 'enqueued') return {state: 'accepted'};
+        const details = record(result.details);
+        const requestId = details.uuid;
+        if (typeof requestId !== 'string' || !mergeUuid.test(requestId) || result.status !== 'pending' ||
+            (response.status === 409 && (details.expected_head_sha !== expected.headOid ||
+                details.merge_method !== 'squash' || details.merge_action !== 'default' || details.bypass_rules !== false)))
+            throw new Error('Unexpected merge request');
+        return {state: 'accepted', requestId};
     }
 
     return {
@@ -346,13 +399,20 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
         pushCommit,
         async findPullRequests(head) {
             const query = new URLSearchParams({state: 'all', head: owner + ':' + publicationBranch(head), per_page: '100'});
-            return list(await json('pulls-read', path + '/pulls?' + query)).map(pullReference);
+            return list(await json('pulls-read', path + '/pulls?' + query)).map(value => pullReference(value));
         },
         async createPullRequest(draft) {
             return pullReference(await json('pulls-write', path + '/pulls', 'POST',
                 {head: publicationBranch(draft.head), base: branch(draft.base), title: draft.title, body: draft.body}));
         },
         observePullRequest,
+        async readPullRequestChecks(number) {
+            numberPath(number);
+            const {head, base, checks} = await checkView(number);
+            return {head, base, checks};
+        },
+        readMergeStatus: number => observePullRequest(number, undefined, true),
+        mergeSelectedPullRequest: expected => mergePullRequest(expected, true),
         stackParent,
         stackContainsCommit,
         async inspectStackChild(number, parent) {
@@ -376,38 +436,7 @@ export function createGitHubPublicationHost({remote, repositoryId, grant, pushCo
             const pull_requests = parent.stackNumber === undefined ? [parent.number, child.number] : [child.number];
             await json('stacks', path + route, 'POST', {pull_requests});
         },
-        async mergePullRequest(expected) {
-            const current = await observePullRequest(expected.number, expected.stack);
-            if (current.state === 'merged' && current.headOid === expected.headOid && current.base === expected.base &&
-                current.head === expected.head) return {state: 'merged'};
-            if (current.state !== 'open' || current.stackChanged || current.downstackOpen || current.closesOtherIssues ||
-                current.headOid !== expected.headOid ||
-                current.head !== expected.head || current.base !== expected.base ||
-                current.baseOid !== expected.baseOid || !expected.diffDigest || current.diffDigest !== expected.diffDigest ||
-                current.mergeable !== 'ready' || !['approved', 'none'].includes(current.review) ||
-                !(current.checks === 'passed' || current.checks === 'absent' && expected.allowNoChecks)) return {state: 'rejected'};
-            const route = path + '/pulls/' + numberPath(expected.number) + '/merge-async';
-            const response = await sendRequest('merge', route, 'PUT',
-                {sha: expected.headOid, merge_method: 'squash', merge_action: 'default', bypass_rules: false});
-            if ([400, 403, 404, 422].includes(response.status)) {
-                await response.body?.cancel().catch(() => {});
-                return {state: 'rejected'};
-            }
-            if (![200, 202, 409].includes(response.status)) {
-                await response.body?.cancel().catch(() => {});
-                throw new ApiFailure(response.status);
-            }
-            const result = record(await readJson(response));
-            if (response.status === 200 && result.status === 'merged') return {state: 'merged'};
-            if (response.status === 200 && result.status === 'enqueued') return {state: 'accepted'};
-            const details = record(result.details);
-            const requestId = details.uuid;
-            if (typeof requestId !== 'string' || !mergeUuid.test(requestId) || result.status !== 'pending' ||
-                (response.status === 409 && (details.expected_head_sha !== expected.headOid ||
-                    details.merge_method !== 'squash' || details.merge_action !== 'default' || details.bypass_rules !== false)))
-                throw new Error('Unexpected merge request');
-            return {state: 'accepted', requestId};
-        },
+        mergePullRequest: expected => mergePullRequest(expected),
         async observeMergeRequest(number, requestId) {
             if (!mergeUuid.test(requestId)) throw new TypeError('Invalid merge request');
             const value = record(await json('merge', path + '/pulls/' + numberPath(number) + '/merge-async/' + requestId));

@@ -29,16 +29,29 @@ export function changeMarks(changes: readonly FileChange[], folder: string): Map
     return marks;
 }
 
-/** The committed version only describes the file on disk when it matches both HEAD and the index. */
+/** Compares the saved file with HEAD, then checks the upstream and merge evidence for clean files. */
 export function fileStatuses(changes: readonly FileChange[], committed: ReadonlyMap<string, FileVersion>,
     upstream: ReadonlyMap<string, FileVersion>, merged: MergedFileVersions, folder: string): Map<string, FileStatus> {
     const prefix = folder ? folder + '/' : '';
+    const indexed = new Map(changes.filter(change => change.group === 'staged').map(change => [change.path, change]));
+    const working = new Map(changes.filter(change => change.group === 'unstaged' || change.group === 'untracked')
+        .map(change => [change.path, change]));
     const statuses = new Map<string, FileStatus>();
-    for (const [path, change] of changeMarks(changes, folder)) statuses.set(path, {change});
-    for (const {path, group} of changes) {
-        if (group !== 'staged' || !path.startsWith(prefix)) continue;
-        const status = statuses.get(path.slice(prefix.length));
-        if (status) status.staged = true;
+    for (const path of new Set([...indexed.keys(), ...working.keys()])) {
+        if (!path.startsWith(prefix)) continue;
+        const index = indexed.get(path);
+        const disk = working.get(path);
+        const before = (index ?? disk)!.before;
+        const after = (disk ?? index)!.after;
+        const modeChanged = (index ?? disk)!.oldMode !== (disk ?? index)!.newMode;
+        const staged = Boolean(index);
+        let change: ChangeMark | undefined;
+        if (before !== after || modeChanged) {
+            if (after === null) change = 'deleted';
+            else if (before === null) change = staged ? 'added' : 'untracked';
+            else change = 'modified';
+        }
+        if (change || staged) statuses.set(path.slice(prefix.length), {change, staged});
     }
     for (const [path, version] of committed) {
         if (!path.startsWith(prefix)) continue;

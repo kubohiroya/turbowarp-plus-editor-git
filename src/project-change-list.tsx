@@ -12,18 +12,18 @@ import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ProjectBlockLocator} from './block-diff-location.js';
 
 const en = {
-    title: 'Changes by project element', stage: 'Stage', code: (count: number) => `Code · ${count} ${count === 1 ? 'change' : 'changes'}`,
+    title: 'Changes by project element', stage: 'Stage', code: (count: number) => `Code: ${count} ${count === 1 ? 'change' : 'changes'}`,
     costumes: 'Costume', backdrops: 'Backdrop', sounds: 'Sound', data: 'Variables and messages', settings: 'Other settings',
-    project: 'Whole project', other: 'Files outside the project', added: 'Added', removed: 'Removed', updated: 'Changed',
+    project: 'Whole project', other: 'Other files', added: 'Added', removed: 'Removed', updated: 'Changed',
     files: 'Files and Git groups', before: 'Before', after: 'After', absent: 'Not in this version',
     loading: 'Reading the project changes…', unreadable: 'The project data could not be read, so the changes are listed by file.',
     fileList: 'List by file', property: 'Item', format: 'Format', rate: 'Sample rate', samples: 'Samples', file: 'File name',
     noImage: 'No image'
 };
 const ja: typeof en = {
-    title: '作品の要素ごとの変更', stage: 'ステージ', code: count => `コード · ${count} か所`,
+    title: '作品の要素ごとの変更', stage: 'ステージ', code: count => `コード: ${count} か所`,
     costumes: 'コスチューム', backdrops: '背景', sounds: '音', data: '変数・リスト・メッセージ', settings: 'そのほかの設定',
-    project: '作品全体', other: '作品に属さないファイル', added: '追加', removed: '削除', updated: '変更',
+    project: '作品全体', other: 'その他のファイル', added: '追加', removed: '削除', updated: '変更',
     files: 'ファイルと Git の区分', before: '変更前', after: '変更後', absent: 'この版にはありません',
     loading: '作品の変更を読み込み中…', unreadable: '作品データを読み込めないため、ファイル単位で一覧にします。',
     fileList: 'ファイル単位の一覧', property: '項目', format: '形式', rate: 'サンプリング周波数', samples: 'サンプル数', file: 'ファイル名',
@@ -90,11 +90,11 @@ function TargetHeading({target, labels, loadAsset}: {target: ProjectTargetChange
 function elementTitle(element: ProjectElementChange, target: ProjectTargetChanges | null, labels: Labels, locale: string) {
     switch (element.kind) {
     case 'code': return labels.code(element.scripts ?? 0);
-    case 'costumes': return `${target?.isStage ? labels.backdrops : labels.costumes} · ${element.name ?? ''}`;
-    case 'sounds': return `${labels.sounds} · ${element.name ?? ''}`;
+    case 'costumes': return `${target?.isStage ? labels.backdrops : labels.costumes}: ${element.name ?? ''}`;
+    case 'sounds': return `${labels.sounds}: ${element.name ?? ''}`;
     default: {
         const names = (element.properties ?? []).map(key => projectPropertyLabel(key, locale)).join('・');
-        return target ? `${element.kind === 'data' ? labels.data : labels.settings} · ${names}` : names;
+        return target ? `${element.kind === 'data' ? labels.data : labels.settings}: ${names}` : names;
     }
     }
 }
@@ -117,11 +117,13 @@ function ElementRow({element, target, labels, locale, loadAsset, selected, busy,
     </button></li>;
 }
 
-/** The change list arranged by the project's stage, sprites and elements, with files outside the project after them. */
-export function ProjectChangeListView({changes, selected, selectedFile, locale, busy, onSelect, onSelectFile, fileList, fileListOpen, setFileListOpen}: {
+/** The change list arranged by the project's stage, sprites and elements, followed by the remaining files. */
+export function ProjectChangeListView({changes, selected, selectedFile, locale, busy, onSelect, onSelectFile,
+    renderOtherFile, fileList, fileListOpen, setFileListOpen}: {
     changes: ProjectChanges; selected: string | null; selectedFile?: ChangedFile | null; locale: string; busy: boolean;
     onSelect(key: string): void; onSelectFile(file: ChangedFile): void; fileList: React.ReactNode;
     fileListOpen: boolean; setFileListOpen(open: boolean): void;
+    renderOtherFile?(file: ChangedFile): React.ReactNode;
 }) {
     const labels = projectChangeLabels(locale);
     const gitLabels = labelsFor(locale);
@@ -139,16 +141,17 @@ export function ProjectChangeListView({changes, selected, selectedFile, locale, 
         </section>}
         {list.other.length > 0 && <section>
             <h4 className="twgit-element-target"><span>{labels.other}</span></h4>
-            <ul>{list.other.map(file => <li key={file.group + ':' + file.path}>
+            <ul className={renderOtherFile ? 'twgit-file-state-list' : undefined}>{list.other.map(file =>
+                renderOtherFile ? renderOtherFile(file) : <li key={file.group + ':' + file.path}>
                 <button className="twgit-file twgit-file-entry" data-git-other={file.group} disabled={busy}
                     aria-pressed={selectedFile?.path === file.path && selectedFile.group === file.group} onClick={() => onSelectFile(file)}>
                     <FileIdentity path={file.path}/><GitStatusBadge group={file.group} labels={gitLabels}/>
                 </button>
             </li>)}</ul>
         </section>}
-        <details className="twgit-file-list" open={fileListOpen}
+        {fileList && <details className="twgit-file-list" open={fileListOpen}
             onToggle={event => setFileListOpen((event.currentTarget as HTMLDetailsElement).open)}>
-            <summary>{labels.fileList}</summary>{fileList}</details>
+            <summary>{labels.fileList}</summary>{fileList}</details>}
     </section>;
 }
 
@@ -202,13 +205,13 @@ export function ProjectElementView({changes, selection, locale, renderBlock, onS
         ['sampleCount', labels.samples], ['md5ext', labels.file]] as const :
         (element.properties ?? []).map(key => [key, projectPropertyLabel(key, locale)] as const);
     return <section className="twgit-element-view" aria-label={elementTitle(element, target, labels, locale)}>
-        <h3>{target && <span>{target.isStage ? labels.stage : target.name} · </span>}{elementTitle(element, target, labels, locale)}</h3>
+        <h3>{target && <span>{target.isStage ? labels.stage : target.name} / </span>}{elementTitle(element, target, labels, locale)}</h3>
         {element.kind === 'code' && target && renderBlock && <ProjectSourceComparison before={changes.sources.before}
             after={changes.sources.after} renderBlock={renderBlock} locale={locale}
             target={{isStage: target.isStage, name: target.name}} locateBlock={locateBlock}/>}
         {element.kind === 'costumes' && <div className="twgit-element-pictures">
             {(['before', 'after'] as const).map(version => <Picture key={version} md5ext={element.md5ext?.[version]} version={version}
-                loadAsset={changes.loadAsset} labels={labels} title={element[version]?.name === undefined ? labels[version] : `${labels[version]} · ${String(element[version]!.name)}`}/>)}
+                loadAsset={changes.loadAsset} labels={labels} title={element[version]?.name === undefined ? labels[version] : `${labels[version]}: ${String(element[version]!.name)}`}/>)}
         </div>}
         {element.kind !== 'code' && element.kind !== 'costumes' && <table className="twgit-element-values">
             <thead><tr><th>{labels.property}</th><th>{labels.before}</th><th>{labels.after}</th></tr></thead>

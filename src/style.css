@@ -1,6 +1,7 @@
 .twgit-backdrop { position: fixed; inset: 0; z-index: 65000; background: #0006; display: flex; align-items: center; justify-content: center; }
 .twgit-panel { width: 94vw; height: 90vh; display: flex; flex-direction: column; background: Canvas; color: CanvasText; border: 1px solid GrayText; border-radius: 8px; box-shadow: 0 12px 48px #0005; font: 14px/1.5 system-ui, sans-serif; overflow: hidden; }
-.twgit-panel > header { display: flex; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid GrayText; }
+.twgit-panel > header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid GrayText; }
+.twgit-repository-heading { display: flex; flex: 1; align-items: center; flex-wrap: wrap; gap: 8px 20px; min-width: 0; }
 .twgit-panel > header h2 { margin: 0 auto 0 0; font-size: 18px; }
 .twgit-panel .twgit-close, .twgit-close { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
     border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
@@ -13,17 +14,15 @@
 .twgit-panel button[aria-pressed="true"] { color: HighlightText; background: Highlight; }
 .twgit-context { display: flex; gap: 8px 20px; flex-wrap: wrap; padding: 8px 16px; }
 .twgit-context { align-items: center; }
-.twgit-context-item, .twgit-context-icon-label { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
+.twgit-context-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .twgit-context-item > span, .twgit-context-item code { overflow-wrap: anywhere; }
-.twgit-repository-context [data-git-project-path] { gap: 4px; }
-.twgit-repository-context [data-git-project-path] code { font-size: .95em; }
-.twgit-repository-context .twgit-git-details { margin-inline-start: auto; }
-.twgit-panel:has(> .twgit-workflow) {
+.twgit-repository-heading .twgit-context-item { flex-wrap: wrap; gap: 6px; }
+.twgit-panel:has(> .twgit-workflow), .twgit-panel.twgit-release-dialog {
     --twgit-accent: #5746bd;
     --twgit-border: color-mix(in srgb, CanvasText 20%, Canvas);
     --twgit-tint: color-mix(in srgb, var(--twgit-accent) 16%, Canvas);
-    container-type: inline-size;
 }
+.twgit-panel:has(> .twgit-workflow) { container-type: inline-size; }
 .twgit-workflow {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -50,13 +49,12 @@
     transform: translateY(-50%);
     content: '→' / '';
 }
-.twgit-workflow li[data-complete] { background: color-mix(in srgb, #399668 18%, Canvas); }
 .twgit-workflow li[aria-current="step"] {
     border-color: var(--twgit-accent);
     background: var(--twgit-tint);
     font-weight: 700;
 }
-.twgit-panel .twgit-workflow button, .twgit-workflow-state {
+.twgit-panel .twgit-workflow button {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -72,18 +70,6 @@
 .twgit-workflow button[aria-expanded="true"] {
     box-shadow: inset 0 -3px var(--twgit-accent);
 }
-.twgit-step-mark {
-    display: grid;
-    place-items: center;
-    width: 1.15em;
-    height: 1.15em;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-    flex: none;
-    line-height: 1;
-}
-.twgit-workflow li[data-complete] .twgit-step-mark { color: white; background: #24774e; border-color: #24774e; }
-.twgit-workflow small { display: block; font-weight: normal; }
 .twgit-panel-icon { flex: none; }
 .twgit-panel .twgit-panel-action {
     display: inline-flex;
@@ -98,8 +84,6 @@
 .twgit-workflow-view > .twgit-content > .twgit-diff { padding-top: 12px; }
 .twgit-workflow-view > .twgit-content > aside { border-color: var(--twgit-border); }
 .twgit-panel .twgit-section-heading { margin-top: 6px; font-size: 16px; }
-.twgit-project-browser { margin-bottom: 12px; color: color-mix(in srgb, CanvasText 78%, Canvas); }
-.twgit-project-browser[open] { padding-bottom: 8px; border-bottom: 1px solid var(--twgit-border); }
 .twgit-workflow-view .twgit-element-view > h3 { margin-top: 4px; font-size: 18px; }
 .twgit-workflow-view .twgit-element-view .twgit-review-summary {
     color: CanvasText;
@@ -189,15 +173,6 @@
 .twgit-status-badge[data-git-status="unstaged"] { --twgit-status-color: #d38a21; border-style: dashed; }
 .twgit-status-badge[data-git-status="untracked"] { --twgit-status-color: #397dc0; }
 .twgit-status-badge[data-git-status="commit"] { --twgit-status-color: #7663bd; }
-.twgit-github-tools { padding: 12px 16px; display: grid; gap: 10px; justify-items: start; }
-.twgit-github-tools > p { margin: 0; }
-.twgit-github-tools .twgit-connection-body {
-    position: static;
-    margin-top: 8px;
-    width: auto;
-    max-height: none;
-    box-shadow: none;
-}
 .twgit-commit h3, .twgit-commit p { margin: 0; }
 .twgit-workflow-view .twgit-commit { background: color-mix(in srgb, CanvasText 4%, Canvas); padding: 10px; }
 .twgit-panel button.twgit-primary { color: white; background: var(--twgit-accent); border-color: var(--twgit-accent); }
@@ -216,15 +191,29 @@
     .twgit-workflow-view .twgit-diff[data-git-actions] { display: block; overflow: visible; }
     .twgit-diff[data-git-actions] .twgit-diff-scroll { overflow: visible; }
 }
-.twgit-connection, .twgit-git-details { position: relative; }
-.twgit-connection > summary, .twgit-git-details > summary { cursor: pointer; }
-/* Settings and Git details open over the list, so the list and the diff stay where they are. */
-.twgit-connection-body { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; width: min(440px, 80vw); max-height: 60vh;
-    overflow: auto; padding: 10px 12px; background: Canvas; color: CanvasText; border: 1px solid GrayText; border-radius: 6px;
-    box-shadow: 0 8px 24px #0004; }
+.twgit-file-menu-item { display: inline-flex; align-items: center; gap: 8px; }
+.twgit-file-menu-item[aria-disabled="true"] { opacity: .5; cursor: default; }
+.twgit-panel.twgit-connection-dialog {
+    display: none;
+    width: min(460px, calc(100vw - 32px));
+    height: auto;
+    max-height: 85dvh;
+    padding: 0;
+}
+.twgit-panel.twgit-connection-dialog[open] { display: flex; }
+.twgit-connection-dialog::backdrop { background: #0006; }
+.twgit-connection-body { overflow: auto; padding: 12px 16px; }
 .twgit-connection-body > p { margin: 4px 0; overflow-wrap: anywhere; }
 .twgit-connection-body > label { display: block; margin: 4px 0; }
-.twgit-sync { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.twgit-panel.twgit-release-dialog { width: min(620px, calc(100vw - 32px)); height: fit-content; }
+.twgit-release-dialog section + section { border-block-start: 1px solid var(--twgit-border); margin-block-start: 12px; }
+.twgit-release-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px; background: color-mix(in srgb, CanvasText 5%, Canvas); }
+.twgit-release-links { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-block-start: 8px; }
+.twgit-release-pages { display: grid; justify-items: start; gap: 8px; margin-block-start: 12px; }
+.twgit-release-pages input, .twgit-release-pages select { max-width: 100%; }
+.twgit-release-html { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
+.twgit-sync { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 8px 16px; border-block-end: 1px solid var(--twgit-border); }
+.twgit-sync-branch { overflow-wrap: anywhere; }
 .twgit-change-kind { flex: none; font-size: 11px; opacity: .8; }
 .twgit-file-details { font-size: 12px; margin-bottom: 6px; }
 .twgit-file-details > p { margin: 2px 0; }
@@ -234,9 +223,6 @@
 .twgit-panel aside li { overflow-wrap: anywhere; }
 .twgit-panel summary { cursor: pointer; }
 .twgit-panel .twgit-file { width: 100%; border: 0; margin: 1px 0; }
-.twgit-panel .twgit-file-row { display: flex; gap: 6px; align-items: center; }
-.twgit-panel .twgit-file-row .twgit-file { flex: 1; min-width: 0; width: auto; text-align: start; }
-.twgit-panel .twgit-stage { flex: none; max-width: 55%; font-size: 11px; margin: 0; overflow-wrap: anywhere; }
 .twgit-commit { display: grid; gap: 6px; margin: 10px 0; padding: 8px; border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 6px; }
 .twgit-commit label { display: grid; gap: 4px; font-size: 12px; }
 .twgit-commit textarea { font: inherit; resize: vertical; min-height: 3em; }
@@ -245,6 +231,35 @@
 .twgit-panel > footer { font-size: 11px; padding: 8px 16px; border-top: 1px solid GrayText; }
 .twgit-error { margin: 6px 16px; color: #a11919; padding: 8px; background: #fff0f0; }
 @media (max-width: 700px) { .twgit-content { grid-template-columns: minmax(180px, 42%) minmax(0, 1fr); } .twgit-panel > header { flex-wrap: wrap; } }
+.twgit-workflow-view > .twgit-content[data-commit-view] {
+    display: grid;
+    grid-template-areas: "changes diff" "commit diff";
+    grid-template-rows: minmax(0, 1fr) auto;
+}
+.twgit-content[data-commit-view] > .twgit-commit-changes { grid-area: changes; min-width: 0; }
+.twgit-content[data-commit-view] > .twgit-diff { grid-area: diff; }
+.twgit-commit-footer {
+    grid-area: commit;
+    min-width: 0;
+    max-height: 45vh;
+    overflow: auto;
+    padding: 8px 14px 12px;
+    border-top: 1px solid var(--twgit-border);
+    border-inline-end: 1px solid var(--twgit-border);
+}
+.twgit-commit-footer .twgit-commit { margin: 0; }
+.twgit-panel .twgit-commit > button[type="submit"] { text-align: center; }
+.twgit-commit-footer textarea { max-height: 25vh; }
+@container (max-width: 450px) {
+    .twgit-workflow-view > .twgit-content[data-commit-view] {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-areas: "changes" "diff" "commit";
+        grid-template-rows: minmax(0, 1fr) minmax(0, 2fr) auto;
+    }
+    .twgit-workflow-view > .twgit-content[data-commit-view] > .twgit-commit-changes,
+    .twgit-workflow-view > .twgit-content[data-commit-view] > .twgit-diff { overflow: auto; }
+    .twgit-commit-footer { border-inline-end: 0; }
+}
 .twgit-view-switch { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 10px; }
 .twgit-review-unreadable { margin: 6px 0; padding: 8px; background: color-mix(in srgb, #d9822b 16%, Canvas); }
 .twgit-review-comparison .twgit-review-overview dl { margin: 4px 0 8px; }
@@ -265,7 +280,6 @@
 .twgit-element-values td { font-family: ui-monospace, monospace; }
 .twgit-element-files { margin-top: 12px; }
 .twgit-panel .twgit-element span.twgit-element-name { width: auto; font-family: inherit; }
-.twgit-git-details > .twgit-connection-body { left: auto; right: 0; }
 /* In a layout tab the panel fills the tab and leaves the Editor beside it. */
 .twgit-panel.twgit-panel-tab { width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
 .twgit-comparison-body { flex: 1; overflow: auto; padding: 12px 16px; }
@@ -338,6 +352,34 @@
 .twgit-history-view > p { margin: 0 0 8px; }
 .twgit-history-view > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
 
+.twgit-save-files > p, .twgit-save-diff > p { margin: 0; }
+.twgit-save-files > button { margin-top: 10px; }
+.twgit-file-state-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.twgit-file-state-list li { display: flex; align-items: center; gap: 0.4em; padding-block: 0.15em; }
+.twgit-file-state-list .twgit-file-entry, .twgit-file-state-list .twgit-file-identity { min-width: 0; overflow-wrap: anywhere; }
+.twgit-file-state-list input { flex: none; }
+.twgit-pr-create { display: grid; gap: 8px; margin-block: 4px 12px; }
+.twgit-pr-create form, .twgit-pr-create fieldset { display: grid; gap: 6px; min-width: 0; }
+.twgit-pr-create fieldset { margin: 0; border: 1px solid var(--twgit-border); border-radius: 4px; }
+.twgit-pr-create label { display: grid; gap: 2px; }
+.twgit-pr-create label.twgit-pr-commit { display: flex; align-items: baseline; gap: 5px; overflow-wrap: anywhere; }
+.twgit-pr-create input, .twgit-pr-create select, .twgit-pr-create textarea { min-width: 0; font: inherit; }
+.twgit-pr-create > p, .twgit-pr-create form p { margin: 0; }
+.twgit-pr-create > button { justify-self: start; }
+.twgit-merge-actions { margin-block: 12px; border: 1px solid var(--twgit-border); border-radius: 6px; overflow: hidden; }
+.twgit-merge-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+.twgit-merge-summary[data-ready] > strong { color: light-dark(#1f783d, #7fd89d); }
+.twgit-merge-actions > dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-top: 1px solid var(--twgit-border); }
+.twgit-merge-actions > dl > div { padding: 6px 12px; background: color-mix(in srgb, CanvasText 4%, Canvas); }
+.twgit-merge-actions > dl > div + div { border-inline-start: 1px solid var(--twgit-border); }
+.twgit-merge-actions dt { font-weight: 600; }
+.twgit-merge-actions dd { margin: 0; }
+.twgit-panel button.twgit-merge-submit { background: #1f783d; border-color: #1f783d; color: white; font-weight: 650; }
+.twgit-merge-actions p { margin: 0; padding: 8px 12px; }
 .twgit-restore-dialog {
     max-width: min(48rem, 90vw);
     color: CanvasText;
