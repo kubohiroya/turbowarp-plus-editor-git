@@ -78,6 +78,21 @@ const choice = await openProjectComparison(document, {
 });
 ```
 
+## Publishing and repository creation for the Editor
+
+The Editor's commit, publication and repository creation flows live here too.
+
+| Export | Role |
+| --- | --- |
+| `./project-publication` | `createProjectPublication` takes the host's `PublicationBridge` (Desktop or Cloudflare) with the inspect and push steps, and returns a `PreparedPublication`. A running job stays with the host when the dialog closes. `PublicationBridge` includes the same `PullRequestMergePort` as the Git panel, and the panel's `PullRequestPublication.prepare` returns this `PreparedPublication` |
+| `./cloudflare-publication` | The `PublicationBridge` over a Cloudflare connection (`createCloudflarePublicationBridge`). It pins the push session to the job |
+| `./project-commit-dialog` and `./project-publication-dialog` | The dialogs that choose commits and send them as a pull request (`renderProjectCommitDialog`, `renderProjectPublicationDialog`) |
+| `./project-repository-creation` | Creates a GitHub repository and carries it through the first push (`createProjectRepositoryWorkflow`). Progress is kept in an IndexedDB journal (`repositoryCreationJournal`), so a lost answer resumes without creating a second repository. The `GitHubCreationAccount` and `GitHubRepositoryDraft` types are here too |
+
+The dialogs lay out their buttons with `dialogActions` from `@kubohiroya/turbowarp-plus-editor-windows` (a peer dependency), so the host loads the windows `styles.css`.
+
+These moved here from `packages/editor-ui` in turbowarp-plus-editor. The same author wrote them, and they changed from GPL-3.0 to MPL-2.0 in the move. The provenance audit is in the "由来の監査（7b）" section of the [migration plan in turbowarp-plus-packages](https://github.com/kubohiroya/turbowarp-plus-packages/blob/main/docs/editor-migration-plan.ja.md).
+
 ## Release
 
 `.github/workflows/release.yml` publishes to npm. Push a `v<version>` tag that names the

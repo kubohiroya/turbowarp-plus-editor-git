@@ -1,6 +1,6 @@
 {
   "name": "@kubohiroya/turbowarp-plus-editor-git",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "description": "Read-only local Git panel for TurboWarp Plus Editor",
   "type": "module",
   "license": "MPL-2.0",
@@ -43,6 +43,26 @@
     "./github-publication-host": {
       "types": "./dist/github-publication-host.d.ts",
       "default": "./dist/github-publication-host.js"
+    },
+    "./project-publication": {
+      "types": "./dist/project-publication.d.ts",
+      "default": "./dist/project-publication.js"
+    },
+    "./cloudflare-publication": {
+      "types": "./dist/cloudflare-publication.d.ts",
+      "default": "./dist/cloudflare-publication.js"
+    },
+    "./project-commit-dialog": {
+      "types": "./dist/project-commit-dialog.d.ts",
+      "default": "./dist/project-commit-dialog.js"
+    },
+    "./project-publication-dialog": {
+      "types": "./dist/project-publication-dialog.d.ts",
+      "default": "./dist/project-publication-dialog.js"
+    },
+    "./project-repository-creation": {
+      "types": "./dist/project-repository-creation.d.ts",
+      "default": "./dist/project-repository-creation.js"
     }
   },
   "files": [
@@ -61,12 +81,13 @@
   },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.json",
-    "test": "npm run build && node --test test/*.test.js",
+    "test": "npm run build && node --test test/*.test.js test/*.test.ts",
     "prepack": "npm run build",
     "test:browser": "npm run build && node --test test/*.browser.js"
   },
   "peerDependencies": {
     "@kubohiroya/turbowarp-plus-editor-auth": ">=0.3.0 <0.6.0",
+    "@kubohiroya/turbowarp-plus-editor-windows": ">=0.2.0 <0.3.0",
     "react": ">=16.14 <19",
     "react-dom": ">=16.14 <19"
   },
@@ -78,6 +99,7 @@
   "devDependencies": {
     "@kubohiroya/turbowarp-plus-editor-auth": "0.4.0",
     "@kubohiroya/turbowarp-plus-editor-test-runtime": "0.1.0",
+    "@kubohiroya/turbowarp-plus-editor-windows": "0.2.0",
     "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/react": "16.14.70",
@@ -85,6 +107,7 @@
     "buffer": "6.0.3",
     "diff": "9.0.0",
     "isomorphic-git": "1.44.11",
+    "jsdom": "26.1.0",
     "react": "16.14.0",
     "react-diff-view": "3.3.3",
     "react-dom": "16.14.0",
