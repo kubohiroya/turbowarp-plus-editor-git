@@ -1,14 +1,8 @@
-import type {PublicationRepository} from './publish-ref.js';
-import type {MergeCondition, PublicationIntent, PublicationJob, PullRequestObservation} from './pull-request-queue.js';
+import type {PreparedPublication} from './project-publication.js';
+import type {MergeCondition, PullRequestObservation} from './pull-request-queue.js';
 
-export interface PreparedPublication extends PublicationRepository {
-    capabilities: readonly string[];
-    progress(): {job: PublicationJob | null; running: boolean; approvalIntent?: PublicationIntent; error?: unknown};
-    subscribe(listener: () => void): () => void;
-    submit(draft: Pick<PublicationIntent, 'base' | 'title' | 'body' | 'goal'>, current: () => boolean): Promise<boolean>;
-    approvePending?(current: () => boolean): Promise<boolean>;
-    resume(): void;
-}
+// The port the Editor's publication flow implements; the panel reads only part of it.
+export type {PreparedPublication} from './project-publication.js';
 
 export interface PullRequestMergePort {
     pullRequestChecks?(remote: string, number: number, signal?: AbortSignal):

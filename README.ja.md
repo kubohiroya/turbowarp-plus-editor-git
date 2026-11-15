@@ -173,6 +173,21 @@ const choice = await openProjectComparison(document, {
 
 Cloudflare 接続では `createGitHubReviewApi` の `publicationStatus(number, repositoryId)` が Worker から head、base、CI とレビューの状態を取得します。Worker で `checks-read` を有効にし、通常の Git セッションを同じリポジトリ ID にひもづけます。キューで利用する際は、返された head と base を登録済みの情報と照合します。
 
+## Editor の公開とリポジトリの作成
+
+Editor のコミット・公開・リポジトリ作成の流れも、このパッケージにあります。
+
+| export | 内容 |
+| --- | --- |
+| `./project-publication` | `createProjectPublication` が、ホストの `PublicationBridge`（Desktop または Cloudflare）と照合・push を受け取り、`PreparedPublication` を返す。ダイアログを閉じても、進行中のジョブはホストが持ち続ける。`PublicationBridge` は Git パネルと同じ `PullRequestMergePort` を含み、パネルの `PullRequestPublication.prepare` もこの `PreparedPublication` を返す |
+| `./cloudflare-publication` | Cloudflare 接続での `PublicationBridge`（`createCloudflarePublicationBridge`）。push に使うセッションをジョブに固定する |
+| `./project-commit-dialog`・`./project-publication-dialog` | コミットを選ぶダイアログと、PR として送るダイアログ（`renderProjectCommitDialog`・`renderProjectPublicationDialog`） |
+| `./project-repository-creation` | GitHub にリポジトリを作り、初回 push まで進める手順（`createProjectRepositoryWorkflow`）。手順の途中経過を IndexedDB の記録（`repositoryCreationJournal`）に残し、応答が途切れても重複して作らずに再開する。`GitHubCreationAccount`・`GitHubRepositoryDraft` の型もここにある |
+
+ダイアログは `@kubohiroya/turbowarp-plus-editor-windows`（peer dependency）の `dialogActions` で操作ボタンを並べるので、ホストは windows の `styles.css` を読み込む。
+
+これらは turbowarp-plus-editor の `packages/editor-ui` から移した。同じ作者が書いたもので、GPL-3.0 から MPL-2.0 にした。由来の監査は [turbowarp-plus-packages の移行計画](https://github.com/kubohiroya/turbowarp-plus-packages/blob/main/docs/editor-migration-plan.ja.md)の「由来の監査（7b）」にある。
+
 ## 公開
 
 npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを
