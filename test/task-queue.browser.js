@@ -15,6 +15,8 @@ test('a new tab resumes an IndexedDB job for the same directory', async t => {
     git('init', '-q', '-b', 'main');
     git('config', 'user.name', 'Browser fixture');
     git('config', 'user.email', 'queue@example.invalid');
+    // A commit can start git's background maintenance, whose lock file may vanish while the fixture is copied.
+    git('config', 'maintenance.auto', 'false');
     await fs.writeFile(path.join(fixture, 'project.source.json'), '{"targets":[]}\n');
     git('add', '.');
     git('commit', '-qm', 'initial');
