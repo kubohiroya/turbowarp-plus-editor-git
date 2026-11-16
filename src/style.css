@@ -363,6 +363,7 @@
 .twgit-file-state-list .twgit-file-entry, .twgit-file-state-list .twgit-file-identity { min-width: 0; overflow-wrap: anywhere; }
 .twgit-file-state-list input { flex: none; }
 .twgit-scope-note { margin: 0 0 6px; font-size: 12px; opacity: .8; }
+.twgit-scope-flow { display: block; font-weight: 600; }
 .twgit-pr-create { display: grid; gap: 8px; margin-block: 4px 12px; }
 .twgit-pr-create form, .twgit-pr-create fieldset { display: grid; gap: 6px; min-width: 0; }
 .twgit-pr-create fieldset { margin: 0; border: 1px solid var(--twgit-border); border-radius: 4px; }

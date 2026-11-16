@@ -10,8 +10,7 @@ import {remoteUrl} from './smart-http.js';
 const en = {
     base: 'Base branch', commits: 'Commits to include', title: 'PR title',
     description: 'PR description', submit: 'Create PR', select: 'Include {commit} in the PR',
-    scope: 'Commits on your branch {branch} that {base} on GitHub does not have yet.',
-    scopeDetached: 'Commits at HEAD that {base} on GitHub does not have yet.',
+    scope: 'Commits on your branch that the base branch on GitHub does not have yet.',
     loading: 'Reading the branches and commits…', prepare: 'Prepare PR', pending: 'Creating the PR…',
     refresh: 'Refresh branches', edit: 'Edit PR', noCommits: 'There are no eligible commits on this branch for the selected base.',
     unavailable: 'PR creation needs a GitHub connection with write access.',
@@ -25,8 +24,7 @@ const en = {
 const ja: typeof en = {
     base: '反映先のブランチ', commits: 'PRに含めるコミット', title: 'PRのタイトル',
     description: 'PRの説明', submit: 'PRを作成', select: '{commit} をPRに含める',
-    scope: '作業中のブランチ {branch} のコミットのうち、GitHub の {base} にまだ無いものです。',
-    scopeDetached: '作業中の HEAD のコミットのうち、GitHub の {base} にまだ無いものです。',
+    scope: '作業中のブランチのコミットのうち、GitHub の反映先にまだ無いものです。',
     loading: 'ブランチとコミットを読み込み中…', prepare: 'PRの内容を確認', pending: 'PRを作成中…',
     refresh: 'ブランチを再取得', edit: 'PRの内容を編集', noCommits: '選んだ反映先に追加できるコミットはありません。',
     unavailable: 'PRを作成するには、書き込みを許可してGitHubに接続してください。',
@@ -154,8 +152,8 @@ export function PullRequestCreation({repository, head, branch: working, locale, 
                 </label>
                 <fieldset disabled={busy || !!prepared}>
                     <legend>{labels.commits}</legend>
-                    <p className="twgit-scope-note">{(working ? labels.scope.replace('{branch}', working) : labels.scopeDetached)
-                        .replace('{base}', base)}</p>
+                    <p className="twgit-scope-note"><span className="twgit-scope-flow"><code>{working ?? 'HEAD'}</code>
+                        {' → '}<code>{base}</code></span>{labels.scope}</p>
                     {!commits && !error && <p role="status">{labels.loading}</p>}
                     {commits?.length === 0 && <p>{labels.noCommits}</p>}
                     {commits?.map(commit => <label key={commit.oid} className="twgit-pr-commit" title={commit.oid}>
