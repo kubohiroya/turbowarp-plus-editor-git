@@ -4,6 +4,14 @@ import type {GraphRow} from './history-graph.js';
 import {labelsFor} from './messages.js';
 import type {HistoryCommit} from './repository.js';
 
+/** Says what the graph covers: every branch, not only the one being worked on, and which one that is. */
+export function HistoryScope({branch, head, locale = 'en'}: {branch: string | undefined; head: string | null; locale?: string}) {
+    const labels = labelsFor(locale);
+    const current = branch ? labels.historyCurrent.replace('{branch}', branch) :
+        head ? labels.historyDetached.replace('{oid}', head.slice(0, 8)) : '';
+    return <p className="twgit-scope-note">{labels.historyScope}{current && ' ' + current}</p>;
+}
+
 /** How a write action ended: `error` is the message to show when it did not run to the end. */
 export type HistoryActionResult = {done: true} | {done: false; error?: string};
 export interface HistoryGraphProps {

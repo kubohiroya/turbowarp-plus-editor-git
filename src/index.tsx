@@ -13,7 +13,7 @@ import {BranchButton, useBranchSnackbar} from './branch-button.js';
 import {changeMarks, fileStatuses} from './change-marks.js';
 import type {ChangeMark, FileStatus, MergedFileVersions} from './change-marks.js';
 import type {BranchButtonState} from './branch-button.js';
-import {HistoryGraph} from './history-graph-view.js';
+import {HistoryGraph, HistoryScope} from './history-graph-view.js';
 import type {HistoryActionResult} from './history-graph-view.js';
 import {labelsFor} from './messages.js';
 import {GitWorkflow, PanelIcon, RepositoryIdentity, panelViews} from './panel-navigation.js';
@@ -51,7 +51,7 @@ export type {ProjectComparisonAction, ProjectComparisonOptions, ProjectCompariso
 export type {BranchRefs, HeadFile, PullRequestBase, PullRequestFetch, PullRequestFiles, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor, HistoryPage, HistoryRef} from './repository.js';
 export {BranchButton} from './branch-button.js';
 export type {BranchButtonActions, BranchButtonProps, BranchButtonState} from './branch-button.js';
-export {HistoryGraph, laneColors} from './history-graph-view.js';
+export {HistoryGraph, HistoryScope, laneColors} from './history-graph-view.js';
 export type {HistoryActionResult, HistoryGraphProps} from './history-graph-view.js';
 export {layoutHistory} from './history-graph.js';
 export type {GraphCommit, GraphLayout, GraphRow, GraphSegment} from './history-graph.js';
@@ -1002,11 +1002,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     </> : <p>{labels.noFilesToCommit}</p>)}
                 </> : <>
                     {state.repository && snapshot && <PullRequestCreation repository={state.repository} head={snapshot.head}
-                        locale={locale} publication={publication} getSession={host.connectionSettings?.getSession}
+                        branch={snapshot.branch} locale={locale} publication={publication} getSession={host.connectionSettings?.getSession}
                         connected={pullRequestConnection?.connected() === true}
                         isCurrent={() => current.current.repository === state.repository &&
                             current.current.snapshot?.head === snapshot.head && current.current.snapshot?.branch === snapshot.branch}/>}
                     <h3 className="twgit-section-heading">{labels.history}</h3>
+                    {state.snapshot && <HistoryScope branch={state.snapshot.branch} head={state.snapshot.head} locale={locale}/>}
                     {state.snapshot && <HistoryGraph commits={history.commits} selected={state.commit?.oid ?? null} locale={locale} busy={state.busy}
                         onSelect={oid => void selectCommit(oid)} hasMore={!!history.cursor} loadingMore={history.loading}
                         onShowMore={showMoreHistory} localBranches={state.snapshot.branches} onOpenVersion={controller.openVersion} onRestoreVersion={controller.restoreVersion}
@@ -1282,6 +1283,7 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
     const matches = term ? history.commits.filter(commit => [commit.message, commit.author, commit.oid, ...commit.refs.map(ref => ref.name)]
         .some(value => value.toLowerCase().includes(term))) : history.commits;
     return <div className="twgit-history-view" ref={root}>
+        {!term && <HistoryScope branch={state.branch} head={state.head} locale={locale}/>}
         {term && !history.loading && !matches.length && <p role="status">{history.cursor ? labels.historySearchMore : labels.historyNoMatches}</p>}
         <HistoryGraph commits={matches} flat={Boolean(term)} selected={selected} locale={locale} busy={state.busy} onSelect={oid => {
             setSelected(oid);
