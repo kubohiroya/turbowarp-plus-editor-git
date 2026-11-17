@@ -93,6 +93,12 @@ export interface GitHost {
      * repository's Git config has no user.name or user.email; the panel never writes the config.
      */
     localWrite?: {author?(): GitAuthor | undefined};
+    /**
+     * Chooses the repository folder in place of the folder picker, such as a folder kept in the browser's origin
+     * private file system where the browser cannot pick folders. `null` means the choice was cancelled. With it the
+     * panel is offered without the folder picker.
+     */
+    chooseRoot?(): Promise<FileSystemDirectoryHandle | null>;
 }
 export interface GitPanelRequest {
     reference: {providerId: string; documentId: string};
@@ -474,11 +480,15 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const chooseRoot = async () => {
         const view = document.defaultView as PickerWindow;
         return run(async () => {
-            let root: FileSystemDirectoryHandle;
-            try {root = await view.showDirectoryPicker!({id: 'turbowarp-plus-git-root', mode: 'readwrite'});} catch (error) {
+            let root: FileSystemDirectoryHandle | null;
+            try {
+                root = host.chooseRoot ? await host.chooseRoot() :
+                    await view.showDirectoryPicker!({id: 'turbowarp-plus-git-root', mode: 'readwrite'});
+            } catch (error) {
                 if ((error as DOMException).name === 'AbortError') return {};
                 throw error;
             }
+            if (!root) return {};
             return loadRepository(root, await openProjectPath(root));
         });
     };
@@ -1121,7 +1131,7 @@ const refsOf = ({branch, head, branches, remoteBranches}: Snapshot): BranchRefs 
 const announce = () => {for (const listener of [...registrations]) listener();};
 
 export function mountGitPanel({vm, document, host}: {vm: object; document: Document; host: GitHost}) {
-    if (!(document.defaultView as PickerWindow)?.showDirectoryPicker) return null;
+    if (!(document.defaultView as PickerWindow)?.showDirectoryPicker && !host.chooseRoot) return null;
     const root = document.createElement('div');
     document.body.append(root);
     const controller = createController();
