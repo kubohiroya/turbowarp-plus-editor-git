@@ -107,6 +107,11 @@ export interface GitHost {
     openFolder?(locale: string): void;
     /** Runs the host's own command that opens a folder kept in the browser, such as one in the origin private file system. */
     openBrowserFolder?(locale: string): void;
+    /**
+     * Whether `openFolder` can pick a folder on the device. `false` in browsers without the folder picker (Safari,
+     * Firefox): Open Folder… is then shown as unavailable, with the reason, beside the browser's folders.
+     */
+    deviceFolders?: boolean;
 }
 export interface GitPanelRequest {
     reference: {providerId: string; documentId: string};
@@ -138,6 +143,8 @@ interface Controller {
     /** The host's folder commands, offered in place of `choose` when the host has them. */
     openFolder?: (locale: string) => void;
     openBrowserFolder?: (locale: string) => void;
+    /** Whether `openFolder` can pick a folder on the device. */
+    deviceFolders?: boolean;
     /** Unbinds the repository, as when the host opens a folder that is not a Git repository. */
     clearRepository(): void;
     /** Whether the host has a project folder open, published with `branch`. */
@@ -1177,6 +1184,7 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     if (host.openFolder) {
         controller.openFolder = locale => host.openFolder!(locale);
         if (host.openBrowserFolder) controller.openBrowserFolder = locale => host.openBrowserFolder!(locale);
+        controller.deviceFolders = host.deviceFolders !== false;
     }
     controllers.set(vm, controller);
     render(<GitPanel vm={vm} document={document} host={host} controller={controller}/>, root);
@@ -1327,7 +1335,7 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
     }, () => root.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus({preventScroll: true}));
     if (!controller || !state) return null;
     const modes = controller.connectionModes;
-    const {openFolder, openBrowserFolder} = controller;
+    const {openFolder, openBrowserFolder, deviceFolders} = controller;
     // Before a repository is bound, this panel is where Git is set up: the GitHub connection mode, then the project folder.
     // A host with folder commands binds the opened folder's repository itself; other hosts let the panel choose one.
     if (!repository) return <div className="twgit-history-view twgit-setup" ref={root}>
@@ -1341,9 +1349,11 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
             {openFolder ? <li>
                 <p>{labels.setupFolder}</p>
                 <div className="twgit-setup-actions">
-                    <button type="button" onClick={() => openFolder(locale)}>{labels.openFolder}</button>
+                    {/* Safari and Firefox cannot pick folders on the device; the browser's folders stay available. */}
+                    <button type="button" disabled={deviceFolders === false} onClick={() => openFolder(locale)}>{labels.openFolder}</button>
                     {openBrowserFolder && <button type="button" onClick={() => openBrowserFolder(locale)}>{labels.openBrowserFolder}</button>}
                 </div>
+                {deviceFolders === false && <p className="twgit-setup-note">{labels.deviceFoldersUnavailable}</p>}
             </li> : <li>
                 <p>{labels.setupRepository}</p>
                 <button type="button" onClick={() => void controller.choose(locale)}>{labels.choose}</button>
