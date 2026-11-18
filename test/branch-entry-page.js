@@ -2,7 +2,7 @@
 import {Buffer} from 'buffer';
 import React from 'react';
 import {render} from 'react-dom';
-import {mountGitPanel, renderBranchButton, renderHistoryView} from '../dist/index.js';
+import {GitFileMenu, mountGitPanel, renderBranchButton, renderHistoryView} from '../dist/index.js';
 import style from '../dist/style.css';
 
 // isomorphic-git expects the Buffer the Editor provides.
@@ -71,4 +71,10 @@ globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, dev
     render(renderBranchButton(React.createElement, {vm, locale}), bar);
     render(renderHistoryView(React.createElement, {vm, locale}), side);
     if (!panelFirst) globalThis.panel = mount();
+    // The File menu's Git items, with stand-ins for the GUI's menu components.
+    const fileMenu = Object.assign(document.createElement('div'), {id: 'file-menu'});
+    document.body.append(fileMenu);
+    const MenuSection = ({children}) => React.createElement('section', {'data-menu-section': ''}, children);
+    const MenuItem = ({children}) => React.createElement('div', {'data-menu-item': ''}, children);
+    render(React.createElement(GitFileMenu, {vm, locale, MenuItem, MenuSection, onRequestClose() {}}), fileMenu);
 };

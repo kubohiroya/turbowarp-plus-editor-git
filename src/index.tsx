@@ -1264,8 +1264,13 @@ export function renderBranchButton(createElement: (component: any, props: any, .
 }
 
 /** Adds Git commands next to the host's project-folder command. A repository is chosen in the Git panel at the side. */
-export function GitFileMenu({vm, locale = 'en', MenuItem, onRequestClose, exportProject}: {
-    vm: object; locale?: string; MenuItem: React.ElementType; onRequestClose(): void; exportProject?: () => void;
+/**
+ * The File menu's Releases… item. With the GUI's `MenuSection`, it stands in a section of its own, so a divider sets it
+ * apart from the folder commands above it.
+ */
+export function GitFileMenu({vm, locale = 'en', MenuItem, MenuSection, onRequestClose, exportProject}: {
+    vm: object; locale?: string; MenuItem: React.ElementType; MenuSection?: React.ElementType; onRequestClose(): void;
+    exportProject?: () => void;
 }) {
     const {controller} = useController(vm);
     const repository = controller?.repository;
@@ -1295,11 +1300,10 @@ export function GitFileMenu({vm, locale = 'en', MenuItem, onRequestClose, export
                 }}><PanelIcon name={icon}/>{label}</span>
         </MenuItem>;
     };
-    return <>
-        {item('git-releases', japanese ? 'リリース…' : 'Releases…', 'tag',
-            !repository || release?.repository === repository ?
-                () => controller.openRelease(locale, releaseUrl || null, exportProject) : undefined)}
-    </>;
+    const releases = item('git-releases', japanese ? 'リリース…' : 'Releases…', 'tag',
+        !repository || release?.repository === repository ?
+            () => controller.openRelease(locale, releaseUrl || null, exportProject) : undefined);
+    return MenuSection ? <MenuSection>{releases}</MenuSection> : releases;
 }
 
 type History = {commits: HistoryCommit[]; cursor: HistoryCursor | null; loading: boolean; failed: boolean};
