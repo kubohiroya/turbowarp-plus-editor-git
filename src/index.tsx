@@ -19,7 +19,8 @@ import {labelsFor} from './messages.js';
 import {GitWorkflow, PanelIcon, RepositoryIdentity, panelViews} from './panel-navigation.js';
 import type {PanelView} from './panel-navigation.js';
 import {GitPanelError, pathParts} from './filesystem.js';
-import {ConnectionSettings, GitHubSync} from './connection-settings.js';
+import {ConnectionSettings, GitConnectionPreferences, GitHubSync} from './connection-settings.js';
+import type {GitConnectionMode as ConnectionMode} from '@kubohiroya/turbowarp-plus-editor-auth';
 export {GitConnectionPreferences} from './connection-settings.js';
 import type {GitConnectionSettings} from './connection-settings.js';
 import type {RemoteOperation} from './remote-operations.js';
@@ -99,6 +100,13 @@ export interface GitHost {
      * panel is offered without the folder picker.
      */
     chooseRoot?(): Promise<FileSystemDirectoryHandle | null>;
+    /**
+     * Runs the host's own Open Folder… command. With it, the panel no longer chooses a repository itself: the host binds
+     * the panel to the opened folder's repository with `selectRepository`, or unbinds it with `clearRepository`.
+     */
+    openFolder?(locale: string): void;
+    /** Runs the host's own command that opens a folder kept in the browser, such as one in the origin private file system. */
+    openBrowserFolder?(locale: string): void;
 }
 export interface GitPanelRequest {
     reference: {providerId: string; documentId: string};
@@ -125,8 +133,19 @@ interface Controller {
     open(locale: string, inactive?: boolean): void;
     openCommit(locale: string, repository: Repository, oid: string): void;
     refresh(automatic?: boolean, whileHidden?: boolean): Promise<void>;
-    /** Asks for a repository, then opens the panel on it. */
+    /** Asks for a repository, then opens the panel on it. Used only when the host has no folder commands. */
     choose(locale: string): Promise<void>;
+    /** The host's folder commands, offered in place of `choose` when the host has them. */
+    openFolder?: (locale: string) => void;
+    openBrowserFolder?: (locale: string) => void;
+    /** Unbinds the repository, as when the host opens a folder that is not a Git repository. */
+    clearRepository(): void;
+    /** Whether the host has a project folder open, published with `branch`. */
+    folder: boolean;
+    /** Opens the GitHub connection of the chosen repository, as the panel's Connect to GitHub does. */
+    connect(locale: string): void;
+    /** The GitHub connection modes the host offers; empty without a GitHub connection. */
+    connectionModes: readonly ConnectionMode[];
     openRelease(locale: string, github: string | null, exportProject?: () => void): void;
     selectRepository(root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle): Promise<boolean>;
     openVersion?: (oid: string) => Promise<HistoryActionResult>;
@@ -141,7 +160,7 @@ interface Controller {
     /** The chosen repository and its last snapshot, published with `branch`. */
     repository: Repository | null;
     snapshot: Snapshot | null;
-    publish(state: BranchButtonState, repository: Repository | null, snapshot: Snapshot | null): void;
+    publish(state: BranchButtonState, repository: Repository | null, snapshot: Snapshot | null, folder: boolean): void;
     /** Follows `branch`. While anything follows it, the closed panel keeps watching the branches. */
     follow(listener: () => void): () => void;
     /** How many follow `branch`. */
@@ -152,15 +171,17 @@ interface Controller {
 function createController(): Controller {
     const listeners = new Set<() => void>();
     const controller: Controller = {
-        open() {}, openCommit() {}, openRelease() {}, async refresh() {}, async choose() {}, async selectRepository() {return false;},
+        open() {}, openCommit() {}, openRelease() {}, async refresh() {}, async choose() {}, connect() {}, connectionModes: [],
+        async selectRepository() {return false;}, clearRepository() {}, folder: false,
         async changeBranch() {return {done: false};},
         async changeExplorerEntry() {return {done: false};}, reload() {},
         branch: {repository: false, branch: undefined, head: null, branches: [], remoteBranches: [], writable: false, busy: false,
             project: false},
         repository: null,
         snapshot: null,
-        publish(state, repository, snapshot) {
+        publish(state, repository, snapshot, folder) {
             controller.branch = state;
+            controller.folder = folder;
             controller.repository = repository;
             controller.snapshot = snapshot;
             for (const listener of [...listeners]) listener();
@@ -847,11 +868,28 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         // The panel shows the chosen repository, or why it could not be read; a cancelled choice opens nothing.
         if (!result.done && result.error || current.current.repository !== before) controller.open(language);
     };
+    controller.connect = language => {
+        if (connectionBusy || !current.current.repository || !host.connectionSettings?.modes.length) return;
+        setLocale(language);
+        setConnectionOpen(true);
+    };
+    controller.connectionModes = host.connectionSettings?.modes ?? [];
+    controller.clearRepository = () => {
+        // Whatever is still running for the previous repository is dropped, as when another repository is loaded.
+        epoch.current++;
+        remoteRequest.current?.abort();
+        setConnectionOpen(false);
+        setElements({});
+        setState(previous => ({...initial, busy: running.current && previous.busy}));
+        if (current.current.repository) void host.connectionSettings?.disconnect().catch(() => {});
+    };
+    const folderOpen = !!host.projectDirectory?.();
     const branchState: BranchButtonState = {repository: !!state.repository, branch: refs?.branch, head: refs?.head ?? null,
         branches: refs?.branches ?? [], remoteBranches: refs?.remoteBranches ?? [], writable: !!host.localWrite && !!refs, busy: state.busy,
         project: hasProject};
     const published = JSON.stringify(branchState);
-    useEffect(() => controller.publish(branchState, state.repository, state.snapshot), [published, state.repository, state.snapshot]);
+    useEffect(() => controller.publish(branchState, state.repository, state.snapshot, folderOpen),
+        [published, state.repository, state.snapshot, folderOpen]);
     const connectionDialog = connectionOpen && host.connectionSettings && <ConnectionSettings
         view={document.defaultView!} settings={host.connectionSettings}
         locale={locale} readOrigin={readOrigin} busy={connectionBusy} setBusy={setConnectionBusy}
@@ -961,8 +999,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => void openProject(state.defaultProject!)}><PanelIcon name="choose"/>{labels.openDefault}</button>}
                     {state.repository && !!host.connectionSettings?.modes.length &&
                         <button type="button" className="twgit-panel-action" disabled={state.busy || connectionBusy}
-                            onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>
-                            {locale.startsWith('ja') ? 'GitHub に接続…' : 'Connect to GitHub…'}</button>}
+                            onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                 </div>
                 {!slot && <CloseButton label={labels.close} onClick={closePanel}/>}
             </header>
@@ -979,7 +1016,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             {panelViews.map(section => <div key={section} className="twgit-workflow-view" role="region"
                 id={`${panelId}-view-${section}`} aria-labelledby={`${panelId}-step-${section}`}
                 hidden={activeView !== section}>
-                {activeView === section && !state.repository && <p className="twgit-status">{labels.empty}</p>}
+                {activeView === section && !state.repository &&
+                    <p className="twgit-status">{host.openFolder ? labels.setupFolder : labels.empty}</p>}
                 {(section === 'history' || section === 'github') && activeView === section &&
                     (host.connectionSettings ? <GitHubSync settings={host.connectionSettings} locale={locale} branch={snapshot?.branch}
                         busy={state.busy || connectionBusy || !readOrigin} runOperation={remoteOperation}
@@ -1131,16 +1169,22 @@ const refsOf = ({branch, head, branches, remoteBranches}: Snapshot): BranchRefs 
 const announce = () => {for (const listener of [...registrations]) listener();};
 
 export function mountGitPanel({vm, document, host}: {vm: object; document: Document; host: GitHost}) {
-    if (!(document.defaultView as PickerWindow)?.showDirectoryPicker && !host.chooseRoot) return null;
+    // A host with its own folder commands binds the repository itself, so it needs neither the folder picker nor chooseRoot.
+    if (!(document.defaultView as PickerWindow)?.showDirectoryPicker && !host.chooseRoot && !host.openFolder) return null;
     const root = document.createElement('div');
     document.body.append(root);
     const controller = createController();
+    if (host.openFolder) {
+        controller.openFolder = locale => host.openFolder!(locale);
+        if (host.openBrowserFolder) controller.openBrowserFolder = locale => host.openBrowserFolder!(locale);
+    }
     controllers.set(vm, controller);
     render(<GitPanel vm={vm} document={document} host={host} controller={controller}/>, root);
     announce();
     return {refresh: () => controller.refresh(), open: (locale: string, inactive?: boolean) => controller.open(locale, inactive),
         selectRepository: (root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle) =>
-            controller.selectRepository(root, project), getCommitRepository() {
+            controller.selectRepository(root, project),
+        clearRepository: () => controller.clearRepository(), getCommitRepository() {
         const repository = controller.repository;
         if (!host.localWrite || !repository) return null;
         return {
@@ -1170,18 +1214,20 @@ function useController(vm: object) {
     const [controller, setController] = useState(() => controllers.get(vm));
     useEffect(() => findController(vm, setController), [vm]);
     const [state, setState] = useState(controller?.branch);
+    const [folder, setFolder] = useState(controller?.folder ?? false);
     useEffect(() => {
         if (!controller) return;
-        const update = () => setState(controller.branch);
+        const update = () => {setState(controller.branch); setFolder(controller.folder);};
         update();
         return controller.follow(update);
     }, [controller]);
-    return {controller, state};
+    return {controller, state, folder};
 }
 
 function BranchEntry({vm, locale}: {vm: object; locale: string}) {
     const {controller, state} = useController(vm);
-    if (!controller || !state) return null;
+    // The Git panel at the side is the one place to set Git up; the menu bar shows Git once a repository is chosen.
+    if (!controller || !state?.repository) return null;
     return <BranchButton state={state} locale={locale} open={() => controller.open(locale)} choose={() => void controller.choose(locale)}
         reload={() => controller.reload()}
         switchBranch={name => controller.changeBranch({kind: 'switchBranch', name})}
@@ -1199,7 +1245,7 @@ export function renderBranchButton(createElement: (component: any, props: any, .
     return createElement(BranchEntry, {vm, locale});
 }
 
-/** Adds Git commands next to the host's project-folder command. */
+/** Adds Git commands next to the host's project-folder command. A repository is chosen in the Git panel at the side. */
 export function GitFileMenu({vm, locale = 'en', MenuItem, onRequestClose, exportProject}: {
     vm: object; locale?: string; MenuItem: React.ElementType; onRequestClose(): void; exportProject?: () => void;
 }) {
@@ -1232,7 +1278,6 @@ export function GitFileMenu({vm, locale = 'en', MenuItem, onRequestClose, export
         </MenuItem>;
     };
     return <>
-        {item('git-choose-repository', labelsFor(locale).choose, 'choose', () => void controller.choose(locale))}
         {item('git-releases', japanese ? 'リリース…' : 'Releases…', 'tag',
             !repository || release?.repository === repository ?
                 () => controller.openRelease(locale, releaseUrl || null, exportProject) : undefined)}
@@ -1243,11 +1288,12 @@ type History = {commits: HistoryCommit[]; cursor: HistoryCursor | null; loading:
 
 /** The history of the panel's repository, read again whenever its branches move. */
 function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: string}) {
-    const {controller, state} = useController(vm);
+    const {controller, state, folder} = useController(vm);
     const labels = labelsFor(locale);
     const repository = state && controller?.repository || null;
     const [history, setHistory] = useState<History>({commits: [], cursor: null, loading: false, failed: false});
     const [selected, setSelected] = useState<string | null>(null);
+    const [preferences, setPreferences] = useState(false);
     const ticket = useRef(0);
     const root = useRef<HTMLDivElement>(null);
     const refs = state ? [state.head, ...state.branches, '', ...state.remoteBranches].join('\n') : '';
@@ -1280,9 +1326,32 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
         open: () => controller?.open(locale), reload: () => controller?.reload()
     }, () => root.current?.querySelector<HTMLElement>('[tabindex="0"]')?.focus({preventScroll: true}));
     if (!controller || !state) return null;
-    if (!repository) return <div className="twgit-history-view" ref={root}>
-        <p>{labels.historyViewEmpty}</p>
-        <button type="button" onClick={() => void controller.choose(locale)}>{labels.choose}</button>
+    const modes = controller.connectionModes;
+    const {openFolder, openBrowserFolder} = controller;
+    // Before a repository is bound, this panel is where Git is set up: the GitHub connection mode, then the project folder.
+    // A host with folder commands binds the opened folder's repository itself; other hosts let the panel choose one.
+    if (!repository) return <div className="twgit-history-view twgit-setup" ref={root}>
+        <h3>{labels.setupTitle}</h3>
+        {openFolder && folder && <p role="status">{labels.setupNotRepository}</p>}
+        <ol>
+            {modes.length > 0 && <li>
+                <p>{labels.setupConnection}</p>
+                <button type="button" onClick={() => setPreferences(true)}>{labels.connectionMethod}</button>
+            </li>}
+            {openFolder ? <li>
+                <p>{labels.setupFolder}</p>
+                <div className="twgit-setup-actions">
+                    <button type="button" onClick={() => openFolder(locale)}>{labels.openFolder}</button>
+                    {openBrowserFolder && <button type="button" onClick={() => openBrowserFolder(locale)}>{labels.openBrowserFolder}</button>}
+                </div>
+            </li> : <li>
+                <p>{labels.setupRepository}</p>
+                <button type="button" onClick={() => void controller.choose(locale)}>{labels.choose}</button>
+            </li>}
+        </ol>
+        <p>{openFolder ? labels.historyViewEmptyFolder : labels.historyViewEmpty}</p>
+        {preferences && <GitConnectionPreferences view={window} modes={modes} locale={locale}
+            onClose={() => setPreferences(false)}/>}
     </div>;
     const change = async (operation: BranchOperation) => {
         const result = await controller.changeBranch(operation);
@@ -1293,6 +1362,9 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
     const matches = term ? history.commits.filter(commit => [commit.message, commit.author, commit.oid, ...commit.refs.map(ref => ref.name)]
         .some(value => value.toLowerCase().includes(term))) : history.commits;
     return <div className="twgit-history-view" ref={root}>
+        {modes.length > 0 && <div className="twgit-history-actions">
+            <button type="button" disabled={state.busy} onClick={() => controller.connect(locale)}>{labels.connectGitHub}</button>
+        </div>}
         {!term && <HistoryScope branch={state.branch} head={state.head} locale={locale}/>}
         {term && !history.loading && !matches.length && <p role="status">{history.cursor ? labels.historySearchMore : labels.historyNoMatches}</p>}
         <HistoryGraph commits={matches} flat={Boolean(term)} selected={selected} locale={locale} busy={state.busy} onSelect={oid => {
