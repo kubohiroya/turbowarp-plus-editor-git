@@ -79,7 +79,9 @@ export const messages = {
         switchedShort: 'Switched branches.', historyViewEmpty: 'Choose a Git repository to show its history here.',
         setupTitle: 'Set up Git', setupConnection: 'Choose how to connect to GitHub. You can change it later.',
         connectionMethod: 'Connection Mode…', setupRepository: 'Choose the folder of a Git repository.',
-        connectGitHub: 'Connect to GitHub…',
+        connectGitHub: 'Connect to GitHub…', openFolder: 'Open Folder…', openBrowserFolder: 'Open Folder Saved in This Browser…',
+        setupFolder: 'Open the folder of a project kept in Git.', setupNotRepository: 'The open folder is not a Git repository.',
+        historyViewEmptyFolder: 'Open the folder of a Git repository to show its history here.',
         historyScope: 'Every local branch and every origin/* branch. origin/* is as of the last fetch.',
         historyCurrent: 'You are working on {branch}.', historyDetached: 'You are not on a branch (HEAD {oid}).'
     },
@@ -163,7 +165,9 @@ export const messages = {
         switchedShort: 'ブランチを切り替えました。', historyViewEmpty: 'Git リポジトリを選ぶと、ここに履歴を表示します。',
         setupTitle: 'Git の設定', setupConnection: 'GitHub への接続方式を選びます。あとから変えられます。',
         connectionMethod: '接続方式…', setupRepository: 'Git リポジトリのフォルダを選びます。',
-        connectGitHub: 'GitHub に接続…',
+        connectGitHub: 'GitHub に接続…', openFolder: 'フォルダを開く…', openBrowserFolder: 'ブラウザーに保存したフォルダを開く…',
+        setupFolder: 'Git で管理している作品のフォルダを開きます。', setupNotRepository: '開いているフォルダは Git リポジトリではありません。',
+        historyViewEmptyFolder: 'Git リポジトリのフォルダを開くと、ここに履歴を表示します。',
         historyScope: 'ローカルと origin/* のすべてのブランチを表示しています。origin/* は最後に取得した時点のものです。',
         historyCurrent: '作業中のブランチは {branch} です。', historyDetached: 'ブランチに入っていません（HEAD {oid}）。'
     }

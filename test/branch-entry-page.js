@@ -18,7 +18,7 @@ for (const type of ['dragenter', 'dragover', 'drop']) window.addEventListener(ty
 }, {capture: true});
 window.showDirectoryPicker = async () => directory;
 
-globalThis.mountEntry = ({locale, writable, panelFirst, connection}) => {
+globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders}) => {
     document.head.append(Object.assign(document.createElement('style'), {textContent: style}));
     document.body.style.cssText = 'margin: 0; background: Canvas; font: 12px/1.5 system-ui, sans-serif';
     const bar = Object.assign(document.createElement('div'), {id: 'menu-bar'});
@@ -28,7 +28,7 @@ globalThis.mountEntry = ({locale, writable, panelFirst, connection}) => {
     side.style.cssText = 'width: 280px';
     bar.after(side);
     const vm = {};
-    globalThis.host = {dirty: false};
+    globalThis.host = {dirty: false, opened: null, browserFolder: 0};
     let notify;
     const mount = () => mountGitPanel({vm, document, host: {
         openProject: async () => 'cancelled', isProjectDirty: () => host.dirty, isProjectRunning: () => false,
@@ -37,6 +37,16 @@ globalThis.mountEntry = ({locale, writable, panelFirst, connection}) => {
             return () => {notify = undefined;};
         },
         ...writable ? {localWrite: {}} : {},
+        // A host with its own folder commands: opening the dropped directory binds the panel to its repository.
+        ...folders ? {
+            projectDirectory: () => host.opened,
+            openFolder() {
+                host.opened = directory;
+                notify?.('folder');
+                void globalThis.panel.selectRepository(directory, directory);
+            },
+            openBrowserFolder() {host.browserFolder++;}
+        } : {},
         // A GitHub connection that never connects, enough to show where Git is set up.
         ...connection ? {connectionSettings: {modes: ['cloudflare'], getView: () => ({mode: 'cloudflare', state: {status: 'disconnected'}}),
             async select() {}, async connect() {}, async refresh() {}, async disconnect() {}}} : {}}});

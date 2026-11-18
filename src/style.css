@@ -355,7 +355,8 @@
 .twgit-setup ol { margin: 0 0 12px; padding-left: 20px; }
 .twgit-setup li { margin: 0 0 10px; }
 .twgit-setup li > p { margin: 0 0 4px; }
-.twgit-setup li > button, .twgit-history-actions > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+.twgit-setup li > button, .twgit-setup-actions > button, .twgit-history-actions > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+.twgit-setup-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .twgit-history-actions { display: flex; gap: 6px; margin: 0 0 8px; }
 .twgit-history-actions > button:disabled { opacity: 0.5; cursor: default; }
 
