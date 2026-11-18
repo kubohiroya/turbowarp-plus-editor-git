@@ -18,7 +18,7 @@ for (const type of ['dragenter', 'dragover', 'drop']) window.addEventListener(ty
 }, {capture: true});
 window.showDirectoryPicker = async () => directory;
 
-globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders}) => {
+globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, deviceFolders}) => {
     document.head.append(Object.assign(document.createElement('style'), {textContent: style}));
     document.body.style.cssText = 'margin: 0; background: Canvas; font: 12px/1.5 system-ui, sans-serif';
     const bar = Object.assign(document.createElement('div'), {id: 'menu-bar'});
@@ -45,7 +45,8 @@ globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders}) =>
                 notify?.('folder');
                 void globalThis.panel.selectRepository(directory, directory);
             },
-            openBrowserFolder() {host.browserFolder++;}
+            openBrowserFolder() {host.browserFolder++;},
+            ...deviceFolders === false ? {deviceFolders: false} : {}
         } : {},
         // A GitHub connection that never connects, enough to show where Git is set up.
         ...connection ? {connectionSettings: {modes: ['cloudflare'], getView: () => ({mode: 'cloudflare', state: {status: 'disconnected'}}),

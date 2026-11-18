@@ -477,3 +477,23 @@ test('a host with folder commands binds the opened folder\'s repository, and cle
     assert.equal(await side.getByRole('button', {name: 'Connect to GitHub…'}).count(), 0);
     assert.deepEqual(errors, []);
 });
+
+test('without device folders (Safari, Firefox), the setup shows Open Folder as unavailable and keeps the browser folders', async t => {
+    const server = await serveEditorRuntime({script: fileURLToPath(new URL('./branch-entry-page.js', import.meta.url))});
+    const browser = await chromium.launch();
+    t.after(async () => {await browser.close(); await server.close();});
+    const page = await browser.newPage({viewport: {width: 900, height: 700}});
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(server.url);
+    await page.evaluate(options => mountEntry(options), {locale: 'ja', writable: true, folders: true, deviceFolders: false});
+    const side = page.locator('#side');
+    await side.getByRole('heading', {name: 'Git の設定'}).waitFor();
+    const open = side.getByRole('button', {name: 'フォルダを開く…', exact: true});
+    assert.equal(await open.isDisabled(), true);
+    await side.getByText('このブラウザーでは端末のフォルダを開けません。Chrome か Edge を使うか、ブラウザーに保存したフォルダを開いてください。').waitFor();
+    await side.getByRole('button', {name: 'ブラウザーに保存したフォルダを開く…'}).click();
+    assert.equal(await page.evaluate(() => host.browserFolder), 1);
+    assert.deepEqual(errors, []);
+});
+
