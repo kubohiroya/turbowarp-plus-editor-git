@@ -407,3 +407,10 @@
     justify-content: flex-end;
     gap: .5rem;
 }
+.twgit-remote-repository-dialog .twgit-connection-body > label { display: grid; gap: 4px; }
+.twgit-remote-repository-dialog input[type="url"] { font: inherit; width: 100%; box-sizing: border-box; }
+.twgit-remote-repository-dialog fieldset { border: 0; margin: 8px 0; padding: 0; }
+.twgit-remote-repository-dialog fieldset > label { display: block; margin: 2px 0; }
+.twgit-remote-repository-dialog .twgit-error { margin: 6px 0; }
+.twgit-remote-repository-dialog progress { vertical-align: middle; }
+.twgit-remote-repository-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }

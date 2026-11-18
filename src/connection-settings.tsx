@@ -79,7 +79,7 @@ const ja: typeof en = {
 const preferenceKey = 'tw-plus-github-connection-mode';
 const temporaryModes = new WeakMap<Window, Mode>();
 
-function preferredMode(view: Window, modes: readonly Mode[]): Mode | undefined {
+export function preferredMode(view: Window, modes: readonly Mode[]): Mode | undefined {
     let saved = temporaryModes.get(view);
     if (saved === undefined) {
         try {

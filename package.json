@@ -63,6 +63,10 @@
     "./project-repository-creation": {
       "types": "./dist/project-repository-creation.d.ts",
       "default": "./dist/project-repository-creation.js"
+    },
+    "./remote-repository": {
+      "types": "./dist/remote-repository-dialog.d.ts",
+      "default": "./dist/remote-repository.js"
     }
   },
   "files": [

@@ -21,7 +21,8 @@ export default defineConfig({
                 'cloudflare-publication': 'src/cloudflare-publication.ts',
                 'project-commit-dialog': 'src/project-commit-dialog.ts',
                 'project-publication-dialog': 'src/project-publication-dialog.ts',
-                'project-repository-creation': 'src/project-repository-creation.ts'
+                'project-repository-creation': 'src/project-repository-creation.ts',
+                'remote-repository': 'src/remote-repository-dialog.tsx'
             },
             formats: ['es'],
             fileName: (_format, name) => `${name}.js`,

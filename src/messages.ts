@@ -248,3 +248,60 @@ export const reviewMessages = {
 };
 export type ReviewLabels = typeof reviewMessages.en;
 export const reviewLabelsFor = (locale: string): ReviewLabels => locale.startsWith('ja') ? reviewMessages.ja : reviewMessages.en;
+
+/** The words of opening a project from a GitHub repository. */
+export const remoteRepositoryMessages = {
+    en: {
+        title: 'Open Remote Git Repository', close: 'Close',
+        url: 'Repository URL', urlHint: 'https://github.com/<owner>/<repository>',
+        invalidUrl: 'Enter a GitHub repository URL like https://github.com/owner/repository.',
+        destination: 'Save to', device: 'A folder on this device', browser: 'In this browser',
+        deviceUnavailable: 'This browser cannot open folders on your device. Use Chrome or Edge, or open a folder saved in this browser.',
+        open: 'Open', retry: 'Retry', cancel: 'Cancel',
+        connecting: 'Waiting for GitHub authorization…', openAuthorization: 'Open GitHub authorization',
+        deviceCodeHelp: 'Only enter the code shown here. Never enter a code someone sent you.',
+        cloning: 'Downloading the repository…', choosing: 'Downloaded the repository. Choose an empty folder to save it in.',
+        chooseFolder: 'Choose a Folder…', writing: 'Saving the repository…', opening: 'Opening the project…',
+        notProject: 'This folder is not a project folder.', ok: 'OK',
+        unavailable: 'No GitHub connection is configured.',
+        popupBlocked: 'The GitHub authorization window was blocked. Use the link to open it.',
+        authFailed: 'Could not connect to GitHub. Try again.',
+        timeout: 'GitHub authorization took too long. Try again.',
+        auth: 'Connect to GitHub again to read this repository.',
+        forbidden: 'This GitHub connection cannot read the repository. Check the URL and your access.',
+        network: 'Could not reach GitHub. Check the network and try again.',
+        unsupported: 'The repository has an entry the browser cannot write (a symbolic link, an executable file, a submodule or a name the folder cannot hold): {path}',
+        notEmpty: 'The folder is not empty. Choose an empty folder.',
+        writeFailed: 'Could not save the repository in the folder. Files saved so far are left in it; choose another empty folder.',
+        openFailed: 'The repository was saved, but the project could not be opened. Open the folder from the File menu.',
+        failed: 'Could not open the repository. Try again.'
+    },
+    ja: {
+        title: 'Git のリモートリポジトリを開く', close: '閉じる',
+        url: 'リポジトリの URL', urlHint: 'https://github.com/<所有者>/<リポジトリ>',
+        invalidUrl: 'https://github.com/所有者/リポジトリ の形で GitHub のリポジトリの URL を入力してください。',
+        destination: '保存先', device: '手元のフォルダ', browser: 'ブラウザー内',
+        deviceUnavailable: 'このブラウザーでは端末のフォルダを開けません。Chrome か Edge を使うか、ブラウザーに保存したフォルダを開いてください。',
+        open: '開く', retry: '再試行', cancel: 'キャンセル',
+        connecting: 'GitHub の認証を待っています…', openAuthorization: 'GitHub の認証を開く',
+        deviceCodeHelp: 'この画面に表示されたコードだけを入力してください。他人から届いたコードは入力しないでください。',
+        cloning: 'リポジトリを取得しています…', choosing: 'リポジトリを取得しました。保存先の空のフォルダを選んでください。',
+        chooseFolder: 'フォルダを選ぶ…', writing: 'リポジトリを保存しています…', opening: '作品を開いています…',
+        notProject: 'このフォルダはプロジェクトフォルダではありません。', ok: 'OK',
+        unavailable: 'GitHub 接続先が設定されていません。',
+        popupBlocked: 'GitHub の認証のウィンドウが開けませんでした。リンクから開いてください。',
+        authFailed: 'GitHub に接続できませんでした。再試行してください。',
+        timeout: 'GitHub の認証が時間内に終わりませんでした。再試行してください。',
+        auth: 'このリポジトリを読むには、GitHub にもう一度接続してください。',
+        forbidden: 'この GitHub 接続ではリポジトリを読めません。URL と権限を確かめてください。',
+        network: 'GitHub に接続できませんでした。ネットワークを確かめて再試行してください。',
+        unsupported: 'ブラウザーで書き出せないもの（シンボリックリンク、実行ファイル、サブモジュール、フォルダに置けない名前）がリポジトリにあります: {path}',
+        notEmpty: 'フォルダが空ではありません。空のフォルダを選んでください。',
+        writeFailed: 'フォルダにリポジトリを保存できませんでした。途中まで書いたファイルが残っています。別の空のフォルダを選んでください。',
+        openFailed: 'リポジトリは保存しましたが、作品を開けませんでした。ファイルメニューからフォルダを開いてください。',
+        failed: 'リポジトリを開けませんでした。再試行してください。'
+    }
+};
+export type RemoteRepositoryLabels = typeof remoteRepositoryMessages.en;
+export const remoteRepositoryLabelsFor = (locale: string): RemoteRepositoryLabels =>
+    locale.startsWith('ja') ? remoteRepositoryMessages.ja : remoteRepositoryMessages.en;
