@@ -13,7 +13,7 @@ const files = [
     {path: 'README.md', bytes: encode('# Fixture\n')},
     {path: '.gitignore', bytes: encode('/ignored.bin\n')},
     {path: 'ignored.bin', bytes: Uint8Array.of(0, 1, 255)},
-    {path: 'project/project.source.json', bytes: encode('{"targets":[]}\n')}
+    {path: 'project.source.json', bytes: encode('{"targets":[]}\n')}
 ];
 const receivePosts = fixture => fixture.upstream.filter(request =>
     request.method === 'POST' && request.path.endsWith('/git-receive-pack')).length;
@@ -60,7 +60,7 @@ test('publishes the complete first commit and reconciles the same OID after an u
     assert.equal(receivePosts(fixture), 1);
     assert.equal(git(fixture.bare, 'rev-list', '--count', 'main'), '1');
     assert.equal(git(fixture.bare, 'show', 'main:README.md'), '# Fixture');
-    assert.equal(git(fixture.bare, 'show', 'main:project/project.source.json'), '{"targets":[]}');
+    assert.equal(git(fixture.bare, 'show', 'main:project.source.json'), '{"targets":[]}');
     assert.deepEqual(execFileSync('git', ['show', 'main:ignored.bin'], {cwd: fixture.bare}), Buffer.from([0, 1, 255]));
 });
 
@@ -128,7 +128,7 @@ test('prepares the selected folder as a Git worktree, then publishes exactly its
     assert.equal(git(path, 'config', '--local', 'user.email'), input.author.email);
     assert.equal(await readFile(join(path, 'README.md'), 'utf8'), '# Fixture\n');
     assert.equal(await readFile(join(path, 'LICENSE'), 'utf8'), 'Fixture license\n');
-    assert.equal(await readFile(join(path, 'project', 'project.source.json'), 'utf8'), '{"targets":[]}\n');
+    assert.equal(await readFile(join(path, 'project.source.json'), 'utf8'), '{"targets":[]}\n');
     assert.deepEqual(await prepareInitialRepository(input), prepared);
 
     await assert.rejects(pushInitialRepository({...input, oid: 'e'.repeat(40)}), {code: 'changed'});
@@ -159,7 +159,7 @@ test('resumes an interrupted local initialization only for the same inputs', asy
     });
     const input = {...options(fixture), operationId, directory};
     await assert.rejects(prepareInitialRepository(input), /local write interrupted/u);
-    assert.deepEqual(await readdir(join(path, 'project')), []);
+    assert.equal((await readdir(path)).includes('project.source.json'), false);
     assert.equal(await readFile(join(path, 'README.md'), 'utf8'), '# Fixture\n');
     await assert.rejects(prepareInitialRepository({...input, timestamp: input.timestamp + 1}), {code: 'changed'});
     await assert.rejects(prepareInitialRepository({

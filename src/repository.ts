@@ -879,12 +879,12 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         await directory.getFileHandle('project.source.json');
         return directory;
     };
+    /** The project of a repository is at its root: `''` when the root has a project, otherwise `null`. */
     const defaultProject = async (rootFolder: Awaited<ReturnType<typeof browse>>) => {
-        if (rootFolder.isProject) return '';
-        if (!rootFolder.children.includes('project')) return null;
+        if (!rootFolder.isProject) return null;
         try {
-            await openProject('project');
-            return 'project';
+            await openProject('');
+            return '';
         } catch (error) {
             if (error instanceof GitPanelError && error.code === 'invalid') return null;
             if (error instanceof DOMException && ['NotFoundError', 'TypeMismatchError', 'NotAllowedError'].includes(error.name)) return null;

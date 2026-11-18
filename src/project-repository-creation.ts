@@ -302,8 +302,8 @@ export function createProjectRepositoryWorkflow<Session extends GitHubCreationAc
                 const task = await journal.read(current.operationId);
                 if (task?.phase !== 'open' || task.mode !== provider.mode) return false;
                 await requireAccess(task.directory);
-                const project = await task.directory.getDirectoryHandle('project');
-                if (!await openProject(project, task.directory)) return false;
+                // The project is at the root of the repository.
+                if (!await openProject(task.directory, task.directory)) return false;
                 await journal.remove(task.operationId);
                 return true;
             });

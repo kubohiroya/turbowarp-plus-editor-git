@@ -2,11 +2,11 @@
 
 [English](README.md)
 
-TurboWarp Plus Editor に「ローカル Git」パネルを追加します。リポジトリルートを一度選び、配下の sb3-toolchain v1 作品フォルダをパネルから開きます。作品の編集と保存には Editor の project-folder 接続を使います。
+TurboWarp Plus Editor に「ローカル Git」パネルを追加します。リポジトリルートを一度選びます。そのルートが sb3-toolchain v1 の作品フォルダです。作品の編集と保存には Editor の project-folder 接続を使います。
 
 パネルは、Editor のメニューバーのブランチのボタンから開きます。`mountGitPanel({vm, document, host})` はパネルを組み込み、`{open(locale), refresh(), selectRepository(root, project), clearRepository(), getCommitRepository(), dispose()}` を返します。`renderBranchButton(createElement, {vm, locale})` は、`vm` に組み込んだパネルのボタンを描きます。パネルがないとき（ホストがローカル Git を出さないときなど）は何も描きません。Git の設定は下の履歴のビューで行うので、リポジトリに結び付くまでボタンは何も描きません。結び付いたあとは、ブランチのアイコン、現在のブランチ名、▾ を表示します。detached HEAD ではコミットの短い ID を、記録がまだないブランチではそのことを表示します。メニュー（`role="menu"`。矢印キー・Home・End・Enter で操作し、Escape でボタンに戻ります）には、ローカルブランチ（現在のブランチに印）、`origin` にあってローカルにないブランチの **… を作って切り替える**、**新しいブランチ…**（HEAD からブランチを作る小さな欄。既定で作ったら切り替えます）、**ローカル Git を開く** を並べます。ボタンとパネルは同じリポジトリと同じ操作を使うので、メニューからの切り替えも、パネルのボタンと同じく確かめ、同じ理由で断ります。結果はパネルを開かずに、画面下のスナックバーで示します。切り替えたときは「ブランチを切り替えました。」（パネルで作品フォルダを選んでいれば **作品を再読込** のボタン付き）、作っただけのときは「ブランチを作りました。」、断ったときはパネルと同じ理由を警告として **ローカル Git を開く** のボタン付きで示します。確認で取りやめたときは何も出しません。スナックバーは 6 秒で消えますが、ポインターを置いているときとフォーカスがあるときは残ります。Escape か閉じるボタンで閉じ、新しい結果は前のものを置き換えます。フォーカスは移さず、Tab でボタンに移れます。`localWrite` がなければ、メニューはブランチを示すだけです。ボタンは、パネルやほかのツールでのブランチの変更に追従します。パネルが見えていない間は、下のパネルの確認と同じ契機で、HEAD とブランチの参照だけを読みます。`BranchButton` は、状態をホストが持つ場合のためのボタン単体です。こちらはリポジトリを選ぶ前に **Git** と表示し、**リポジトリを選択…** に進みます。
 
-1 つのリポジトリは 1 つの作品を、そのルートか `project/` に持ちます。ファイルメニューからフォルダを開くホストは、`openFolder(locale)`（ホストの **フォルダを開く…**）と、ブラウザーの中（OPFS）にフォルダを置くときは `openBrowserFolder(locale)`（ホストの **ブラウザーに保存したフォルダを開く…**）を渡します。`openFolder` があると、パネルは自分ではリポジトリを選びません。ホストが開いたフォルダに `.git` があれば、ホストが組み込みの結果の `selectRepository(root, project)` を呼んでパネルをそのリポジトリに結び付けます。`.git` がなければ `clearRepository()` を呼びます。これはリポジトリとの結び付きを外し、ブランチのボタンを隠し、リポジトリが変わったときと同じく GitHub のセッションを切ります。このようなホストには、フォルダ選択も `chooseRoot` も要りません。 `deviceFolders: false` は、`openFolder` が端末のフォルダを選べないこと（Safari、Firefox）を伝えます。このとき設定では **フォルダを開く…** を理由とともに無効にし、**ブラウザーに保存したフォルダを開く…** を使えるようにします。
+1 つのリポジトリは 1 つの作品を、そのルートに持ちます。`project.source.json` と `sb3-source.json` はリポジトリの一番上に置き、`Repository.defaultProject` はそれらがあれば `''`、なければ `null` を返します。**互換性のない変更:** `project/` フォルダは使いません。作品を `project/` に置いたリポジトリは、ファイルをルートへ移すまで既定の作品がありません。ファイルメニューからフォルダを開くホストは、`openFolder(locale)`（ホストの **フォルダを開く…**）と、ブラウザーの中（OPFS）にフォルダを置くときは `openBrowserFolder(locale)`（ホストの **ブラウザーに保存したフォルダを開く…**）を渡します。`openFolder` があると、パネルは自分ではリポジトリを選びません。ホストが開いたフォルダに `.git` があれば、ホストが組み込みの結果の `selectRepository(root, project)` を呼んでパネルをそのリポジトリに結び付けます。`.git` がなければ `clearRepository()` を呼びます。これはリポジトリとの結び付きを外し、ブランチのボタンを隠し、リポジトリが変わったときと同じく GitHub のセッションを切ります。このようなホストには、フォルダ選択も `chooseRoot` も要りません。 `deviceFolders: false` は、`openFolder` が端末のフォルダを選べないこと（Safari、Firefox）を伝えます。このとき設定では **フォルダを開く…** を理由とともに無効にし、**ブラウザーに保存したフォルダを開く…** を使えるようにします。
 
 フォルダを開く命令を持たないホスト（ほかのホストやテスト）では、代わりに **リポジトリを選択…** を出します。これはブラウザーのフォルダ選択を呼びます。ホストが `chooseRoot()` を渡すと、代わりにホストがリポジトリのフォルダを選びます。たとえば、Safari や Firefox のようにフォルダ選択がないブラウザーで、ブラウザーの中（OPFS）に置いたフォルダを選べます。`chooseRoot()` はフォルダを返し、取りやめたときは `null` を返します。フォルダ選択も `chooseRoot` も `openFolder` もないとき、`mountGitPanel` は `null` を返します。OPFS のフォルダでも、選んだフォルダと同じように読み、ステージし、コミットできます。
 
@@ -24,7 +24,7 @@ TurboWarp Plus Editor に「ローカル Git」パネルを追加します。リ
 
 File System Access に対応する Chromium 系ブラウザーが必要です。初版は通常の `.git` ディレクトリとファイル内容の変更を扱います。linked worktree、サブモジュール、シンボリックリンクは対象外です。作業ツリーの実行権限の変更はブラウザーから検出できません。Git に記録済みのファイルモードは表示します。バイナリアセットはサイズを示し、テキスト差分の生成には上限があります。
 
-Node.js 26 で `npm ci` と `npm test` を実行します。Vite でライブラリとスタイルシート、TypeScript で型宣言を生成します。`npm pack` で Editor 用の配布物を作成します。`npm run test:browser` は、最小 editor runtime（`@kubohiroya/turbowarp-plus-editor-test-runtime`）の上で、ブランチのボタンのメニューとキーボード操作（実際のリポジトリでパネルと並べた場合も）、履歴グラフのキーボード操作と操作メニュー、比較ダイアログのブロックの描画を Chromium で試します。Editor が固定する VM と Scratch Blocks を使い、Editor のビルドは要りません。Editor では既定で有効です。起動 URL に `twPlusLocalGit=0` を指定するとパネルの接続を解除でき、ブランチのボタンも出ません。
+Node.js 26 で `npm ci` と `npm test` を実行します。Vite でライブラリとスタイルシート、TypeScript で型宣言を生成します。`npm pack` で Editor 用の配布物を作成します。`npm run test:browser` は、最小 editor runtime（`@kubohiroya/turbowarp-plus-editor-test-runtime`）の上で、ブランチのボタンのメニューとキーボード操作（実際のリポジトリでパネルと並べた場合も）、履歴グラフのキーボード操作と操作メニュー、比較ダイアログのブロックの描画、リモートリポジトリのダイアログ（手元の Smart HTTP の fixture に対して）を Chromium で試します。Editor が固定する VM と Scratch Blocks を使い、Editor のビルドは要りません。Editor では既定で有効です。起動 URL に `twPlusLocalGit=0` を指定するとパネルの接続を解除でき、ブランチのボタンも出ません。
 
 パネルの構成とローカル Git の扱いは [duff](https://github.com/chigichan24/duff) を参考にしました。実装には [isomorphic-git](https://github.com/isomorphic-git/isomorphic-git) と [react-diff-view](https://github.com/otakustay/react-diff-view) を使用し、同梱依存のライセンスはビルド時の第三者ライセンス一覧に収録します。
 
@@ -186,11 +186,19 @@ Editor のコミット・公開・リポジトリ作成の流れも、このパ�
 | `./project-publication` | `createProjectPublication` が、ホストの `PublicationBridge`（Desktop または Cloudflare）と照合・push を受け取り、`PreparedPublication` を返す。ダイアログを閉じても、進行中のジョブはホストが持ち続ける。`PublicationBridge` は Git パネルと同じ `PullRequestMergePort` を含み、パネルの `PullRequestPublication.prepare` もこの `PreparedPublication` を返す |
 | `./cloudflare-publication` | Cloudflare 接続での `PublicationBridge`（`createCloudflarePublicationBridge`）。push に使うセッションをジョブに固定する |
 | `./project-commit-dialog`・`./project-publication-dialog` | コミットを選ぶダイアログと、PR として送るダイアログ（`renderProjectCommitDialog`・`renderProjectPublicationDialog`） |
-| `./project-repository-creation` | GitHub にリポジトリを作り、初回 push まで進める手順（`createProjectRepositoryWorkflow`）。手順の途中経過を IndexedDB の記録（`repositoryCreationJournal`）に残し、応答が途切れても重複して作らずに再開する。`GitHubCreationAccount`・`GitHubRepositoryDraft` の型もここにある |
+| `./project-repository-creation` | GitHub にリポジトリを作り、初回 push まで進める手順（`createProjectRepositoryWorkflow`）。手順の途中経過を IndexedDB の記録（`repositoryCreationJournal`）に残し、応答が途切れても重複して作らずに再開する。作品をルートに置いた構成で作り、できたリポジトリのルートを `openProject(root, root)` に渡す。`GitHubCreationAccount`・`GitHubRepositoryDraft` の型もここにある |
 
 ダイアログは `@kubohiroya/turbowarp-plus-editor-windows`（peer dependency）の `dialogActions` で操作ボタンを並べるので、ホストは windows の `styles.css` を読み込む。
 
 これらは turbowarp-plus-editor の `packages/editor-ui` から移した。同じ作者が書いたもので、GPL-3.0 から MPL-2.0 にした。由来の監査は [turbowarp-plus-packages の移行計画](https://github.com/kubohiroya/turbowarp-plus-packages/blob/main/docs/editor-migration-plan.ja.md)の「由来の監査（7b）」にある。
+
+## リモートリポジトリを開く
+
+`./remote-repository`（メインの入口からも export）は、GitHub にある作品を開きます。既定のブランチのルートに `project.source.json` と `sb3-source.json` があるリポジトリだけを開き、それ以外はファイルを書く前に断ります。
+
+- `cloneRemoteProject({remote, getSession, signal?, onProgress?, fetch?}): Promise<CloneRemoteProjectResult>` は、接続の Smart HTTP（上のアダプター）でメモリ上に clone します。`init`、`+refs/heads/*:refs/remotes/origin/*` を持つ `origin`、リモートの HEAD が指すブランチの全履歴（タグなし）、`origin/HEAD`、`branch.<名前>.remote`・`merge` を作ります。`remote` は `https://github.com/<owner>/<repo>`（`.git` 付きも可）で、`getSession` は `GitConnectionSettings.getSession` と同じく、正規化した `.git` の URL で `getSession(remote, false)` と呼びます。結果は `{ok: true, snapshot}` か `{ok: false, reason, path?}` で、`reason` は `'invalid-remote'`、`'not-project'`（空のリポジトリも含む。checkout しない）、`'unsupported'`（シンボリックリンク、実行ファイル、サブモジュール、フォルダに置けない名前。場所は `path`）、`'auth'`、`'forbidden'`、`'network'`、`'failed'` のどれかです。`signal` を中止すると、その理由で reject します。スナップショット（`ClonedProject`: `remote`・`branch`・`head`・`entries`）は、packfile と作業ツリーを含むリポジトリ全体をメモリに持ちます。
+- `writeClonedProject(folder, snapshot, {signal?}): Promise<{branch, head}>` は、空の `FileSystemDirectoryHandle` にスナップショットを書き出します。Git の書き込みのロックを取り、オブジェクト・インデックス・作業ツリーを HEAD と ref より先に書き、最後にフォルダの HEAD を確かめます。中身のあるフォルダは、何も書かずに `GitPanelError('notEmpty')` で断ります。途中で止まると、それまでに書いたファイルが残ります。
+- `openRemoteRepositoryDialog({document, locale, connectionSettings, deviceFolders?, pickDeviceFolder?, createBrowserFolder?, removeBrowserFolder?, openProject}): Promise<boolean>` は **Git のリモートリポジトリを開く…** のダイアログです。リポジトリの URL と保存先を尋ねます。保存先は **手元のフォルダ**（`deviceFolders` が `false` なら理由とともに無効）か **ブラウザー内**（`createBrowserFolder` があるとき）です。**開く** で読み取りの権限で接続し（`connect(remote, false)`。Cloudflare ではクリックの間に GitHub の認可のウィンドウを開き、Desktop ではリンクとデバイスコードを示す）、セッションを待ちます（1.5 秒ごと、10 分まで、またはウィンドウが閉じるまで）。そのあと進み具合と **キャンセル** を示しながら clone します。ルートに作品がなければ **このフォルダはプロジェクトフォルダではありません。** を出し、OK で両方のダイアログを閉じ、何も書きません。作品があれば、手元のフォルダは **フォルダを選ぶ…** で選びます（ブラウザーはクリックの間しかフォルダ選択を開けないため、2 回目のクリックにしています。`pickDeviceFolder()` は空のフォルダか `null` を返す）。ブラウザー内なら `createBrowserFolder(name)` がリポジトリ名の新しいフォルダを作ります。そこへ書き出し、`openProject(root)` を待ってから `true` で閉じます。ブラウザー内のフォルダへの書き出しに失敗したら `removeBrowserFolder(folder)` で消します。ほかのエラーはダイアログの中に出し、**再試行** できます。リポジトリを開くとパネルのリポジトリが変わり、GitHub のセッションは切れます。push するときは **GitHub に接続…** から書き込みの権限で接続し直してください。
 
 ## 公開
 

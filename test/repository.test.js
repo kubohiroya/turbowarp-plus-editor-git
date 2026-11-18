@@ -423,3 +423,14 @@ test('reads a complete historical project from Git while the working tree has ne
     assert.equal(await fs.readFile(path.join(root, 'projects/demo/project.source.json'), 'utf8'),
         '{"targets":[{"name":"editing"}]}');
 });
+
+test('the default project is the repository root only, never a project/ folder', async t => {
+    const {root, write, handle} = await fixture(t);
+    const repo = await openRepository(handle);
+    assert.equal(await repo.defaultProject(await repo.browse()), null);
+    await fs.mkdir(path.join(root, 'project'));
+    await write('project/project.source.json', '{"targets":[]}\n');
+    assert.equal(await repo.defaultProject(await repo.browse()), null);
+    await write('project.source.json', '{"targets":[]}\n');
+    assert.equal(await repo.defaultProject(await repo.browse()), '');
+});

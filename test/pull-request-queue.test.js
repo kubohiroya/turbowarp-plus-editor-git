@@ -93,7 +93,7 @@ function fixture({existingIssue} = {}) {
             }
             if (route === '/pulls/28') return send(pull());
             if (route === '/pulls/28/files') return send([
-                {filename: 'project/project.source.json', sha: 'd'.repeat(40), status: 'modified', additions: 2, deletions: 1}
+                {filename: 'project.source.json', sha: 'd'.repeat(40), status: 'modified', additions: 2, deletions: 1}
             ]);
             if (path === '/graphql') {
                 assert.equal(init.headers.Authorization, 'Bearer checks_read');

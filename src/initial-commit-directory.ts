@@ -137,6 +137,18 @@ async function applySnapshot(root: FileSystemDirectoryHandle, entries: InitialCo
     }
 }
 
+/**
+ * Writes a repository snapshot built in memory (a clone) into an empty directory: directories first, then objects,
+ * the index and the work tree, and HEAD and refs last. Throws `notEmpty` when the directory has any entry.
+ */
+export async function writeSnapshotToEmptyDirectory(root: FileSystemDirectoryHandle, entries: InitialCommitEntry[],
+    signal?: AbortSignal) {
+    validatePaths(entries);
+    signal?.throwIfAborted();
+    for await (const _name of keys(root)) throw new GitPanelError('notEmpty');
+    await applySnapshot(root, entries, signal);
+}
+
 export async function prepareInitialDirectory(root: FileSystemDirectoryHandle, entries: InitialCommitEntry[],
     identity: Identity, signal?: AbortSignal) {
     validatePaths(entries);
