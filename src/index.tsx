@@ -149,7 +149,10 @@ interface Controller {
     openBrowserFolder?: (locale: string) => void;
     /** Whether `openFolder` can pick a folder on the device. */
     deviceFolders?: boolean;
-    /** Unbinds the repository, as when the host opens a folder that is not a Git repository. */
+    /**
+     * Unbinds the repository, as when the host opens a folder that is not a Git repository. While the panel itself opens a
+     * project of its repository, such as after a branch switch, the repository stays bound.
+     */
     clearRepository(): void;
     /** Whether the host has a project folder open, published with `branch`. */
     folder: boolean;
@@ -886,6 +889,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     controller.connectionModes = host.connectionSettings?.modes ?? [];
     controller.clearRepository = () => {
+        // The panel is opening a project of its own repository, as after a branch switch. The host closes the folder
+        // while the project loads, which does not leave the repository.
+        if (opening.current) return;
         // Whatever is still running for the previous repository is dropped, as when another repository is loaded.
         epoch.current++;
         remoteRequest.current?.abort();

@@ -478,6 +478,47 @@ test('a host with folder commands binds the opened folder\'s repository, and cle
     assert.deepEqual(errors, []);
 });
 
+test('reloading the project after a branch switch keeps the repository, though the folder closes while it loads', async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-reopen-'));
+    t.after(() => fs.rm(root, {recursive: true, force: true}));
+    const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8', env: {...process.env,
+        GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture',
+        GIT_COMMITTER_EMAIL: 'fixture@example.invalid'}}).trim();
+    git('init', '-q', '-b', 'main');
+    // The project is at the root of the repository.
+    await fs.writeFile(path.join(root, 'project.source.json'), '{}\n');
+    git('add', '.');
+    git('commit', '-qm', 'first');
+    git('branch', 'jump');
+    const server = await serveEditorRuntime({script: fileURLToPath(new URL('./branch-entry-page.js', import.meta.url))});
+    const args = ['--enable-experimental-web-platform-features'];
+    if (process.platform === 'darwin') args.push('--single-process', '--no-zygote', '--disable-crash-reporter');
+    const browser = await chromium.launch({args});
+    t.after(async () => {await browser.close(); await server.close();});
+    const page = await browser.newPage({viewport: {width: 900, height: 700}});
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
+    await page.goto(server.url);
+    await page.evaluate(options => mountEntry(options), {locale: 'en', writable: true, folders: true, reopens: true});
+    const cdp = await page.context().newCDPSession(page);
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', {
+        type, x: 100, y: 100, data: {items: [], files: [root], dragOperationsMask: 1}});
+    await page.waitForFunction(() => window.directoryReady);
+    await page.locator('#side').getByRole('button', {name: 'Open Folder…'}).click();
+    await page.getByRole('button', {name: 'Branch: main', exact: true}).click();
+    await page.getByRole('menu', {name: 'Branches'}).getByRole('menuitemradio', {name: 'jump'}).click();
+    await page.getByRole('button', {name: 'Reload Project', exact: true}).click();
+    await page.waitForFunction(() => host.reopened === 1);
+    // The panel opened the project itself, so the folder closing on the way does not unbind its repository.
+    await page.getByRole('button', {name: 'Branch: jump', exact: true}).waitFor();
+    assert.equal(git('branch', '--show-current'), 'jump');
+    await page.getByRole('button', {name: 'Branch: jump', exact: true}).click();
+    await page.getByRole('menu', {name: 'Branches'}).getByRole('menuitem', {name: 'Open Local Git'}).click();
+    await page.getByRole('dialog', {name: 'Local Git'}).getByText('Repository: ' + path.basename(root)).waitFor();
+    assert.deepEqual(errors, []);
+});
+
 test('without device folders (Safari, Firefox), the setup shows Open Folder as unavailable and keeps the browser folders', async t => {
     const server = await serveEditorRuntime({script: fileURLToPath(new URL('./branch-entry-page.js', import.meta.url))});
     const browser = await chromium.launch();
