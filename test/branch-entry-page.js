@@ -18,7 +18,7 @@ for (const type of ['dragenter', 'dragover', 'drop']) window.addEventListener(ty
 }, {capture: true});
 window.showDirectoryPicker = async () => directory;
 
-globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, deviceFolders}) => {
+globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, deviceFolders, reopens}) => {
     document.head.append(Object.assign(document.createElement('style'), {textContent: style}));
     document.body.style.cssText = 'margin: 0; background: Canvas; font: 12px/1.5 system-ui, sans-serif';
     const bar = Object.assign(document.createElement('div'), {id: 'menu-bar'});
@@ -31,7 +31,21 @@ globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, dev
     globalThis.host = {dirty: false, opened: null, browserFolder: 0};
     let notify;
     const mount = () => mountGitPanel({vm, document, host: {
-        openProject: async () => 'cancelled', isProjectDirty: () => host.dirty, isProjectRunning: () => false,
+        // A host that reopens the project as the project folder does: while it loads, no folder is open, so the host
+        // unbinds Git, and binds it again once the folder is back.
+        openProject: async () => {
+            if (!reopens) return 'cancelled';
+            host.opened = null;
+            notify?.('folder');
+            globalThis.panel.clearRepository();
+            await new Promise(resolve => setTimeout(resolve, 50));
+            host.opened = directory;
+            notify?.('folder');
+            void globalThis.panel.selectRepository(directory, directory);
+            host.reopened = (host.reopened ?? 0) + 1;
+            return 'opened';
+        },
+        isProjectDirty: () => host.dirty, isProjectRunning: () => false,
         subscribe(listener) {
             notify = listener;
             return () => {notify = undefined;};

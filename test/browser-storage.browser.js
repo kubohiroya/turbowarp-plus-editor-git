@@ -25,9 +25,8 @@ test('without the folder picker, the panel commits in a repository the host choo
     assert.equal(await page.evaluate(() => typeof window.showDirectoryPicker), 'undefined');
     assert.equal(await page.evaluate(() => mountBrowserStorage()), true);
     const panelDialog = page.getByRole('dialog', {name: 'Local Git'});
-    // Choose Repository… asks the host, which has no folder picker to call.
-    await page.getByRole('button', {name: 'Local Git', exact: true}).click();
-    await page.getByRole('menu', {name: 'Branches'}).getByRole('menuitem', {name: 'Choose Repository…'}).click();
+    // Choose Repository… in the side panel's setup asks the host, which has no folder picker to call.
+    await page.locator('#side').getByRole('button', {name: 'Choose Repository…'}).click();
     await panelDialog.getByText('Repository: twgit-test').waitFor();
     assert.equal(await page.evaluate(() => chosen), 1);
     await page.evaluate(() => writeNotes('second\n'));

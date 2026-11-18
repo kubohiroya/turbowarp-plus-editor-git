@@ -2,7 +2,7 @@
 import {Buffer} from 'buffer';
 import React from 'react';
 import {render} from 'react-dom';
-import {mountGitPanel, renderBranchButton} from '../dist/index.js';
+import {mountGitPanel, renderBranchButton, renderHistoryView} from '../dist/index.js';
 import {prepareInitialRepository} from '../dist/initial-commit.js';
 import style from '../dist/style.css';
 
@@ -24,7 +24,11 @@ globalThis.mountBrowserStorage = async () => {
     const vm = {};
     const bar = Object.assign(document.createElement('div'), {id: 'menu-bar'});
     (document.getElementById('workspace') ?? document.body.firstElementChild).replaceWith(bar);
+    // Git is set up from the side panel; the menu bar shows Git once a repository is chosen.
+    const side = Object.assign(document.createElement('aside'), {id: 'side'});
+    bar.after(side);
     render(renderBranchButton(React.createElement, {vm, locale: 'en'}), bar);
+    render(renderHistoryView(React.createElement, {vm, locale: 'en'}), side);
     globalThis.panel = mountGitPanel({vm, document, host: {
         openProject: async () => 'cancelled', isProjectDirty: () => false, isProjectRunning: () => false,
         localWrite: {},
