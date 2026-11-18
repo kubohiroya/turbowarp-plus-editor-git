@@ -501,6 +501,8 @@ test('reloading the project after a branch switch keeps the repository, though t
     page.on('console', message => {if (message.type() === 'error') errors.push(message.text());});
     await page.goto(server.url);
     await page.evaluate(options => mountEntry(options), {locale: 'en', writable: true, folders: true, reopens: true});
+    // Releases… stands in its own File menu section, so a divider sets it apart from the folder commands.
+    assert.equal(await page.locator('#file-menu > section[data-menu-section] [data-menu-item]').innerText(), 'Releases…');
     const cdp = await page.context().newCDPSession(page);
     for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', {
         type, x: 100, y: 100, data: {items: [], files: [root], dragOperationsMask: 1}});
