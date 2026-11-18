@@ -351,6 +351,13 @@
 .twgit-history-view { box-sizing: border-box; padding: 8px; font: 13px/1.5 system-ui, sans-serif; }
 .twgit-history-view > p { margin: 0 0 8px; }
 .twgit-history-view > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+.twgit-setup h3 { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.twgit-setup ol { margin: 0 0 12px; padding-left: 20px; }
+.twgit-setup li { margin: 0 0 10px; }
+.twgit-setup li > p { margin: 0 0 4px; }
+.twgit-setup li > button, .twgit-history-actions > button { color: inherit; background: transparent; border: 1px solid currentColor; border-radius: 4px; padding: 3px 8px; font: inherit; cursor: pointer; }
+.twgit-history-actions { display: flex; gap: 6px; margin: 0 0 8px; }
+.twgit-history-actions > button:disabled { opacity: 0.5; cursor: default; }
 
 .twgit-save-files > p, .twgit-save-diff > p { margin: 0; }
 .twgit-save-files > button { margin-top: 10px; }

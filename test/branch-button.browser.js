@@ -287,9 +287,14 @@ test('the branch button shares the panel\'s repository, switches as the panel do
             await page.waitForFunction(() => window.directoryReady);
             const panel = page.getByRole('dialog', {name: 'Local Git'});
             const menu = page.getByRole('menu', {name: 'Branches'});
-            // Choose Repository… from the button picks the repository and opens the panel on it.
-            await page.getByRole('button', {name: 'Local Git', exact: true}).click();
-            await menu.getByRole('menuitem', {name: 'Choose Repository…'}).click();
+            // Git is set up in the side panel: before a repository is chosen, the menu bar shows no Git button.
+            const side = page.locator('#side');
+            await side.getByRole('heading', {name: 'Set up Git'}).waitFor();
+            assert.equal(await page.locator('#menu-bar').getByRole('button').count(), 0);
+            // Without a GitHub connection, the setup offers the repository only.
+            assert.equal(await side.getByRole('button', {name: 'Connection Mode…'}).count(), 0);
+            // Choose Repository… in the side panel picks the repository and opens the panel on it.
+            await side.getByRole('button', {name: 'Choose Repository…'}).click();
             await panel.getByText('Repository: ' + path.basename(root)).waitFor();
             assert.equal(await panel.getByText('Branch and Git status', {exact: true}).count(), 0);
             assert.equal(await panel.locator('[data-git-upstream]').count(), 0);
@@ -397,4 +402,36 @@ test('the branch button shares the panel\'s repository, switches as the panel do
             await server.close();
         }
     }
+});
+
+test('the side panel sets up Git with a GitHub connection, and the menu bar shows Git only after that', async t => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-setup-'));
+    t.after(() => fs.rm(root, {recursive: true, force: true}));
+    execFileSync('git', ['init', '-q', '-b', 'main'], {cwd: root});
+    const server = await serveEditorRuntime({script: fileURLToPath(new URL('./branch-entry-page.js', import.meta.url))});
+    const args = ['--enable-experimental-web-platform-features'];
+    if (process.platform === 'darwin') args.push('--single-process', '--no-zygote', '--disable-crash-reporter');
+    const browser = await chromium.launch({args});
+    t.after(async () => {await browser.close(); await server.close();});
+    const page = await browser.newPage({viewport: {width: 900, height: 700}});
+    await page.goto(server.url);
+    await page.evaluate(options => mountEntry(options), {locale: 'ja', writable: true, panelFirst: true, connection: true});
+    const cdp = await page.context().newCDPSession(page);
+    for (const type of ['dragEnter', 'dragOver', 'drop']) await cdp.send('Input.dispatchDragEvent', {
+        type, x: 100, y: 100, data: {items: [], files: [root], dragOperationsMask: 1}});
+    await page.waitForFunction(() => window.directoryReady);
+    const side = page.locator('#side');
+    await side.getByRole('heading', {name: 'Git の設定'}).waitFor();
+    assert.equal(await page.locator('#menu-bar').getByRole('button').count(), 0);
+    // The connection mode comes first, in the side panel instead of a menu.
+    await side.getByRole('button', {name: '接続方式…'}).click();
+    const preferences = page.getByRole('dialog', {name: 'GitHub 接続設定'});
+    await preferences.getByRole('combobox', {name: '既定の接続方式'}).waitFor();
+    await preferences.getByRole('button', {name: '閉じる'}).click();
+    await side.getByRole('button', {name: 'リポジトリを選択…'}).click();
+    // Once a repository is chosen, the menu bar shows Git and the side panel connects to GitHub.
+    await page.locator('#menu-bar').getByRole('button').first().waitFor();
+    await page.keyboard.press('Escape');
+    await side.getByRole('button', {name: 'GitHub に接続…'}).click();
+    await page.getByRole('dialog', {name: 'リポジトリの GitHub 接続'}).waitFor();
 });
