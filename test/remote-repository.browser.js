@@ -12,7 +12,7 @@ async function open(t, locale = 'en') {
     const server = await serveEditorRuntime({script: fileURLToPath(new URL('./remote-repository-page.js', import.meta.url))});
     // The page reaches the fixture's proxy from its own origin.
     fixture.origins.add(new URL(server.url).origin);
-    const browser = await chromium.launch();
+    const browser = await chromium.launch({headless: true});
     t.after(async () => {await browser.close(); await server.close();});
     const page = await browser.newPage({viewport: {width: 800, height: 600}, locale: locale === 'ja' ? 'ja-JP' : 'en-US'});
     const errors = [];
@@ -55,6 +55,21 @@ test('checks the URL first and, without device folders, offers only the browser 
     await dialog.getByRole('button', {name: 'Close'}).click();
     assert.equal(await result(), false);
     assert.equal(await page.getByRole('dialog').count(), 0);
+});
+
+test('prefills a catalog URL without connecting and does not report a cancelled project replacement as opened', async t => {
+    const {fixture, page, openDialog, calls, result} = await open(t);
+    await publishProject(fixture);
+    await openDialog({initialRemote: remote, deviceFolders: false, openProjectResult: 'cancelled'});
+    const dialog = page.getByRole('dialog', {name: 'Open Remote Git Repository'});
+    assert.equal(await dialog.getByLabel('Repository URL').inputValue(), remote);
+    assert.deepEqual(await calls(), []);
+    await dialog.getByRole('button', {name: 'Open', exact: true}).click();
+    await dialog.getByRole('alert').waitFor();
+    assert.equal((await calls()).some(call => call[0] === 'openProject'), true);
+    assert.equal((await calls()).some(call => call[0] === 'closed'), false);
+    await dialog.getByRole('button', {name: 'Close'}).click();
+    assert.equal(await result(), false);
 });
 
 test('a repository without a project at its root shows the error and writes nothing', async t => {

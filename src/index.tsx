@@ -46,7 +46,7 @@ export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch
 
 export {openRepository, createReadOnlyFs, GitPanelError, pullRequestRef} from './repository.js';
 export {openProjectComparison} from './project-comparison.js';
-export {cloneRemoteProject, openRemoteRepositoryDialog, PROJECT_ROOT_FILES, writeClonedProject} from './remote-repository-dialog.js';
+export {cloneRemoteProject, openRemoteRepositoryDialog, PROJECT_ROOT_FILES, readProjectRemote, writeClonedProject} from './remote-repository-dialog.js';
 export type {
     ClonedProject, CloneFailureReason, CloneRemoteProjectOptions, CloneRemoteProjectResult, RemoteRepositoryDialogOptions
 } from './remote-repository-dialog.js';

@@ -10,13 +10,15 @@ import {serveEditorRuntime} from '@kubohiroya/turbowarp-plus-editor-test-runtime
 // WebKit has no folder picker, as in Safari. Its origin private file system needs a persistent profile.
 test('without the folder picker, the panel commits in a repository the host chooses from the browser\'s storage', async t => {
     const server = await serveEditorRuntime({script: fileURLToPath(new URL('./browser-storage-page.js', import.meta.url))});
-    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-webkit-'));
-    const context = await webkit.launchPersistentContext(profile, {viewport: {width: 900, height: 700}});
+    let profile;
+    let context;
     t.after(async () => {
-        await context.close();
+        await context?.close();
         await server.close();
-        await fs.rm(profile, {recursive: true, force: true});
+        if (profile) await fs.rm(profile, {recursive: true, force: true});
     });
+    profile = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-webkit-'));
+    context = await webkit.launchPersistentContext(profile, {viewport: {width: 900, height: 700}});
     const page = context.pages()[0] ?? await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));

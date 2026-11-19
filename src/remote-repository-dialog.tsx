@@ -11,7 +11,7 @@ import {cloneRemoteProject, writeClonedProject} from './remote-clone.js';
 import type {ClonedProject} from './remote-clone.js';
 import {remoteUrl} from './smart-http.js';
 
-export {cloneRemoteProject, writeClonedProject, PROJECT_ROOT_FILES} from './remote-clone.js';
+export {cloneRemoteProject, writeClonedProject, readProjectRemote, PROJECT_ROOT_FILES} from './remote-clone.js';
 export type {
     ClonedProject, CloneFailureReason, CloneRemoteProjectOptions, CloneRemoteProjectResult
 } from './remote-clone.js';
@@ -19,6 +19,8 @@ export type {
 export interface RemoteRepositoryDialogOptions {
     document: Document;
     locale: string;
+    /** Prefills an existing catalog entry; authorization still happens when the person starts opening it. */
+    initialRemote?: string;
     /** The host's GitHub connection; it needs `getSession`. */
     connectionSettings: GitConnectionSettings;
     /** `false` when the browser cannot pick folders on the device (Safari, Firefox). */
@@ -79,7 +81,7 @@ function RemoteRepositoryDialog({view, options, onDone}: {
     const abort = useRef<AbortController | null>(null);
     const snapshot = useRef<ClonedProject | null>(null);
     const result = useRef(false);
-    const [url, setUrl] = useState('');
+    const [url, setUrl] = useState(options.initialRemote ?? '');
     const [invalid, setInvalid] = useState(false);
     const [destination, setDestination] = useState<Destination>(deviceAvailable || !createBrowserFolder ? 'device' : 'browser');
     const [step, setStepState] = useState<Step>('form');
@@ -187,7 +189,13 @@ function RemoteRepositoryDialog({view, options, onDone}: {
         }
         setStep('opening');
         try {
-            await openProject(folder);
+            const opened = await openProject(folder);
+            if (opened === false || opened === 'cancelled' || opened === 'not-project') {
+                setError(labels.openFailed);
+                snapshot.current = null;
+                setStep('form');
+                return;
+            }
         } catch {
             setError(labels.openFailed);
             snapshot.current = null;

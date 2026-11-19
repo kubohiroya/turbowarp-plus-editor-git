@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {cloneRemoteProject, writeClonedProject} from '../dist/remote-repository.js';
+import {cloneRemoteProject, readProjectRemote, writeClonedProject} from '../dist/remote-repository.js';
 import {openRepository} from '../dist/repository.js';
 import {directoryHandle} from './directory.js';
 import {adapterOptions, git, remote, startFixture} from './smart-http-fixture.js';
@@ -35,6 +35,16 @@ const commitAll = (dir, message) => {
     git(dir, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', message);
     return git(dir, 'rev-parse', 'HEAD');
 };
+
+test('reads a catalog origin locally, normalises it and omits credentials', async t => {
+    const path = await emptyFolder(t);
+    assert.equal(await readProjectRemote(directoryHandle(path)), undefined);
+    git(path, 'init', '-q');
+    git(path, 'config', 'remote.origin.url', 'https://github.com/fixture/work');
+    assert.equal(await readProjectRemote(directoryHandle(path)), 'https://github.com/fixture/work.git');
+    git(path, 'config', 'remote.origin.url', 'https://token@github.com/fixture/work');
+    assert.equal(await readProjectRemote(directoryHandle(path)), undefined);
+});
 
 // The remote's HEAD names `trunk`, which has the project at its root; `main` has none.
 async function publishProject(fixture, files = {}) {

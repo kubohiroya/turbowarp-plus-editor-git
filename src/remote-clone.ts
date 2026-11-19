@@ -11,6 +11,18 @@ import {createGitSmartHttp, remoteUrl} from './smart-http.js';
 /** The files at the root of a branch that make it a TurboWarp Plus Editor project. */
 export const PROJECT_ROOT_FILES = ['project.source.json', 'sb3-source.json'] as const;
 
+/** Read the saved origin without connecting or authenticating. Missing repositories have no remote. */
+export async function readProjectRemote(root: FileSystemDirectoryHandle): Promise<string | undefined> {
+    try {await root.getDirectoryHandle('.git');} catch (error) {
+        if (['NotFoundError', 'TypeMismatchError'].includes((error as {name?: string}).name ?? '')) return undefined;
+        throw error;
+    }
+    const remote = await git.getConfig({fs: createReadOnlyFs(root), dir: '/', path: 'remote.origin.url'});
+    if (!remote) return undefined;
+    // Catalogs display the URL, never credentials that a Git client might have stored in it.
+    try {return remoteUrl(remote);} catch {return undefined;}
+}
+
 /** A repository cloned in memory, ready for `writeClonedProject`. */
 export interface ClonedProject {
     /** The normalised remote, `https://github.com/<owner>/<repo>.git`, kept as `remote.origin.url`. */
