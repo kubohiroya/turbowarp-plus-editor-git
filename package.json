@@ -85,6 +85,7 @@
   },
   "scripts": {
     "build": "vite build && tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "test": "npm run build && node --test test/*.test.js test/*.test.ts",
     "prepack": "npm run build",
     "test:browser": "npm run build && node --test test/*.browser.js"
