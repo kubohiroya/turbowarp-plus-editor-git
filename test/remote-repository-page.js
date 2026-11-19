@@ -11,7 +11,7 @@ let state = {status: 'disconnected'};
 let authorization;
 let connectedRemote = null;
 
-globalThis.openDialog = async ({locale, deviceFolders, browserFolders, proxyOrigin}) => {
+globalThis.openDialog = async ({locale, deviceFolders, browserFolders, proxyOrigin, initialRemote, openProjectResult}) => {
     if (!document.getElementById('twgit-style'))
         document.head.append(Object.assign(document.createElement('style'), {id: 'twgit-style', textContent: style}));
     const top = await navigator.storage.getDirectory();
@@ -40,7 +40,7 @@ globalThis.openDialog = async ({locale, deviceFolders, browserFolders, proxyOrig
             return {connection: {mode: 'desktop', proxyOrigin}, bearer: 'fixture-read', expiresAt: Date.now() + 600_000};
         }
     };
-    globalThis.result = openRemoteRepositoryDialog({document, locale, connectionSettings: settings, deviceFolders,
+    globalThis.result = openRemoteRepositoryDialog({document, locale, connectionSettings: settings, deviceFolders, initialRemote,
         async pickDeviceFolder() {
             calls.push(['pickDeviceFolder']);
             return top.getDirectoryHandle('device', {create: true});
@@ -55,6 +55,7 @@ globalThis.openDialog = async ({locale, deviceFolders, browserFolders, proxyOrig
         },
         async openProject(root) {
             calls.push(['openProject', root.name]);
+            return openProjectResult;
         }
     }).then(opened => {
         calls.push(['closed', opened]);
