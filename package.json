@@ -67,6 +67,10 @@
     "./remote-repository": {
       "types": "./dist/remote-repository-dialog.d.ts",
       "default": "./dist/remote-repository.js"
+    },
+    "./project-version-preview": {
+      "types": "./dist/project-version-preview.d.ts",
+      "default": "./dist/project-version-preview.js"
     }
   },
   "files": [
