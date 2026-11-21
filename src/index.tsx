@@ -1424,6 +1424,9 @@ export function renderHistoryView(createElement: (component: any, props: any, ..
     return createElement(HistoryEntry, {vm, locale, query});
 }
 
+/** The placeholder of the search box above the history view. */
+export const historySearchLabel = (locale = 'en') => /^ja(?:-|$)/i.test(locale) ? 'コミットを検索' : 'Search commits';
+
 /** Reads the baseline of a project-folder file from a repository already accessible to the Editor. */
 export async function readProjectHeadFile(vm: object, directory: FileSystemDirectoryHandle, path: string, limit: number) {
     const controller = controllers.get(vm);
