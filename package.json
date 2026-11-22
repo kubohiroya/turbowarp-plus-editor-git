@@ -64,6 +64,10 @@
       "types": "./dist/project-repository-creation.d.ts",
       "default": "./dist/project-repository-creation.js"
     },
+    "./project-repository-host": {
+      "types": "./dist/project-repository-host.d.ts",
+      "default": "./dist/project-repository-host.js"
+    },
     "./remote-repository": {
       "types": "./dist/remote-repository-dialog.d.ts",
       "default": "./dist/remote-repository.js"
