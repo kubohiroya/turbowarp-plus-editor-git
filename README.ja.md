@@ -187,6 +187,7 @@ Editor のコミット・公開・リポジトリ作成の流れも、このパ�
 | `./cloudflare-publication` | Cloudflare 接続での `PublicationBridge`（`createCloudflarePublicationBridge`）。push に使うセッションをジョブに固定する |
 | `./project-commit-dialog`・`./project-publication-dialog` | コミットを選ぶダイアログと、PR として送るダイアログ（`renderProjectCommitDialog`・`renderProjectPublicationDialog`） |
 | `./project-repository-creation` | GitHub にリポジトリを作り、初回 push まで進める手順（`createProjectRepositoryWorkflow`）。手順の途中経過を IndexedDB の記録（`repositoryCreationJournal`）に残し、応答が途切れても重複して作らずに再開する。作品をルートに置いた構成で作り、できたリポジトリのルートを `openProject(root, root)` に渡す。`GitHubCreationAccount`・`GitHubRepositoryDraft` の型もここにある |
+| `./project-repository-host` | その手順を画面に結び付ける（`bindProjectRepositoryCreation`）。Desktop の device code、ブラウザーの Cloudflare BFF、空のフォルダ（選んだものかブラウザーの保存領域）、初期内容と初回 push を扱う。host のビルドが用意するもの（リポジトリのクライアント、Cloudflare の認可、初期内容の作成、初回 commit と push、sb3-toolchain の版、ライセンス）は `services`（`ProjectRepositoryHostServices`）として受け取り、揃わなければ `undefined` を返す |
 
 ダイアログは `@kubohiroya/turbowarp-plus-editor-windows`（peer dependency）の `dialogActions` で操作ボタンを並べるので、ホストは windows の `styles.css` を読み込む。
 

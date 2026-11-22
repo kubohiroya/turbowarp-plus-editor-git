@@ -22,6 +22,7 @@ export default defineConfig({
                 'project-commit-dialog': 'src/project-commit-dialog.ts',
                 'project-publication-dialog': 'src/project-publication-dialog.ts',
                 'project-repository-creation': 'src/project-repository-creation.ts',
+                'project-repository-host': 'src/project-repository-host.ts',
                 'remote-repository': 'src/remote-repository-dialog.tsx',
                 'project-version-preview': 'src/project-version-preview.ts'
             },
