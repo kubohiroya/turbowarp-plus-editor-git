@@ -24,7 +24,8 @@ export default defineConfig({
                 'project-repository-creation': 'src/project-repository-creation.ts',
                 'project-repository-host': 'src/project-repository-host.ts',
                 'remote-repository': 'src/remote-repository-dialog.tsx',
-                'project-version-preview': 'src/project-version-preview.ts'
+                'project-version-preview': 'src/project-version-preview.ts',
+                'project-merge': 'src/project-merge.ts'
             },
             formats: ['es'],
             fileName: (_format, name) => `${name}.js`,

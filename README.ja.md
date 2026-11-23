@@ -202,6 +202,23 @@ Editor のコミット・公開・リポジトリ作成の流れも、このパ�
 - `writeClonedProject(folder, snapshot, {signal?}): Promise<{branch, head}>` は、空の `FileSystemDirectoryHandle` にスナップショットを書き出します。Git の書き込みのロックを取り、オブジェクト・インデックス・作業ツリーを HEAD と ref より先に書き、最後にフォルダの HEAD を確かめます。中身のあるフォルダは、何も書かずに `GitPanelError('notEmpty')` で断ります。途中で止まると、それまでに書いたファイルが残ります。
 - `openRemoteRepositoryDialog({document, locale, connectionSettings, deviceFolders?, pickDeviceFolder?, createBrowserFolder?, removeBrowserFolder?, openProject}): Promise<boolean>` は **Git のリモートリポジトリを開く…** のダイアログです。リポジトリの URL と保存先を尋ねます。保存先は **手元のフォルダ**（`deviceFolders` が `false` なら理由とともに無効）か **ブラウザー内**（`createBrowserFolder` があるとき）です。**開く** で読み取りの権限で接続し（`connect(remote, false)`。Cloudflare ではクリックの間に GitHub の認可のウィンドウを開き、Desktop ではリンクとデバイスコードを示す）、セッションを待ちます（1.5 秒ごと、10 分まで、またはウィンドウが閉じるまで）。そのあと進み具合と **キャンセル** を示しながら clone します。ルートに作品がなければ **このフォルダはプロジェクトフォルダではありません。** を出し、OK で両方のダイアログを閉じ、何も書きません。作品があれば、手元のフォルダは **フォルダを選ぶ…** で選びます（ブラウザーはクリックの間しかフォルダ選択を開けないため、2 回目のクリックにしています。`pickDeviceFolder()` は空のフォルダか `null` を返す）。ブラウザー内なら `createBrowserFolder(name)` がリポジトリ名の新しいフォルダを作ります。そこへ書き出し、`openProject(root)` を待ってから `true` で閉じます。ブラウザー内のフォルダへの書き出しに失敗したら `removeBrowserFolder(folder)` で消します。ほかのエラーはダイアログの中に出し、**再試行** できます。リポジトリを開くとパネルのリポジトリが変わり、GitHub のセッションは切れます。push するときは **GitHub に接続…** から書き込みの権限で接続し直してください。
 
+## 作品フォルダの 3-way マージ
+
+`./project-merge` は、作品フォルダの 3 つの版（マージベース、現在のブランチ、取り込むブランチ）から、マージした結果と競合の一覧を作ります。画面と Git には依存しない純粋な関数で、ファイルの読み書きと Git の操作は呼び出し元が行います。（[Editor #773](https://github.com/kubohiroya/turbowarp-plus-editor/issues/773) の段階 1。まだパネルには出していません。）
+
+- `mergeProjectFolder(versions)` は、パス（フォルダからの相対パス、区切りは `/`）ごとの `{base, current, incoming}`（`Uint8Array`、ファイルが無い側は `null`）を受け取り、`{files, conflicts, problems}` を返します。`files` の各ファイルの `content` は、片方だけの変更と両方の同じ変更を取り込み、競合した箇所は base のままにした内容です（競合マーカーは書きません）。
+- `resolveProjectFolder(result, choices)` は、競合の ID ごとに選んだ側（`'base'`・`'current'`・`'incoming'`）を当てた最終のファイル（`null` は削除）、残った問題、選んでいない競合を返します。
+
+ファイルごとのマージは次のとおりです。
+
+- `project.source.json`: スプライト・ステージを名前で対応させます（片方で名前を変えたスプライトは、ブロック ID の重なりで元のスプライトと対応させます）。ブロックはスクリプト単位で扱い、片方だけが変えたスクリプトはその側を取ります。両方が変えたスクリプトは、ブロックごとに入力・フィールドを分けてマージし、つながりが壊れない場合だけ取り込みます。それ以外はスクリプトの競合です。変数・リスト・ブロードキャスト・コメントは ID ごと、コスチューム・音は名前ごとにマージします。変数とリストは名前と値を別々にマージします。表示中のコスチュームはインデックスではなく名前でマージします。片方で消した変数・リストを、マージ後のスクリプトがまだ使っているときは、残したうえで `reference` の競合として示します。結果は `JSON.stringify(value, null, 2)` と改行で書き、キーと並びは現在のブランチの順にします。
+- そのほかの JSON（`sb3-source.json`・`embedded-extensions.json` など）はキーごとにマージします。`sb3-source.json` の `archiveEntries` はマージせず、最終の素材ファイルから作り直します（作品フォルダを開くには、`project.json` と素材ファイルを過不足なく並べる必要があるため）。
+- 素材ファイル（`assets/`）は、最終の作品が使うものだけを残します。
+- テキストは行単位の diff3 でマージします。競合しない場合の結果は `git merge-file` と同じです。
+- バイナリ、または片方で消して他方で変えたファイルは、ファイル全体の競合です。
+
+`checkProject(project)` は、ブロックのつながり、変数・リストの参照、ブロックのコメント、表示中のコスチュームの番号を確かめます。問題のある作品はコミットしないでください。
+
 ## 公開
 
 npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを
