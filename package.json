@@ -72,6 +72,10 @@
       "types": "./dist/remote-repository-dialog.d.ts",
       "default": "./dist/remote-repository.js"
     },
+    "./project-merge": {
+      "types": "./dist/project-merge.d.ts",
+      "default": "./dist/project-merge.js"
+    },
     "./project-version-preview": {
       "types": "./dist/project-version-preview.d.ts",
       "default": "./dist/project-version-preview.js"
@@ -109,6 +113,7 @@
     }
   },
   "devDependencies": {
+    "@kubohiroya/sb3-toolchain": "0.28.1",
     "@kubohiroya/turbowarp-plus-editor-auth": "0.5.0",
     "@kubohiroya/turbowarp-plus-editor-test-runtime": "0.3.2",
     "@kubohiroya/turbowarp-plus-editor-windows": "0.2.2",
