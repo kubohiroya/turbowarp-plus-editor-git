@@ -395,7 +395,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                 incoming: await read(trees[2].get(path))
             });
         }
-        const plan = createMergePlan(scope, {
+        const plan = await createMergePlan(scope, {
             base,
             current: {name: expected.branch, ref: 'refs/heads/' + expected.branch, oid: expected.head},
             incoming: {...incomingBranch, oid: incoming}

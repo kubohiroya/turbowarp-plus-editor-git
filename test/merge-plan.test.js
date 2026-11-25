@@ -13,21 +13,20 @@ test('plans a merge from committed tips in a nested project, with a dirty index 
     const branches = await repository.mergePlanBranches('main');
     assert.ok(branches.some(({ref}) => ref === 'refs/heads/incoming'));
     assert.ok(branches.some(({ref}) => ref === 'refs/remotes/origin/main'));
-    const plan = await repository.planMerge(fixture.folder, {branch: 'main', head: fixture.head}, 'refs/remotes/origin/main');
+    const {plan, files} = await repository.planMerge(fixture.folder, {branch: 'main', head: fixture.head}, 'refs/remotes/origin/main');
     assert.equal(plan.inputs.base, fixture.base);
     assert.equal(plan.inputs.current.oid, fixture.head);
     assert.equal(plan.inputs.incoming.oid, fixture.incoming);
     assert.deepEqual(plan.conflicts, []);
-    const preview = plan.previewFiles();
+    const preview = new Map([...files].filter(([path]) => !path.endsWith('.md')));
     validateSourceFiles(preview);
     const read = files => JSON.parse(new TextDecoder().decode(files.get('project.source.json')));
     const {move, turn} = read(preview).targets[1].blocks;
     assert.deepEqual(move.inputs.STEPS, [1, [4, '25']]);
     assert.deepEqual(turn.inputs.DEGREES, [1, [4, '30']]);
-    assert.ok(!preview.has('README.md'));
-    assert.ok(!preview.has('notes.txt'));
-    preview.get('project.source.json').fill(0);
-    assert.deepEqual(read(plan.previewFiles()).targets[1].blocks.move.inputs.STEPS, [1, [4, '25']]);
+    assert.equal(new TextDecoder().decode(files.get('README.md')), 'A local project\n');
+    assert.ok(!files.has('notes.txt'));
+    assert.match(plan.contentId, /^[a-f0-9]{64}$/);
     assert.deepEqual(await fixture.snapshot(), before);
 });
 
@@ -39,10 +38,9 @@ test('shows a same-block conflict while a provisional candidate still uses the c
     const repository = await openRepository(directoryHandle(fixture.root));
     await assert.rejects(repository.planMerge(fixture.folder, {branch: 'main', head: fixture.head}, 'refs/heads/incoming'),
         {code: 'changed'});
-    const plan = await repository.planMerge(fixture.folder, {branch: 'main', head}, 'refs/heads/incoming');
+    const {plan, files} = await repository.planMerge(fixture.folder, {branch: 'main', head}, 'refs/heads/incoming');
     assert.ok(plan.conflicts.some(({type}) => type === 'project'));
-    const files = plan.previewFiles();
-    validateSourceFiles(files);
+    validateSourceFiles(new Map([...files].filter(([path]) => !path.endsWith('.md') && path !== 'notes.txt')));
     const {move, turn} = JSON.parse(new TextDecoder().decode(files.get('project.source.json'))).targets[1].blocks;
     // The merge engine keeps the entire conflicting script at the base until it is resolved.
     assert.deepEqual(move.inputs.STEPS, [1, [4, '10']]);

@@ -40,7 +40,9 @@ export {createScratchBlocksDiffLocator} from './block-diff-location.js';
 export {createEditorBlockLocator} from './editor-block-locator.js';
 import {createEditorBlockLocator} from './editor-block-locator.js';
 import type {LocatorVM} from './editor-block-locator.js';
-import {MergePlanPanel, type MergePlanSession} from './merge-plan-panel.js';
+import {MergePlanPanel} from './merge-plan-panel.js';
+import {mergePlanPreviewFiles} from './merge-plan.js';
+import {canPersistMergePlans, createIndexedDbMergePlanJournal, createMemoryMergePlanJournal} from './merge-plan-journal.js';
 
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
@@ -800,7 +802,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const versionDirectory = host.projectDirectory?.();
     const hasProject = host.projectDirectory ? !!versionDirectory : state.project !== null;
     const canUseVersions = !!state.repository && hasProject;
-    const mergePlans = useMemo<MergePlanSession>(() => ({plans: []}), [state.repository, state.project, versionDirectory]);
+    const mergePlanContext = useMemo(() => ({}), [state.repository, state.project, versionDirectory]);
+    const mergePlanJournals = useMemo(() => {
+        const indexedDb = document.defaultView?.indexedDB;
+        return {memory: createMemoryMergePlanJournal(), persistent: indexedDb && createIndexedDbMergePlanJournal(indexedDb)};
+    }, [document]);
+    const persistentMergePlans = useMemo(() => !!mergePlanJournals.persistent && !!state.repository?.root &&
+        canPersistMergePlans(state.repository.root), [mergePlanJournals, state.repository?.root]);
     const projectVersionScope = async (repository: Repository, trackRefresh = true) => {
         const project = current.current.project;
         const directory = host.projectDirectory?.();
@@ -1022,8 +1030,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                         <button type="button" className="twgit-panel-action" disabled={state.busy || connectionBusy}
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
-                        <MergePlanPanel document={document} locale={locale} session={mergePlans}
+                        <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
+                            journal={persistentMergePlans ? mergePlanJournals.persistent! : mergePlanJournals.memory}
                             branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}
+                            scope={async () => {
+                                const repository = state.repository!;
+                                return {...await projectVersionScope(repository, false), root: repository.root};
+                            }}
                             branches={state.repository.mergePlanBranches}
                             create={async (expected, from) => {
                                 const repository = state.repository!;
@@ -1032,12 +1045,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 guard();
                                 return plan;
                             }}
-                            play={async (plan, title) => {
+                            play={async (plan, files, title) => {
                                 const {folder, guard} = await projectVersionScope(state.repository!, false);
                                 if (folder !== plan.folder) throw new GitPanelError('changed');
                                 try {
                                     await host.previewProjectVersion!({oid: plan.id, title, folder, guard,
-                                        files: plan.previewFiles()});
+                                        files: mergePlanPreviewFiles(files)});
                                 } catch (error) {
                                     if (error instanceof GitPanelError) throw error;
                                     throw new GitPanelError('versionOpenFailed');

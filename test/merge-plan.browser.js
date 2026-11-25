@@ -11,12 +11,10 @@ const prefix = '/turbowarp-plus-editor/';
 const mime = {'.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json',
     '.svg': 'image/svg+xml', '.png': 'image/png', '.wav': 'audio/wav', '.wasm': 'application/wasm'};
 
-test('the Editor creates and duplicates a merge candidate, and both play in fresh, isolated players', {
-    skip: !build && 'Set E2E_PROJECT_FOLDER_BUILD to a built Editor with this Git package', timeout: 120_000
-}, async t => {
+const options = {skip: !build && 'Set E2E_PROJECT_FOLDER_BUILD to a built Editor with this Git package', timeout: 120_000};
+
+async function start(t, fixture) {
     assert.ok(path.isAbsolute(build));
-    const fixture = await mergePlanFixture(t, '');
-    const before = await fixture.snapshot();
     const args = ['--enable-experimental-web-platform-features', '--enable-unsafe-swiftshader'];
     const browser = await chromium.launch({headless: true, args});
     t.after(() => browser.close());
@@ -45,52 +43,95 @@ test('the Editor creates and duplicates a merge candidate, and both play in fres
         Object.defineProperty(window, 'showDirectoryPicker', {value: async () => directory});
         Object.defineProperty(window, 'mergePlanFixtureReady', {get: () => directory?.kind === 'directory'});
     });
-    // Use the Editor's receiving tab, where Open Folder hands the selected directory to this Editor.
-    await page.goto(origin + prefix + 'editor.html?lang=en&twPlusOpenTab=playtest-fixture');
-    await page.waitForFunction(() => window.vm?.runtime.getTargetForStage(), null, {timeout: 45_000});
-    const cdp = await context.newCDPSession(page);
-    for (const type of ['dragEnter', 'dragOver', 'drop']) {
-        await cdp.send('Input.dispatchDragEvent', {type, x: 100, y: 100,
-            data: {items: [], files: [fixture.root], dragOperationsMask: 1}});
+    async function open() {
+        // Use the Editor's receiving tab, where Open Folder hands the selected directory to this Editor.
+        await page.goto(origin + prefix + 'editor.html?lang=en&twPlusOpenTab=playtest-fixture');
+        await page.waitForFunction(() => window.vm?.runtime.getTargetForStage(), null, {timeout: 45_000});
+        const cdp = await context.newCDPSession(page);
+        for (const type of ['dragEnter', 'dragOver', 'drop']) {
+            await cdp.send('Input.dispatchDragEvent', {type, x: 100, y: 100,
+                data: {items: [], files: [fixture.root], dragOperationsMask: 1}});
+        }
+        await cdp.detach();
+        await page.waitForFunction(() => window.mergePlanFixtureReady);
+        await page.getByText('File', {exact: true}).click();
+        await page.getByRole('button', {name: 'Open Folder…', exact: true}).click();
+        await page.getByRole('button', {name: 'Branch: main'}).click();
+        await page.getByRole('menuitem', {name: 'Open Local Git', exact: true}).click();
+        await page.getByRole('button', {name: 'Merge plans', exact: true}).click();
     }
-    await cdp.detach();
-    await page.waitForFunction(() => window.mergePlanFixtureReady);
-    await page.getByText('File', {exact: true}).click();
-    await page.getByRole('button', {name: 'Open Folder…', exact: true}).click();
-    await page.getByRole('button', {name: 'Branch: main'}).click();
-    await page.getByRole('menuitem', {name: 'Open Local Git', exact: true}).click();
-    await page.getByRole('button', {name: 'Merge plans', exact: true}).click();
     const plans = page.getByRole('dialog', {name: 'Merge plans'});
-    await expect(plans.getByRole('option', {name: 'origin/main', exact: true})).toBeAttached();
-    await plans.getByLabel('Bring in from').selectOption({label: 'origin/main'});
-    await plans.getByRole('button', {name: 'Create candidate'}).click();
     const candidate = number => plans.getByRole('region', {name: 'Candidate ' + number, exact: true});
-    await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
-    await expect(candidate(2)).toContainText('Copied from Candidate 1');
     const sprite = () => window.vm?.runtime.getSpriteTargetByName('Walker');
-    const worktreeSteps = () => window.vm.runtime.getSpriteTargetByName('Walker').blocks.getBlock('move').inputs.STEPS;
-    const savedInput = await page.evaluate(worktreeSteps);
-    let firstFrame;
-    for (const number of [1, 2]) {
+    async function createCandidate() {
+        await plans.getByLabel('Bring in from').selectOption({label: 'origin/main'});
+        await plans.getByRole('button', {name: 'Create candidate'}).click();
+        await expect(candidate(1)).toBeVisible();
+    }
+    async function play(number, generation, x, direction) {
         await candidate(number).getByRole('button', {name: 'Playtest'}).click();
-        const player = page.getByRole('dialog', {name: 'Playtest · Candidate ' + number});
+        const player = page.getByRole('dialog', {name: `Playtest · Candidate ${number} · Generation ${generation}`});
         await expect(player).toBeVisible();
         const frame = await (await player.locator('iframe').elementHandle()).contentFrame();
         assert.ok(frame);
         await frame.waitForFunction(sprite, null, {timeout: 45_000});
-        if (number === 1) firstFrame = frame;
-        else assert.notEqual(frame, firstFrame);
         assert.equal(await frame.evaluate(() => window.vm.runtime.getSpriteTargetByName('Walker').x), 0);
         await frame.getByTitle('Go', {exact: true}).click();
-        await frame.waitForFunction(() => {
+        await frame.waitForFunction(({x, direction}) => {
             const target = window.vm.runtime.getSpriteTargetByName('Walker');
-            return target.x === 25 && target.direction === 120;
-        });
+            return target.x === x && target.direction === direction;
+        }, {x, direction});
         await player.getByRole('button', {name: 'Close', exact: true}).click();
         await expect(player).toHaveCount(0);
+        return frame;
     }
+    await open();
+    return {page, candidate, createCandidate, play, open, errors};
+}
+
+test('the Editor creates and duplicates a merge candidate, and both play in fresh, isolated players', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    const before = await fixture.snapshot();
+    const {page, candidate, createCandidate, play, errors} = await start(t, fixture);
+    await createCandidate();
+    await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
+    await expect(candidate(2)).toContainText('Copied from Candidate 1');
+    const worktreeSteps = () => window.vm.runtime.getSpriteTargetByName('Walker').blocks.getBlock('move').inputs.STEPS;
+    const savedInput = await page.evaluate(worktreeSteps);
+    const first = await play(1, 1, 25, 120);
+    assert.notEqual(await play(2, 1, 25, 120), first);
     assert.equal(await page.evaluate(() => window.vm.runtime.getSpriteTargetByName('Walker').x), 0);
     assert.deepEqual(await page.evaluate(worktreeSteps), savedInput);
     assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
+test('conflict choices save new generations, which can be reopened and played after a reload', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    await fixture.put(35, 30);
+    fixture.commit('Change the same input on main');
+    const before = await fixture.snapshot();
+    const {candidate, createCandidate, play, open, errors} = await start(t, fixture);
+    await createCandidate();
+    await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
+    await expect(candidate(2)).toBeVisible();
+    const first = candidate(1);
+    await first.getByText(/Choose versions for conflicting changes/).click();
+    await first.getByLabel(/project.source.json.*Walker/).selectOption('incoming');
+    await first.getByRole('button', {name: 'Save as new generation'}).click();
+    await expect(first.getByRole('option', {name: 'Generation 2', exact: true})).toBeAttached();
+    assert.deepEqual(await fixture.snapshot(), before);
+    fixture.git('update-ref', 'refs/remotes/origin/main', fixture.base);
+    const afterExternalUpdate = await fixture.snapshot();
+    await open();
+    await expect(first.getByRole('option', {name: 'Generation 2', exact: true})).toBeAttached();
+    const generation = number => candidate(number).getByRole('combobox', {name: /^Generation/});
+    await expect(generation(2).locator('option')).toHaveCount(1);
+    await generation(1).selectOption({label: 'Generation 2'});
+    await play(1, 2, 25, 105);
+    await generation(1).selectOption({label: 'Generation 1'});
+    await play(1, 1, 10, 105);
+    await play(2, 1, 10, 105);
+    assert.deepEqual(await fixture.snapshot(), afterExternalUpdate);
     assert.deepEqual(errors, []);
 });
