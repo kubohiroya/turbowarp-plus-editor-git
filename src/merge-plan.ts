@@ -46,6 +46,8 @@ export interface MergePlan {
     readonly choices: MergePlanChoices;
     readonly problems: number;
     readonly edited?: boolean;
+    readonly imported?: boolean;
+    readonly importedResolutions?: readonly string[];
 }
 
 export interface MergePlanBuild {
@@ -65,7 +67,7 @@ function summarize({id, path, type, ...rest}: FolderConflict): MergePlanConflict
     return result;
 }
 
-async function contentId(files: MergePlanFiles) {
+export async function mergePlanContentId(files: MergePlanFiles) {
     const hash = async (bytes: Uint8Array<ArrayBuffer>) =>
         Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value =>
             value.toString(16).padStart(2, '0')).join('');
@@ -87,7 +89,7 @@ function resolveFiles(seed: MergePlanSeed, choices: MergePlanChoices) {
 }
 
 async function snapshot(plan: Omit<MergePlan, 'contentId' | 'problems'>, files: MergePlanFiles, problems: number): Promise<MergePlanBuild> {
-    return {plan: {...plan, contentId: await contentId(files), problems}, files};
+    return {plan: {...plan, contentId: await mergePlanContentId(files), problems}, files};
 }
 
 function materialize(plan: Omit<MergePlan, 'contentId' | 'problems'>, seed: MergePlanSeed) {
@@ -114,12 +116,21 @@ export function duplicateMergePlan(plan: MergePlan): MergePlan {
 const nextGeneration = (plan: MergePlan) =>
     ({...plan, id: crypto.randomUUID(), previousId: plan.id, createdAt: Math.max(Date.now(), plan.createdAt + 1)});
 
+export const mergePlanConflictResolved = (plan: MergePlan, id: string) =>
+    Object.hasOwn(plan.choices, id) || plan.importedResolutions?.includes(id) === true;
+
+export function saveImportedMergePlan(plan: MergePlan, files: MergePlanFiles, resolutions: readonly string[]) {
+    const importedResolutions = [...new Set([...(plan.importedResolutions ?? []), ...resolutions])];
+    return snapshot({...nextGeneration(plan), edited: true, imported: true, importedResolutions}, files, 0);
+}
+
 export function reviseMergePlan(plan: MergePlan, seed: MergePlanSeed, choices: MergePlanChoices, edited?: MergePlanFiles) {
     const specific = Object.fromEntries(plan.conflicts.flatMap(({id}) => {
         const side = choices[id];
         return side === 'base' || side === 'current' || side === 'incoming' ? [[id, side]] : [];
     }));
-    const next = {...nextGeneration(plan), choices: specific};
+    const importedResolutions = plan.importedResolutions?.filter(id => !Object.hasOwn(specific, id));
+    const next = {...nextGeneration(plan), choices: specific, importedResolutions};
     if (!plan.edited) return materialize(next, seed);
     if (!edited) throw new GitPanelError('versionMissing');
     // Reapply manual changes to the new choices. Never silently replace a hand-edited script.

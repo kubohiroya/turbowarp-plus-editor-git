@@ -63,6 +63,30 @@ test('reports a structural conflict before opening a playtest', t => {
     assert.equal(dialog.querySelector('iframe'), null);
 });
 
+test('observes only a loaded player and clears the state when its frame leaves', t => {
+    const {window, document, close} = fixture();
+    t.after(close);
+    const states: boolean[] = [];
+    const dialog = openProjectVersionPreview(document, 'a'.repeat(40), new ArrayBuffer(8), 'en',
+        {page: 'preview.html', observe: read => states.push(Boolean(read))});
+    const frame = dialog.querySelector('iframe')!;
+    const target = {postMessage() {}};
+    Object.defineProperty(frame, 'contentWindow', {value: target});
+    const post = (data: string, origin = window.location.origin) =>
+        window.dispatchEvent(new window.MessageEvent('message', {source: target as unknown as Window, origin, data}));
+    post('tw-plus/git-preview-loaded');
+    post(PROJECT_VERSION_PREVIEW_READY);
+    post('tw-plus/git-preview-loaded', 'https://other.test');
+    assert.deepEqual(states, []);
+    post('tw-plus/git-preview-loaded');
+    assert.deepEqual(states, [true]);
+    post('tw-plus/git-preview-unloaded');
+    assert.deepEqual(states, [true, false]);
+    dialog.close();
+    post('tw-plus/git-preview-loaded');
+    assert.deepEqual(states, [true, false, false]);
+});
+
 test('the words follow the locale', () => {
     assert.equal(projectVersionPreviewMessages('ja-JP').loadFailed, 'この版の作品を読み込めませんでした。');
     assert.equal(projectVersionPreviewMessages(null).loadFailed, 'This version could not be loaded.');

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {test} from 'node:test';
-import {readFile} from 'node:fs/promises';
+import {readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {chromium, expect} from '@playwright/test';
 import {mergePlanFixture} from './merge-plan-fixture.js';
@@ -8,12 +9,14 @@ import {mergePlanFixture} from './merge-plan-fixture.js';
 const build = process.env.E2E_PROJECT_FOLDER_BUILD;
 const origin = 'http://localhost:41017';
 const prefix = '/turbowarp-plus-editor/';
+const catalogURL = 'https://kubohiroya.github.io/turbowarp-plus-packages/extensions-v1.json';
+const testExtensionURL = 'https://kubohiroya.github.io/turbowarp-test/dist/turbowarp-test.js';
 const mime = {'.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json',
     '.svg': 'image/svg+xml', '.png': 'image/png', '.wav': 'audio/wav', '.wasm': 'application/wasm'};
 
 const options = {skip: !build && 'Set E2E_PROJECT_FOLDER_BUILD to a built Editor with this Git package', timeout: 120_000};
 
-async function start(t, fixture) {
+async function start(t, fixture, testDigest) {
     assert.ok(path.isAbsolute(build));
     const args = ['--enable-experimental-web-platform-features', '--enable-unsafe-swiftshader'];
     const browser = await chromium.launch({channel: 'chromium', headless: true, args});
@@ -30,6 +33,10 @@ async function start(t, fixture) {
         const body = await readFile(file).catch(() => null);
         return route.fulfill(body ? {body, contentType: mime[path.extname(file)] ?? 'application/octet-stream'} : {status: 404});
     });
+    if (testDigest) await context.route(catalogURL, route => route.fulfill({json: {schemaVersion: 1, extensions: [{
+        id: 'kubohiroyatest', url: testExtensionURL, sha256: testDigest, name: 'Test', version: '0.1.0',
+        unsandboxed: 'required', dependencies: [], description: 'Scratch tests', license: 'MPL-2.0'
+    }]}, headers: {'access-control-allow-origin': '*'}}));
     await context.addInitScript(() => {
         if (parent !== window) return;
         let directory;
@@ -93,11 +100,40 @@ async function start(t, fixture) {
     return {page, candidate, createCandidate, play, startPlaytest, open, errors};
 }
 
+const storedGeneration = (page, generationId, withTest = false) => page.evaluate(async ({generationId, withTest}) => {
+    const resultOf = request => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+    // The previous Editor opens this exact version, including on rollback after a test has run.
+    const db = await resultOf(indexedDB.open('turbowarp-plus-editor-merge-plans', 1));
+    let contentId;
+    let project;
+    try {
+        const row = await resultOf(db.transaction('generations').objectStore('generations').get(generationId));
+        contentId = row.plan.contentId;
+        const files = await resultOf(db.transaction('files').objectStore('files').get(contentId));
+        project = JSON.parse(new TextDecoder().decode(files.get('project.source.json')));
+    } finally {
+        db.close();
+    }
+    if (!withTest) return {contentId, project};
+    const results = await resultOf(indexedDB.open('turbowarp-plus-editor-merge-plan-tests', 1));
+    try {
+        const test = await resultOf(results.transaction('testResults').objectStore('testResults').get([generationId, contentId]));
+        return {contentId, project, test};
+    } finally {
+        results.close();
+    }
+}, {generationId, withTest});
+
 test('the Editor creates and duplicates a merge candidate, and both play in fresh, isolated players', options, async t => {
     const fixture = await mergePlanFixture(t, '');
     const before = await fixture.snapshot();
     const {page, candidate, createCandidate, play, errors} = await start(t, fixture);
     await createCandidate();
+    await candidate(1).getByRole('button', {name: 'Run tests for this generation'}).click();
+    await expect(candidate(1)).toContainText('This generation has no tests.');
     await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
     await expect(candidate(2)).toContainText('Copied from Candidate 1');
     const worktreeSteps = () => window.vm.runtime.getSpriteTargetByName('Walker').blocks.getBlock('move').inputs.STEPS;
@@ -106,6 +142,124 @@ test('the Editor creates and duplicates a merge candidate, and both play in fres
     assert.notEqual(await play(2, 1, 25, 120), first);
     assert.equal(await page.evaluate(() => window.vm.runtime.getSpriteTargetByName('Walker').x), 0);
     assert.deepEqual(await page.evaluate(worktreeSteps), savedInput);
+    assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
+const testExtensionPath = process.env.E2E_TEST_EXTENSION_JS;
+test('tests the selected saved generation and reviews its persisted result before merging', {
+    ...options, skip: options.skip || !testExtensionPath && 'Set E2E_TEST_EXTENSION_JS to the official Test extension build'
+}, async t => {
+    const testCode = await readFile(testExtensionPath);
+    const fixture = await mergePlanFixture(t, '', false, testCode);
+    fixture.git('reset', '--hard');
+    await rm(path.join(fixture.project, 'notes.txt'));
+    const before = await fixture.snapshot();
+    const {page, candidate, createCandidate, open, errors} = await start(t, fixture, createHash('sha256').update(testCode).digest('hex'));
+    await createCandidate();
+    const first = candidate(1);
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    const baseGenerationId = await generation.inputValue();
+    const run = first.getByRole('button', {name: 'Run tests for this generation'});
+    await expect(first).toContainText('No tests have been run for this generation.');
+    await run.click();
+    await expect(first).toContainText('Passed 1 · Failed 0', {timeout: 30_000});
+    const base = await storedGeneration(page, baseGenerationId, true);
+    assert.equal(base.test.generationId, baseGenerationId);
+    assert.equal(base.test.contentId, base.contentId);
+    assert.equal(base.test.tests[0].status, 'passed');
+
+    await first.getByRole('button', {name: 'Duplicate'}).click();
+    await expect(candidate(2)).toContainText('No tests have been run for this generation.');
+    await first.getByText('Import a revised candidate', {exact: true}).click();
+    base.project.targets[0].variables.steps[1] = 42;
+    await first.getByLabel('Candidate changes file').setInputFiles({
+        name: 'candidate.json', mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify({formatVersion: 1, baseGenerationId, baseContentId: base.contentId,
+            files: [{path: 'project.source.json', encoding: 'utf8', data: JSON.stringify(base.project)}]}))
+    });
+    await first.getByRole('button', {name: 'Save as new generation', exact: true}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 2');
+    const revisedGenerationId = await generation.inputValue();
+    await expect(first).toContainText('No tests have been run for this generation.');
+    await run.click();
+    await expect(first).toContainText('Passed 0 · Failed 1', {timeout: 30_000});
+    const revised = await storedGeneration(page, revisedGenerationId, true);
+    assert.notEqual(revised.contentId, base.contentId);
+    assert.equal(revised.test.generationId, revisedGenerationId);
+    assert.equal(revised.test.contentId, revised.contentId);
+    assert.equal(revised.test.tests[0].failureCount, 1);
+
+    const copy = candidate(2);
+    const copyGeneration = copy.getByRole('combobox', {name: /^Generation/});
+    const copyId = await copyGeneration.inputValue();
+    await copy.getByText('Import a revised candidate', {exact: true}).click();
+    await copy.getByLabel('Candidate changes file').setInputFiles({
+        name: 'unverified-test.json', mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify({formatVersion: 1, baseGenerationId: copyId, baseContentId: base.contentId,
+            files: [{path: 'extensions/kubohiroyatest.js', encoding: 'utf8', data: '/* Unverified build */'}]}))
+    });
+    await copy.getByRole('button', {name: 'Save as new generation', exact: true}).click();
+    await expect(copyGeneration.locator('option:checked')).toHaveText('Generation 2');
+    await copy.getByRole('button', {name: 'Run tests for this generation'}).click();
+    await expect(copy).toContainText('The saved test extension does not match the trusted catalog.');
+
+    await open();
+    await generation.selectOption({label: 'Generation 1'});
+    await expect(first).toContainText('Passed 1 · Failed 0');
+    await generation.selectOption({label: 'Generation 2'});
+    await first.getByRole('button', {name: 'Finalize this generation…'}).click();
+    const confirm = page.getByRole('dialog', {name: 'Review merge commit'});
+    await expect(confirm).toContainText('Candidate 1 · Generation 2');
+    await expect(confirm).toContainText('Passed 0 · Failed 1');
+    await confirm.getByText('Test details', {exact: true}).click();
+    await expect(confirm.getByText(/Saved steps is 25/)).toBeVisible();
+    await confirm.getByRole('button', {name: 'Cancel'}).click();
+    assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
+test('imports only an approved fix for the selected generation and plays the new generation after reload', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    const before = await fixture.snapshot();
+    const {page, candidate, createCandidate, play, open, errors} = await start(t, fixture);
+    await createCandidate();
+    const first = candidate(1);
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    await first.getByText('Import a revised candidate', {exact: true}).click();
+    const baseGenerationId = await generation.inputValue();
+    const base = await storedGeneration(page, baseGenerationId);
+    const input = first.getByLabel('Candidate changes file');
+    const revised = structuredClone(base.project);
+    revised.targets[1].blocks.move.inputs.STEPS[1][1] = '42';
+    const change = {path: 'project.source.json', encoding: 'utf8', data: JSON.stringify(revised)};
+    const manifest = {formatVersion: 1, baseGenerationId, baseContentId: base.contentId, files: [change]};
+    const load = patch => input.setInputFiles({
+        name: 'candidate.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({...manifest, ...patch}))
+    });
+    const status = page.getByRole('dialog', {name: 'Merge plans'}).getByRole('alert');
+    await load({baseContentId: 'wrong'});
+    await expect(status).toContainText('Select the generation named by the file');
+    await load({files: [{...change, path: 'assets/../project.source.json'}]});
+    await expect(status).toContainText('Choose a version 1 candidate changes JSON file');
+    revised.targets[1].blocks.move.next = 'missing-block';
+    await load({files: [{...change, data: JSON.stringify(revised)}]});
+    await expect(status).toContainText('The imported project has invalid references');
+
+    await load({});
+    await expect(first.getByText('Replace project.source.json')).toBeVisible();
+    await expect(generation.locator('option')).toHaveCount(1);
+    await first.getByRole('button', {name: 'Cancel import', exact: true}).click();
+    await expect(generation.locator('option')).toHaveCount(1);
+    await load({});
+    await first.getByRole('button', {name: 'Save as new generation', exact: true}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 2');
+    await expect(first.getByText('Includes imported changes')).toBeVisible();
+    await open();
+    await generation.selectOption({label: 'Generation 2'});
+    await play(1, 2, 42, 120);
+    await generation.selectOption({label: 'Generation 1'});
+    await play(1, 1, 25, 120);
     assert.deepEqual(await fixture.snapshot(), before);
     assert.deepEqual(errors, []);
 });
@@ -148,6 +302,58 @@ test('conflict choices save new generations, which can be reopened and played af
         await player.getByRole('button', {name: 'Close', exact: true}).click();
     }
     assert.deepEqual(await fixture.snapshot(), afterExternalUpdate);
+    assert.deepEqual(errors, []);
+});
+
+test('reviews the selected tested generation and rejects changes made while confirmation is open', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    fixture.git('reset', '--hard');
+    await rm(path.join(fixture.project, 'notes.txt'));
+    await fixture.put(35, 30);
+    fixture.commit('Change the same block locally');
+    const {page, candidate, createCandidate, play, errors} = await start(t, fixture);
+    await createCandidate();
+    const first = candidate(1);
+    const finalize = first.getByRole('button', {name: 'Finalize this generation…'});
+    const plans = page.getByRole('dialog', {name: 'Merge plans'});
+    const confirm = page.getByRole('dialog', {name: 'Review merge commit'});
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    await finalize.click();
+    await expect(plans.getByRole('alert')).toContainText('Resolve the remaining conflicts');
+    await first.getByText(/Choose versions for conflicting changes/).click();
+    const select = first.getByLabel(/project.source.json.*Walker/);
+    await select.selectOption('incoming');
+    await first.getByRole('button', {name: 'Save as new generation'}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 2');
+    await select.selectOption('current');
+    await first.getByRole('button', {name: 'Save as new generation'}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 3');
+    await generation.selectOption({label: 'Generation 2'});
+    await play(1, 2, 25, 105);
+    const before = await fixture.snapshot();
+    await finalize.click();
+    await expect(confirm).toContainText('Candidate 1 · Generation 2');
+    await expect(confirm).toContainText('project.source.json');
+    await confirm.getByRole('button', {name: 'Cancel'}).click();
+    assert.deepEqual(await fixture.snapshot(), before);
+
+    await finalize.click();
+    await expect(confirm).toBeVisible();
+    fixture.git('update-ref', 'refs/remotes/origin/main', fixture.base);
+    await confirm.getByRole('button', {name: 'Create merge commit'}).click();
+    await expect(plans.getByRole('alert')).toContainText('one of the recorded tips has changed');
+    fixture.git('update-ref', 'refs/remotes/origin/main', fixture.incoming);
+    assert.deepEqual(await fixture.snapshot(), before);
+
+    await finalize.click();
+    await expect(confirm).toBeVisible();
+    const concurrent = path.join(fixture.project, 'added-while-reviewing.txt');
+    await writeFile(concurrent, 'An external editor wrote this file.\n');
+    await confirm.getByRole('button', {name: 'Create merge commit'}).click();
+    await expect(plans.getByRole('alert')).toContainText('clear unsaved and uncommitted changes before merging');
+    assert.equal(await readFile(concurrent, 'utf8'), 'An external editor wrote this file.\n');
+    await rm(concurrent);
+    assert.deepEqual(await fixture.snapshot(), before);
     assert.deepEqual(errors, []);
 });
 

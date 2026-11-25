@@ -35,7 +35,10 @@ export function openProjectVersionEditor(document: Document, archive: ArrayBuffe
     const text = editMessages(locale);
     const session = view.crypto.randomUUID();
     const url = new URL(page, view.location.href);
-    if (url.origin !== view.location.origin) throw new Error('The candidate editor must be on this origin');
+    const origin = view.location.origin;
+    if (url.protocol !== view.location.protocol || url.host !== view.location.host) {
+        throw new Error('The candidate editor must be on this origin');
+    }
     url.searchParams.set('lang', locale);
     for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
     url.searchParams.set(sessionParam, session);
@@ -86,7 +89,7 @@ export function openProjectVersionEditor(document: Document, archive: ArrayBuffe
     let phase: 'waiting' | 'loading' | 'ready' | 'snapshot' | 'saving' = 'waiting';
     let saved: string | undefined;
     const send = (kind: string, extra: object = {}, transfer: Transferable[] = []) =>
-        frame.contentWindow!.postMessage({kind: protocol + kind, session, ...extra}, url.origin, transfer);
+        frame.contentWindow!.postMessage({kind: protocol + kind, session, ...extra}, origin, transfer);
     finish.onclick = () => {
         if (phase !== 'ready') return;
         phase = 'snapshot';
@@ -107,7 +110,7 @@ export function openProjectVersionEditor(document: Document, archive: ArrayBuffe
             status.textContent = message;
         };
         const receive = async (event: MessageEvent) => {
-            if (event.source !== frame.contentWindow || event.origin !== url.origin || event.data?.session !== session) return;
+            if (event.source !== frame.contentWindow || event.origin !== origin || event.data?.session !== session) return;
             const {kind, before, after} = event.data;
             if (kind === protocol + 'ready' && phase === 'waiting') {
                 phase = 'loading';

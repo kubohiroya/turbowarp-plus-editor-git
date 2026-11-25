@@ -1,10 +1,12 @@
 import {observePlaytest, resumeScriptEdit, type MergePlaytestRequest, type PlaytestStop} from './merge-playtest.js';
 import {openProjectVersionEditor} from './project-version-editor.js';
 import type {ProjectVersionZip} from './project-version-preview.js';
+import {readPlaytestObservation, type ObservationTarget, type PlaytestReadRequest} from './merge-playtest-observation.js';
 
 type Blocks = {_blocks: Record<string, unknown>; resetCache(): void};
-type Thread = {stack: Array<string | null>; blockContainer: Blocks};
-type Target = {id: string; isOriginal: boolean; getName(): string; blocks: Blocks};
+type Thread = {stack: Array<string | null>; blockContainer: Blocks; target: Target; topBlock: string;
+    peekStack(): string | null; updateMonitor?: boolean; status?: number};
+type Target = ObservationTarget & {blocks: Blocks};
 type Observer = ReturnType<typeof observePlaytest>;
 
 export interface PlaytestVM {
@@ -18,18 +20,22 @@ export interface PlaytestVM {
     toJSON(target?: string, options?: {allowOptimization: boolean}): string;
     serializeAssets(): Array<{fileName: string; fileContent: Uint8Array}>;
     setEditingTarget(id: string): void;
+    on?(event: 'PROJECT_CHANGED', listener: () => void): void;
 }
 
 const findTarget = (vm: PlaytestVM, name: string) =>
     vm.runtime.targets.find(target => target.isOriginal && target.getName() === name);
 
 export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: MergePlaytestRequest,
-    {player, deserialize, zip: Zip}: {
+    {player, deserialize, zip: Zip, trackEdits}: {
         player: HTMLElement;
         deserialize(blocks: Record<string, unknown>): Record<string, unknown>;
         zip: ProjectVersionZip;
+        trackEdits?: boolean;
     }) {
-    if (!request.conflicts.length) return;
+    let modified = false;
+    if (trackEdits) vm.on?.('PROJECT_CHANGED', () => {modified = true;});
+    if (!request.conflicts.length) return (query: PlaytestReadRequest) => readPlaytestObservation(vm, query, undefined, modified);
     if (!vm.runtime.setBlockExecutionObserver) throw new Error('Playtest execution observer is unavailable');
     const {document} = view;
     const params = new URLSearchParams(view.location.search);
@@ -90,6 +96,7 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
                 }
                 target.blocks._blocks = blockTable;
                 target.blocks.resetCache();
+                modified ||= changedIds.size > 0;
                 return stop.id;
             });
             if (adopted) {
@@ -105,6 +112,11 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
         } finally {
             edit.disabled = false;
         }
+    };
+    return (query: PlaytestReadRequest) => {
+        const stop = observer.stopped;
+        const thread = vm.runtime.threads.find(thread => thread === observer.stoppedThread);
+        return readPlaytestObservation(vm, query, stop && thread ? {stop, thread} : undefined, modified);
     };
 }
 

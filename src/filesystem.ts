@@ -5,7 +5,9 @@ export class GitPanelError extends Error {
         'switchUnsafe' | 'branchExists' | 'branchConflict' | 'pullRequestBranch' | 'branchName' | 'locked' |
         'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'publicationConflict' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe' | 'notEmpty' |
         'mergePlanNoBase' | 'mergePlanMultipleBases' | 'mergePlanEditUnsupported' | 'mergePlanEditUnchanged' |
-        'mergePlanEditConflict', message: string = code) {
+        'mergePlanEditConflict' | 'mergePlanImportFormat' | 'mergePlanImportBase' | 'mergePlanImportInvalid' |
+        'mergePlanImportUnchanged' | 'mergeCommitUnresolved' | 'mergeCommitDirty' | 'mergeCommitTipsChanged' |
+        'mergeCommitOutsideProject' | 'mergeCommitIntegrated' | 'mergeCommitInvalid', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }

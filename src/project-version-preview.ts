@@ -1,10 +1,15 @@
 import {dialogAction, dialogActions} from '@kubohiroya/turbowarp-plus-editor-windows';
 import type {MergePlaytestRequest} from './merge-playtest.js';
+import type {PlaytestObserver, PlaytestReadRequest} from './merge-playtest-observation.js';
+import {isProjectVersionEditor} from './project-version-editor.js';
 export {isProjectVersionEditor, openProjectVersionEditor, receiveProjectVersionEditor} from './project-version-editor.js';
 export type {MergePlanCodeEdit} from './merge-plan.js';
 export {connectMergePlaytest, focusPlaytestStop} from './merge-playtest-view.js';
 export type {MergePlaytestRequest, PlaytestStop} from './merge-playtest.js';
 export type {PlaytestVM} from './merge-playtest-view.js';
+export type {MergePlanSharePort} from './merge-plan-sharing.js';
+export {registerPlaytestDebugger} from './merge-playtest-observation.js';
+export type {PlaytestObserver, PlaytestDebugger, PlaytestReadRequest} from './merge-playtest-observation.js';
 
 /**
  * Shows a past version of the project, read from the repository's history, in a player inside a
@@ -18,6 +23,12 @@ export type {PlaytestVM} from './merge-playtest-view.js';
 
 export const PROJECT_VERSION_PREVIEW_READY = 'tw-plus/git-preview-ready';
 export const PROJECT_VERSION_PREVIEW_PROJECT = 'tw-plus/git-preview-project';
+const previewLoaded = 'tw-plus/git-preview-loaded';
+const previewUnloaded = 'tw-plus/git-preview-unloaded';
+const previewRead = 'tw-plus/git-preview-read';
+const observeParam = 'twPlusObserveMergePlaytest';
+export const isObservedProjectVersion = (view: Window) => view.parent !== view && !isProjectVersionEditor(view) &&
+    new URLSearchParams(view.location.search).get(observeParam) === '1';
 
 const japanese = (locale: string | null | undefined) => /^ja(?:-|$)/i.test(locale || '');
 
@@ -42,10 +53,11 @@ export interface ProjectVersionPreviewOptions {
     /** The caller's localized label for a preview outside the commit history. */
     title?: string;
     playtest?: MergePlaytestRequest;
+    observe?: PlaytestObserver;
 }
 
 export function openProjectVersionPreview(document: Document, oid: string, archive: ArrayBuffer, locale: string,
-    {page, params = {}, title, playtest}: ProjectVersionPreviewOptions) {
+    {page, params = {}, title, playtest, observe}: ProjectVersionPreviewOptions) {
     const text = projectVersionPreviewMessages(locale);
     const preview = document.createElement('dialog');
     const heading = document.createElement('h2');
@@ -58,8 +70,11 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
     const frame = document.createElement('iframe');
     const view = document.defaultView!;
     const url = new URL(page, view.location.href);
+    const origin = view.location.origin;
+    if (url.protocol !== view.location.protocol || url.host !== view.location.host) throw new Error('Unexpected player origin');
     url.searchParams.set('lang', locale);
     for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
+    if (observe) url.searchParams.set(observeParam, '1');
     frame.src = url.href;
     frame.title = heading.textContent;
     frame.allow = 'autoplay; fullscreen';
@@ -79,16 +94,56 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
         preview.append(summary, list);
     } else preview.append(frame);
     preview.append(dialogActions(document, dialogAction(close, 'close')));
+    const pending = new Set<() => void>();
+    const unavailable = () => {
+        observe?.(null);
+        pending.forEach(cancel => cancel());
+    };
     const dispose = () => {
         view.removeEventListener('message', send);
+        unavailable();
         preview.remove();
     };
+    const read = (query: PlaytestReadRequest) => new Promise<unknown>((resolve, reject) => {
+        if (!preview.open) {
+            unavailable();
+            reject(new Error('The playtest has closed.'));
+            return;
+        }
+        const {port1, port2} = new MessageChannel();
+        const fail = () => reject(new Error('The playtest could not be observed.'));
+        const cancel = () => {clean(); fail();};
+        const timer = view.setTimeout(cancel, 2000);
+        const clean = () => {
+            pending.delete(cancel);
+            view.clearTimeout(timer);
+            port1.close();
+        };
+        pending.add(cancel);
+        port1.onmessage = ({data}) => {
+            clean();
+            if (!preview.open) unavailable();
+            if (preview.open && data?.ok === true) resolve(data.observation);
+            else fail();
+        };
+        try {
+            frame.contentWindow!.postMessage({kind: previewRead, query}, origin, [port2]);
+        } catch {
+            port2.close();
+            cancel();
+        }
+    });
+    let sent = false;
     const send = (event: MessageEvent) => {
-        if (event.source !== frame.contentWindow || event.origin !== url.origin ||
-            event.data !== PROJECT_VERSION_PREVIEW_READY) return;
-        view.removeEventListener('message', send);
-        frame.contentWindow!.postMessage({kind: PROJECT_VERSION_PREVIEW_PROJECT, archive, ...(playtest && {playtest})},
-            url.origin, [archive]);
+        if (event.source !== frame.contentWindow || event.origin !== origin) return;
+        if (!sent && event.data === PROJECT_VERSION_PREVIEW_READY) {
+            sent = true;
+            frame.contentWindow!.postMessage({kind: PROJECT_VERSION_PREVIEW_PROJECT, archive, ...(playtest && {playtest})}, origin, [archive]);
+        } else if (sent && event.data === previewLoaded && preview.open) {
+            observe?.(read);
+        } else if (sent && (event.data === previewUnloaded || event.data === PROJECT_VERSION_PREVIEW_READY)) {
+            unavailable();
+        }
     };
     preview.addEventListener('close', dispose, {once: true});
     view.addEventListener('message', send);
@@ -168,6 +223,7 @@ export interface ProjectVersionPreviewPlayer {
     loading?(): void;
     /** Marks loading as finished, with whether it succeeded. */
     loaded?(success: boolean): void;
+    inspect?(query: PlaytestReadRequest): unknown;
     /** Shows the message when the version could not be loaded. */
     showError(message: string): void;
 }
@@ -180,6 +236,7 @@ export interface ProjectVersionPreviewPlayer {
  */
 export function receiveProjectVersionPreview(view: Window, player: ProjectVersionPreviewPlayer) {
     const origin = view.location.origin;
+    let loaded = false;
     const load = async (event: MessageEvent) => {
         if (event.source !== view.parent || event.origin !== origin || event.data?.kind !== PROJECT_VERSION_PREVIEW_PROJECT ||
             !(event.data.archive instanceof ArrayBuffer)) return;
@@ -188,12 +245,34 @@ export function receiveProjectVersionPreview(view: Window, player: ProjectVersio
         try {
             await player.load(event.data.archive, event.data.playtest);
             player.loaded?.(true);
+            loaded = true;
+            view.parent.postMessage(previewLoaded, origin);
         } catch {
             player.loaded?.(false);
             player.showError(projectVersionPreviewMessages(new URLSearchParams(view.location.search).get('lang')).loadFailed);
         }
     };
     view.addEventListener('message', load);
+    const inspect = (event: MessageEvent) => {
+        if (event.source !== view.parent || event.origin !== origin || event.data?.kind !== previewRead) return;
+        const reply = event.ports[0];
+        if (!reply) return;
+        try {
+            if (!loaded || !player.inspect || !isObservedProjectVersion(view)) throw new Error('Player unavailable');
+            reply.postMessage({ok: true, observation: player.inspect(event.data.query)});
+        } catch {
+            reply.postMessage({ok: false});
+        } finally {
+            reply.close();
+        }
+    };
+    view.addEventListener('message', inspect);
+    const unload = () => view.parent.postMessage(previewUnloaded, origin);
+    view.addEventListener('pagehide', unload, {once: true});
     view.parent.postMessage(PROJECT_VERSION_PREVIEW_READY, origin);
-    return () => view.removeEventListener('message', load);
+    return () => {
+        view.removeEventListener('message', load);
+        view.removeEventListener('message', inspect);
+        view.removeEventListener('pagehide', unload);
+    };
 }

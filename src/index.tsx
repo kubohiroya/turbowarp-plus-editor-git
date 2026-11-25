@@ -41,6 +41,10 @@ export {createEditorBlockLocator} from './editor-block-locator.js';
 import {createEditorBlockLocator} from './editor-block-locator.js';
 import type {LocatorVM} from './editor-block-locator.js';
 import {MergePlanPanel} from './merge-plan-panel.js';
+import {confirmMergeCommit} from './merge-commit-dialog.js';
+import type {RunMergePlanTests} from './merge-plan-tests.js';
+import type {MergePlanSharePort} from './merge-plan-sharing.js';
+import type {PlaytestObserver} from './merge-playtest-observation.js';
 import {mergePlanPreviewFiles, type MergePlanCodeEdit} from './merge-plan.js';
 import {canPersistMergePlans, createIndexedDbMergePlanJournal, createMemoryMergePlanJournal} from './merge-plan-journal.js';
 
@@ -84,7 +88,9 @@ export interface GitHost {
     restoreProjectVersions?: boolean;
     validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
     previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
-        title?: string; guard?: () => void; playtest?: import('./merge-playtest.js').MergePlaytestRequest}): Promise<void>;
+        title?: string; guard?: () => void; playtest?: import('./merge-playtest.js').MergePlaytestRequest; observe?: PlaytestObserver}): Promise<void>;
+    shareMergePlans?: MergePlanSharePort;
+    runMergePlanTests?: RunMergePlanTests;
     editProjectVersion?(request: {title: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
         guard(): void; save(edit: MergePlanCodeEdit): Promise<string>}): Promise<string | undefined>;
     isProjectDirty(): boolean;
@@ -1033,6 +1039,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
                         <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
+                            share={host.shareMergePlans} validate={host.validateProjectVersion} runTests={host.runMergePlanTests}
                             journal={persistentMergePlans ? mergePlanJournals.persistent! : mergePlanJournals.memory}
                             branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}
                             scope={async () => {
@@ -1047,11 +1054,11 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 guard();
                                 return plan;
                             }}
-                            play={async (plan, files, title, playtest) => {
+                            play={async (plan, files, title, playtest, observe) => {
                                 const {folder, guard} = await projectVersionScope(state.repository!, false);
                                 if (folder !== plan.folder) throw new GitPanelError('changed');
                                 try {
-                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard, playtest,
+                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard, playtest, observe,
                                         files: mergePlanPreviewFiles(files)});
                                 } catch (error) {
                                     if (error instanceof GitPanelError) throw error;
@@ -1062,6 +1069,29 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 const {folder, guard} = await projectVersionScope(state.repository!, false);
                                 if (folder !== plan.folder) throw new GitPanelError('changed');
                                 return host.editProjectVersion!({title, files: mergePlanPreviewFiles(files), guard, save});
+                            })}
+                            finalize={host.localWrite && host.validateProjectVersion && (async (plan, files, title, result) => {
+                                const repository = state.repository!;
+                                const {folder, guard} = await projectVersionScope(repository, false);
+                                const validate = host.validateProjectVersion!;
+                                const check = () => {
+                                    guard();
+                                    if (folder !== plan.folder) throw new GitPanelError('changed');
+                                    if (host.isProjectDirty() || host.isProjectRunning?.()) throw new GitPanelError('mergeCommitDirty');
+                                };
+                                check();
+                                const changes = await repository.prepareMergeCommit(plan, files, validate);
+                                check();
+                                const message = await confirmMergeCommit(document, locale, title, plan, changes, labels, result);
+                                if (message === undefined) return;
+                                check();
+                                const oid = await repository.localOperation({kind: 'finalizeMergePlan', plan, files,
+                                    message, validate, author: host.localWrite?.author?.()}, check);
+                                if (alive.current && current.current.repository === repository) {
+                                    setState(previous => ({...previous, notice: labels.mergeCommitDone}));
+                                    void controller.refresh(true);
+                                }
+                                return oid;
                             })}/>}
                 </div>
                 {!slot && <CloseButton label={labels.close} onClick={closePanel}/>}
@@ -1071,7 +1101,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             {state.error && <p className="twgit-error" role="alert">{state.error}</p>}
             {state.notice && <div className="twgit-context">
                 <span role="status">{state.notice}</span>
-                {state.project !== null && (state.notice === labels.pulledProject || state.notice === labels.switched || state.notice === labels.versionRestored) &&
+                {state.project !== null && (state.notice === labels.pulledProject || state.notice === labels.switched ||
+                    state.notice === labels.versionRestored || state.notice === labels.mergeCommitDone) &&
                     <button type="button" className="twgit-panel-action" disabled={state.busy} onClick={() => controller.reload()}>
                         <PanelIcon name="reload"/>{labels.reload}</button>}
             </div>}
