@@ -161,17 +161,18 @@ export function focusPlaytestStop(view: Window, vm: PlaytestVM, stop: PlaytestSt
                 width: canvas.width + 'px', height: canvas.height + 'px'});
             Object.assign(horizontal.style, {left: '0', right: '0', top: (box.top - canvas.top) + 'px', height: box.height + 'px'});
             Object.assign(vertical.style, {top: '0', bottom: '0', left: (box.left - canvas.left) + 'px', width: box.width + 'px'});
-            const marker = (element: HTMLElement, id?: string, offset = 0) => {
-                const bounds = id ? editor.getBlockById(id)?.getSvgRoot()?.getBoundingClientRect() : undefined;
+            const marker = (element: HTMLElement, id?: string, gap = 5) => {
+                // The SVG group also contains the blocks below it. Use only this block's outline.
+                const outline = id && editor.getBlockById(id)?.getSvgRoot()?.querySelector(':scope > .blocklyBlockBackground');
+                const bounds = outline ? outline.getBoundingClientRect() : undefined;
                 element.hidden = !bounds;
                 if (bounds) {
-                    const x = Math.max(0, bounds.left - canvas.left - element.offsetWidth - 5);
-                    Object.assign(element.style, {left: x + 'px',
-                        top: (bounds.top - canvas.top + bounds.height / 2 + offset) + 'px'});
+                    Object.assign(element.style, {right: (canvas.right - bounds.left + gap) + 'px',
+                        top: (bounds.top - canvas.top + bounds.height / 2) + 'px'});
                 }
             };
-            marker(previous, stop.previous, stop.previous === stop.next ? -12 : 0);
-            marker(next, stop.next, stop.previous === stop.next ? 12 : 0);
+            marker(next, stop.next);
+            marker(previous, stop.previous, stop.previous === stop.next ? next.offsetWidth + 10 : 5);
         }
         view.requestAnimationFrame(update);
     };
