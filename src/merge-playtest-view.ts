@@ -1,5 +1,6 @@
 import {observePlaytest, resumeScriptEdit, type MergePlaytestRequest, type PlaytestStop} from './merge-playtest.js';
 import {openProjectVersionEditor} from './project-version-editor.js';
+import type {ProjectVersionZip} from './project-version-preview.js';
 
 type Blocks = {_blocks: Record<string, unknown>; resetCache(): void};
 type Thread = {stack: Array<string | null>; blockContainer: Blocks};
@@ -14,7 +15,8 @@ export interface PlaytestVM {
         ioDevices?: {clock: {pause(): void; resume(): void}};
         updateCurrentMSecs?(): void;
     };
-    saveProjectSb3(type: 'arraybuffer', options: {allowOptimization: false}): Promise<ArrayBuffer>;
+    toJSON(target?: string, options?: {allowOptimization: boolean}): string;
+    serializeAssets(): Array<{fileName: string; fileContent: Uint8Array}>;
     setEditingTarget(id: string): void;
 }
 
@@ -22,7 +24,11 @@ const findTarget = (vm: PlaytestVM, name: string) =>
     vm.runtime.targets.find(target => target.isOriginal && target.getName() === name);
 
 export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: MergePlaytestRequest,
-    deserialize: (blocks: Record<string, unknown>) => Record<string, unknown>) {
+    {player, deserialize, zip: Zip}: {
+        player: HTMLElement;
+        deserialize(blocks: Record<string, unknown>): Record<string, unknown>;
+        zip: ProjectVersionZip;
+    }) {
     if (!request.conflicts.length) return;
     if (!vm.runtime.setBlockExecutionObserver) throw new Error('Playtest execution observer is unavailable');
     const {document} = view;
@@ -42,6 +48,7 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
     document.body.append(toolbar);
     const observer = observePlaytest(request.conflicts, () => {
         vm.runtime.ioDevices?.clock.pause();
+        player.inert = true;
         toolbar.hidden = false;
         queueMicrotask(() => edit.focus());
     });
@@ -51,7 +58,11 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
         if (!stop) return;
         edit.disabled = true;
         try {
-            const archive = await vm.saveProjectSb3('arraybuffer', {allowOptimization: false});
+            // Keep block IDs stable across the two VM instances for selection and continuation.
+            const zip = new Zip();
+            zip.file('project.json', vm.toJSON(undefined, {allowOptimization: false}));
+            for (const {fileName, fileContent} of vm.serializeAssets()) zip.file(fileName, fileContent);
+            const archive = await zip.generateAsync({type: 'arraybuffer'});
             const adopted = await openProjectVersionEditor(document, archive, locale, {
                 page: view.location.pathname, params: Object.fromEntries(params), title: edit.textContent!, stop
             }, async ({before, after}) => {
@@ -85,6 +96,7 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
                 vm.runtime.updateCurrentMSecs?.();
                 vm.runtime.ioDevices?.clock.resume();
                 observer.resume();
+                player.inert = false;
                 toolbar.hidden = true;
             }
         } catch {
