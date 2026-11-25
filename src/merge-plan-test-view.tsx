@@ -12,54 +12,64 @@ export function MergePlanTestView({document, locale, plan, journal, busy, run}: 
     run(signal: AbortSignal): Promise<MergePlanTestResult | undefined>;
 }) {
     const text = mergePlanTestText(locale);
-    const [result, setResult] = useState<MergePlanTestResult | null>();
+    const [history, setHistory] = useState<{id: string; results: MergePlanTestResult[]}>();
+    const [change, setChange] = useState(0);
     const [readError, setReadError] = useState(false);
-    const [running, setRunning] = useState(false);
-    const [stopped, setStopped] = useState(false);
+    const [running, setRunning] = useState<string>();
     const summary = useRef<HTMLDivElement>(null);
     const controller = useRef<AbortController>();
     useEffect(() => {
-        let active = true;
-        void journal.testResult(plan).then(value => {
-            if (active) setResult(value);
-        }, () => {
-            if (active) setReadError(true);
-        });
         return () => {
-            active = false;
             controller.current?.abort();
             controller.current = undefined;
         };
-    }, [journal, plan]);
+    }, []);
     useEffect(() => {
-        if (result !== undefined) summary.current?.replaceChildren(createMergePlanTestSummary(document, locale, result));
-    }, [document, locale, result]);
+        let active = true;
+        setReadError(false);
+        void journal.testHistory(plan).then(results => {
+            if (active) setHistory({id: plan.id, results});
+        }, () => {
+            if (active) setReadError(true);
+        });
+        return () => {active = false;};
+    }, [journal, plan, change]);
+    const results = history?.id === plan.id ? history.results : undefined;
+    useEffect(() => {
+        const [latest, ...previous] = results ?? [];
+        const elements: HTMLElement[] = results ? [createMergePlanTestSummary(document, locale, latest ?? null)] : [];
+        if (previous.length) {
+            const history = document.createElement('details');
+            const label = document.createElement('summary');
+            label.textContent = text.history;
+            history.append(label, ...previous.map(result => createMergePlanTestSummary(document, locale, result)));
+            elements.push(history);
+        }
+        summary.current?.replaceChildren(...elements);
+    }, [document, locale, results, text.history]);
 
     return <div className="twgit-merge-tests">
-        <button type="button" disabled={busy || result === undefined && !readError} onClick={async () => {
+        <button type="button" disabled={busy || !!running || results === undefined && !readError} onClick={async () => {
             if (controller.current) return;
             const current = controller.current = new AbortController();
-            setRunning(true);
-            setStopped(false);
+            setRunning(plan.id);
             try {
                 const fresh = await run(current.signal);
                 if (controller.current === current && fresh) {
-                    setResult(fresh);
+                    setChange(value => value + 1);
                     setReadError(false);
                 }
             } finally {
                 if (controller.current === current) {
                     controller.current = undefined;
-                    setRunning(false);
-                    setStopped(current.signal.aborted);
+                    setRunning(undefined);
                 }
             }
         }}>{text.run}</button>
         {running && <button type="button" onClick={() => controller.current?.abort()}>{text.cancel}</button>}
-        {running && <p role="status">{text.running}</p>}
-        {stopped && <p role="status">{text.cancelled}</p>}
+        {running === plan.id && <p role="status">{text.running}</p>}
         {readError ? <p role="status">{text.unavailable}</p> :
-            result === undefined && <p role="status">{text.loading}</p>}
+            results === undefined && <p role="status">{text.loading}</p>}
         <div ref={summary}/>
     </div>;
 }

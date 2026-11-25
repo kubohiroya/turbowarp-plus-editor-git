@@ -13,6 +13,8 @@ interface RunnerReport {
 export type RunMergePlanTests = (files: MergePlanFiles, signal: AbortSignal) => Promise<RunnerReport>;
 
 export interface MergePlanTestResult {
+    runId?: string;
+    planId?: string;
     generationId: string;
     contentId: string;
     finishedAt: number;
@@ -21,13 +23,16 @@ export interface MergePlanTestResult {
     tests: ReadonlyArray<{name: string; target: string; blockId: string; status: TestStatus; message?: string;
         failures: readonly string[]; failureCount: number}>;
     error?: string;
+    cancelled?: boolean;
 }
 
 const emptyCounts = (): Counts => ({passed: 0, failed: 0, 'timed-out': 0, error: 0});
 const shortText = (value: string) => value.slice(0, 512);
 
-export function mergePlanTestResult(plan: MergePlan, report?: RunnerReport, error?: string): MergePlanTestResult {
+export function mergePlanTestResult(plan: MergePlan, report?: RunnerReport, error?: string, cancelled = false): MergePlanTestResult {
     return {
+        runId: crypto.randomUUID(),
+        planId: plan.planId,
         generationId: plan.id,
         contentId: plan.contentId,
         finishedAt: Date.now(),
@@ -40,7 +45,8 @@ export function mergePlanTestResult(plan: MergePlan, report?: RunnerReport, erro
                 failures: failed.slice(0, 10).map(({kind, blockId, message}) =>
                     [kind, blockId, message && shortText(message)].filter(Boolean).join(' · '))};
         }) ?? [],
-        ...(error !== undefined && {error: shortText(error)})
+        ...(error !== undefined && {error: shortText(error)}),
+        ...(cancelled && {cancelled: true})
     };
 }
 
@@ -50,14 +56,14 @@ export const mergePlanTestText = (locale: string) => locale.startsWith('ja') ? {
     missing: 'この世代のテストは未実行です。', empty: 'この世代にテストはありません。', error: 'テストを実行できませんでした。',
     counts: (result: Counts) => `成功 ${result.passed} · 失敗 ${result.failed} · 時間切れ ${result['timed-out']} · エラー ${result.error}`,
     status: {passed: '成功', failed: '失敗', 'timed-out': '時間切れ', error: 'エラー'},
-    failedChecks: (count: number) => `失敗したチェック ${count} 件`, details: 'テストの詳細'
+    failedChecks: (count: number) => `失敗したチェック ${count} 件`, details: 'テストの詳細', history: '以前の実行結果'
 } : {
     title: 'Generation test results', run: 'Run tests for this generation', cancel: 'Stop tests', cancelled: 'Test run stopped.',
     running: 'Testing the saved generation…', loading: 'Reading test results…', unavailable: 'Could not read the saved test results.',
     missing: 'No tests have been run for this generation.', empty: 'This generation has no tests.', error: 'The test run could not complete.',
     counts: (result: Counts) => `Passed ${result.passed} · Failed ${result.failed} · Timed out ${result['timed-out']} · Errors ${result.error}`,
     status: {passed: 'Passed', failed: 'Failed', 'timed-out': 'Timed out', error: 'Error'},
-    failedChecks: (count: number) => `Failed checks: ${count}`, details: 'Test details'
+    failedChecks: (count: number) => `Failed checks: ${count}`, details: 'Test details', history: 'Earlier test runs'
 };
 
 export function createMergePlanTestSummary(document: Document, locale: string, result: MergePlanTestResult | null) {
@@ -67,7 +73,7 @@ export function createMergePlanTestSummary(document: Document, locale: string, r
     const heading = document.createElement('h3');
     heading.textContent = text.title;
     const summary = document.createElement('p');
-    summary.textContent = result === null ? text.missing : result.error !== undefined ? text.error :
+    summary.textContent = result === null ? text.missing : result.cancelled ? text.cancelled : result.error !== undefined ? text.error :
         result.total ? text.counts(result.counts) : text.empty;
     section.append(heading, summary);
     if (!result) return section;

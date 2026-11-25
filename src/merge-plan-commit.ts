@@ -1,6 +1,7 @@
 import * as git from 'isomorphic-git';
 import {errorCode, GitPanelError, pathParts} from './filesystem.js';
-import {mergePlanConflictResolved, mergePlanContentId, mergePlanPreviewFiles, type MergePlan, type MergePlanFiles} from './merge-plan.js';
+import {mergePlanConflictResolved, mergePlanContentId, mergePlanPreviewFiles, mergeRepositoryFilePrefix,
+    type MergePlan, type MergePlanFiles} from './merge-plan.js';
 import {checkProject, parseSourceProject} from './project-source-merge.js';
 import {projectScope} from './project-version.js';
 
@@ -62,6 +63,7 @@ export async function assertMergeCommitClean(options: ReadOptions, prepared = fa
 /** A merge records both parents for the repository, so do not silently discard an incoming change outside the plan. */
 async function currentFiles(options: ReadOptions, plan: MergePlan, prefix: string) {
     const paths = new Map<string, string>();
+    const outside = new Set<string>();
     const {base, current, incoming} = plan.inputs;
     await git.walk({...options, trees: [base, current.oid, incoming.oid].map(ref => git.TREE({ref})),
         map: async (path, [old, ours, theirs]) => {
@@ -80,11 +82,19 @@ async function currentFiles(options: ReadOptions, plan: MergePlan, prefix: strin
             const version = async (entry: git.WalkerEntry | null) =>
                 entry ? `${await entry.mode()}:${await entry.oid()}` : null;
             const [baseVersion, currentVersion, incomingVersion] = await Promise.all([old, ours, theirs].map(version));
-            if (incomingVersion === baseVersion || incomingVersion === currentVersion) return null;
+            if (incomingVersion === baseVersion) return null;
+            if (!plan.repositoryComplete && incomingVersion === currentVersion) return null;
             if (types.every(type => !type || type === 'tree')) return true;
-            throw new GitPanelError('mergeCommitOutsideProject');
+            if (!plan.repositoryComplete) throw new GitPanelError('mergeCommitOutsideProject');
+            for (const entry of [old, ours, theirs]) {
+                if (entry && (await entry.type() !== 'blob' || await entry.mode() !== 0o100644))
+                    throw new GitPanelError('unsupported');
+            }
+            outside.add(path);
+            if (ours) paths.set(path, await ours.oid());
+            return true;
         }});
-    return paths;
+    return {paths, outside};
 }
 
 export async function prepareMergeCommit(options: ReadOptions, plan: MergePlan, files: MergePlanFiles,
@@ -106,22 +116,25 @@ export async function prepareMergeCommit(options: ReadOptions, plan: MergePlan, 
     }
     await assertMergeCommitClean(options);
     const prefix = folder ? folder + '/' : '';
-    const old = await currentFiles(options, plan, prefix);
+    const {paths: old, outside} = await currentFiles(options, plan, prefix);
     const modified = new Map<string, Change>();
     const sorted = [...files.keys()].sort();
     for (const relative of sorted) {
-        if (!relative || projectScope(relative) !== relative) throw new GitPanelError('mergeCommitInvalid');
+        const outsideProject = relative.startsWith(mergeRepositoryFilePrefix);
+        const path = outsideProject ? relative.slice(mergeRepositoryFilePrefix.length) : prefix + relative;
+        if (!path || (outsideProject && !outside.has(path)) || projectScope(path) !== path)
+            throw new GitPanelError('mergeCommitInvalid');
         const parts = relative.split('/');
         if (parts.some((_, index) => index > 0 && files.has(parts.slice(0, index).join('/')))) {
             throw new GitPanelError('mergeCommitInvalid');
         }
-        const path = prefix + relative;
         const before = old.get(path) ?? null;
         const {oid: after} = await git.hashBlob({object: files.get(relative)!});
         old.delete(path);
         if (before !== after) modified.set(path, {path, relative, before, after});
     }
-    for (const [path, before] of old) modified.set(path, {path, relative: path.slice(prefix.length), before, after: null});
+    for (const [path, before] of old) modified.set(path, {path,
+        relative: outside.has(path) ? mergeRepositoryFilePrefix + path : path.slice(prefix.length), before, after: null});
     const changes = [...modified.values()].sort((a, b) => a.path < b.path ? -1 : 1);
     await assertNewPathsFree(options, changes);
     return changes;

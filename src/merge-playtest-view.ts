@@ -1,4 +1,5 @@
-import {observePlaytest, resumeScriptEdit, type MergePlaytestRequest, type PlaytestStop} from './merge-playtest.js';
+import {observePlaytest, PLAYTEST_COMPARE, PLAYTEST_EDIT_ADOPTED, resumeScriptEdit, type MergePlaytestRequest, type PlaytestStop}
+    from './merge-playtest.js';
 import {openProjectVersionEditor} from './project-version-editor.js';
 import type {ProjectVersionZip} from './project-version-preview.js';
 import {readPlaytestObservation, type ObservationTarget, type PlaytestReadRequest} from './merge-playtest-observation.js';
@@ -70,13 +71,18 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
             for (const {fileName, fileContent} of vm.serializeAssets()) zip.file(fileName, fileContent);
             const archive = await zip.generateAsync({type: 'arraybuffer'});
             const adopted = await openProjectVersionEditor(document, archive, locale, {
-                page: view.location.pathname, params: Object.fromEntries(params), title: edit.textContent!, stop
+                page: view.location.pathname, params: Object.fromEntries(params), title: edit.textContent!, stop,
+                compare: request.canCompare ? () => view.parent.postMessage({kind: PLAYTEST_COMPARE, id: stop.id},
+                    view.location.origin) : undefined
             }, async ({before, after}) => {
                 const target = findTarget(vm, stop.target);
                 const replacement = resumeScriptEdit(before, after, stop);
                 if (!target || !replacement || observer.stopped !== stop) throw new Error('Invalid continuation');
                 const {blocks, changedIds, affected} = replacement;
                 const serializedIds = new Set(Object.keys(blocks));
+                // The runtime deserializer mutates its input. Save the changed blocks in their SB3 form.
+                const changes = request.canSaveGeneration && changedIds.size ? structuredClone(Object.fromEntries([...changedIds]
+                    .map(id => [id, Object.hasOwn(blocks, id) ? blocks[id] : null]))) : undefined;
                 const decoded = deserialize(blocks);
                 const active = vm.runtime.threads.filter(thread => thread.blockContainer === target.blocks);
                 if (active.some(thread => thread.stack.some(id => id !== null && changedIds.has(id) && !Object.hasOwn(decoded, id)) ||
@@ -97,6 +103,7 @@ export function connectMergePlaytest(view: Window, vm: PlaytestVM, request: Merg
                 target.blocks._blocks = blockTable;
                 target.blocks.resetCache();
                 modified ||= changedIds.size > 0;
+                if (changes) view.parent.postMessage({kind: PLAYTEST_EDIT_ADOPTED, id: stop.id, blocks: changes}, view.location.origin);
                 return stop.id;
             });
             if (adopted) {

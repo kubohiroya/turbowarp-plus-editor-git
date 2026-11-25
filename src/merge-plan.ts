@@ -2,7 +2,8 @@ import {GitPanelError} from './filesystem.js';
 import {
     mergeProjectFolder, resolveProjectFolder, type FileVersions, type FolderConflict, type FolderMergeResult
 } from './project-folder-merge.js';
-import {checkProject, formatProjectSource, parseSourceProject, type MergeSide, type SourceTarget} from './project-source-merge.js';
+import {checkProject, formatProjectSource, parseSourceProject, type MergeSide, type SourceProject, type SourceTarget}
+    from './project-source-merge.js';
 import {equal, isRecord} from './project-source-patch.js';
 import {projectVersionFile} from './project-version.js';
 
@@ -22,6 +23,10 @@ interface MergePlanInputs {
 export type MergePlanChoices = Readonly<Record<string, MergeSide>>;
 export type MergePlanFiles = ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
 export type MergePlanSeed = FolderMergeResult;
+// This prefix cannot occur in a validated Git path, and earlier players ignore it as a non-project file.
+export const mergeRepositoryFilePrefix = '\u0001repository/';
+export const mergePlanPathLabel = (path: string) => path.startsWith(mergeRepositoryFilePrefix) ?
+    '../' + path.slice(mergeRepositoryFilePrefix.length) : path;
 
 export interface MergePlanConflict {
     id: string;
@@ -48,6 +53,9 @@ export interface MergePlan {
     readonly edited?: boolean;
     readonly imported?: boolean;
     readonly importedResolutions?: readonly string[];
+    readonly playtestPoints?: readonly string[];
+    readonly playtestResolutions?: readonly string[];
+    readonly repositoryComplete?: boolean;
 }
 
 export interface MergePlanBuild {
@@ -57,7 +65,7 @@ export interface MergePlanBuild {
 }
 
 function summarize({id, path, type, ...rest}: FolderConflict): MergePlanConflict {
-    const result = {id, path, type};
+    const result = {id, path: mergePlanPathLabel(path), type};
     if ('conflict' in rest && 'location' in rest.conflict) {
         const {location} = rest.conflict;
         const detail = location.type === 'property' ? location.path.join('.') : undefined;
@@ -97,12 +105,13 @@ function materialize(plan: Omit<MergePlan, 'contentId' | 'problems'>, seed: Merg
     return snapshot(plan, files, problems);
 }
 
-export async function createMergePlan(folder: string, inputs: MergePlanInputs, versions: ReadonlyMap<string, FileVersions>) {
+export async function createMergePlan(folder: string, inputs: MergePlanInputs, versions: ReadonlyMap<string, FileVersions>,
+    repositoryComplete = false) {
     const seed = mergeProjectFolder(versions);
     const id = crypto.randomUUID();
     const built = await materialize({
         id, planId: id, previousId: null, copiedFrom: null, seedId: id,
-        createdAt: Date.now(), folder, inputs, conflicts: seed.conflicts.map(summarize), choices: {}
+        createdAt: Date.now(), folder, inputs, conflicts: seed.conflicts.map(summarize), choices: {}, repositoryComplete
     }, seed);
     return {...built, seed};
 }
@@ -117,7 +126,8 @@ const nextGeneration = (plan: MergePlan) =>
     ({...plan, id: crypto.randomUUID(), previousId: plan.id, createdAt: Math.max(Date.now(), plan.createdAt + 1)});
 
 export const mergePlanConflictResolved = (plan: MergePlan, id: string) =>
-    Object.hasOwn(plan.choices, id) || plan.importedResolutions?.includes(id) === true;
+    Object.hasOwn(plan.choices, id) || plan.importedResolutions?.includes(id) === true ||
+    plan.playtestResolutions?.includes(id) === true;
 
 export function saveImportedMergePlan(plan: MergePlan, files: MergePlanFiles, resolutions: readonly string[]) {
     const importedResolutions = [...new Set([...(plan.importedResolutions ?? []), ...resolutions])];
@@ -130,7 +140,9 @@ export function reviseMergePlan(plan: MergePlan, seed: MergePlanSeed, choices: M
         return side === 'base' || side === 'current' || side === 'incoming' ? [[id, side]] : [];
     }));
     const importedResolutions = plan.importedResolutions?.filter(id => !Object.hasOwn(specific, id));
-    const next = {...nextGeneration(plan), choices: specific, importedResolutions};
+    const playtestResolutions = plan.playtestResolutions?.filter(id => !Object.hasOwn(specific, id));
+    const playtestPoints = plan.playtestPoints?.filter(id => !Object.hasOwn(specific, id.slice(0, id.lastIndexOf(':'))));
+    const next = {...nextGeneration(plan), choices: specific, importedResolutions, playtestResolutions, playtestPoints};
     if (!plan.edited) return materialize(next, seed);
     if (!edited) throw new GitPanelError('versionMissing');
     // Reapply manual changes to the new choices. Never silently replace a hand-edited script.
@@ -154,6 +166,12 @@ const decoder = new TextDecoder('utf-8', {fatal: true});
 const encoder = new TextEncoder();
 const record = (value: unknown): Record<string, unknown> => isRecord(value) ? value : {};
 const entries = (value: unknown) => Object.entries(record(value));
+
+export function saveMergePlanProject(plan: MergePlan, files: MergePlanFiles, project: SourceProject) {
+    const updated = new Map(files);
+    updated.set('project.source.json', encoder.encode(formatProjectSource(project)));
+    return snapshot({...nextGeneration(plan), edited: true}, updated, checkProject(project).length);
+}
 
 function updateEntries(original: unknown, before: unknown, after: unknown,
     change: (saved: unknown, prior: unknown, value: unknown) => unknown = (_saved, _prior, value) => value) {
@@ -217,9 +235,7 @@ export async function editMergePlan(plan: MergePlan, files: MergePlanFiles, edit
     }
     if (!changed) throw new GitPanelError('mergePlanEditUnchanged');
     if (!equal(before.extensions, after.extensions) && Array.isArray(after.extensions)) project.extensions = after.extensions;
-    const updated = new Map(files);
-    updated.set(path, encoder.encode(formatProjectSource(project)));
-    return snapshot({...nextGeneration(plan), edited: true}, updated, checkProject(project).length);
+    return saveMergePlanProject(plan, files, project);
 }
 
 /** Every playtest receives a fresh copy of the selected generation's project files. */

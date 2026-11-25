@@ -147,7 +147,7 @@ export async function pushWithoutForce(args: Parameters<typeof git.push>[0]) {
 }
 
 export async function runRemoteOperation(root: FileSystemDirectoryHandle, operation: RemoteOperation,
-    getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal) {
+    getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal, offerMergePlan = false) {
     const execute = async () => {
         guard();
         const transaction = createMutationFs(root, operation === 'pull');
@@ -189,6 +189,11 @@ export async function runRemoteOperation(root: FileSystemDirectoryHandle, operat
                     throw new GitPanelError('session');
             }
             const code = (error as {code?: string})?.code;
+            if (code === 'FastForwardError' && operation === 'pull' && offerMergePlan) {
+                // Fetch completed, but the fast-forward did not change the local branch or checkout.
+                await transaction.commit(guard);
+                return {mergeFrom: 'refs/remotes/origin/' + args.remoteRef.slice('refs/heads/'.length)};
+            }
             if (code === 'FastForwardError') throw new GitPanelError('diverged');
             if (error instanceof GitPanelError) throw error;
             throw new GitPanelError('remoteFailed');
