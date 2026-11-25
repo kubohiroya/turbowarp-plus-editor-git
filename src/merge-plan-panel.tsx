@@ -5,8 +5,11 @@ import {duplicateMergePlan, editMergePlan, mergePlanConflictResolved, mergePlanC
     type MergePlan, type MergePlanBranch,
     type MergePlanBuild, type MergePlanChoices, type MergePlanCodeEdit, type MergePlanFiles} from './merge-plan.js';
 import type {MergePlanJournal, MergePlanScope} from './merge-plan-journal.js';
+import {mergeComparisonLabel, openMergeConflictComparison} from './merge-conflict-comparison.js';
+import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
+import type {ProjectVersionPlaytest} from './project-version-preview.js';
 import {mergePlanImportLimit, prepareMergePlanImport, type MergePlanImport} from './merge-plan-import.js';
-import {mergePlaytestRequest, type MergePlaytestRequest} from './merge-playtest.js';
+import {mergePlaytestRequest, saveMergePlaytest} from './merge-playtest.js';
 import {createMergePlanPlaytest, createMergePlanReader, type MergePlanSharePort} from './merge-plan-sharing.js';
 import type {PlaytestObserver} from './merge-playtest-observation.js';
 import {MergePlanTestView} from './merge-plan-test-view.js';
@@ -35,7 +38,7 @@ const words = {
         mergePlanImportInvalid: 'The imported project has invalid references, files or conflict resolutions.',
         mergePlanImportUnchanged: 'The file makes no changes to this generation.',
         mergePlanEditConflict: 'The new choice overlaps a manual edit. Choose it in an earlier generation, or keep the manual edit.',
-        provisional: 'Unconfirmed', base: 'Common base', current: 'Current', incoming: 'Incoming',
+        provisional: 'Unconfirmed', playtestChoice: 'Resolved in playtest', base: 'Common base', current: 'Current', incoming: 'Incoming',
         mergePlanNoBase: 'No common commit was found. Fetch more of the history and try again.',
         mergePlanMultipleBases: 'These branches have more than one common starting point.',
         share: 'Share via MCP', stopShare: 'Stop MCP sharing', token: 'MCP bearer token',
@@ -61,7 +64,7 @@ const words = {
         mergePlanImportInvalid: '取り込んだ作品の参照・ファイル・競合の指定に問題があります。',
         mergePlanImportUnchanged: 'この世代に取り込める変更がありません。',
         mergePlanEditConflict: '採用元の変更と直接編集が重なっています。前の世代で採用元を選ぶか、直接編集の内容を残してください。',
-        provisional: '未確認', base: '共通の元', current: '取り込み先', incoming: '取り込み元',
+        provisional: '未確認', playtestChoice: '試遊で編集済み', base: '共通の元', current: '取り込み先', incoming: '取り込み元',
         mergePlanNoBase: '共通のコミットが見つかりません。履歴を取得してからやり直してください。',
         mergePlanMultipleBases: 'このブランチには共通の起点が複数あります。',
         share: 'MCPで共有', stopShare: 'MCP共有を停止', token: 'MCPアクセストークン',
@@ -77,10 +80,12 @@ interface Props {
     persistent: boolean;
     branch?: string;
     head: string | null;
+    suggestion?: {ref: string};
     branches(current: string): Promise<MergePlanBranch[]>;
     scope(): Promise<MergePlanScope & {guard(): void}>;
     create(expected: {branch: string; head: string}, from: string): Promise<MergePlanBuild>;
-    play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: MergePlaytestRequest, observe?: PlaytestObserver): Promise<void>;
+    play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: ProjectVersionPlaytest, observe?: PlaytestObserver): Promise<void>;
+    renderComparison?: ProjectBlockRenderer;
     share?: MergePlanSharePort;
     validate?(files: MergePlanFiles): void;
     runTests?: RunMergePlanTests;
@@ -90,7 +95,7 @@ interface Props {
 }
 
 export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play, edit,
-    share, validate, runTests, finalize}: Props) {
+    share, validate, runTests, finalize, renderComparison, suggestion}: Props) {
     const text = locale.startsWith('ja') ? words.ja : words.en;
     const labels = labelsFor(locale);
     const [open, setOpen] = useState(false);
@@ -122,6 +127,9 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
         const current = dialog.current;
         if (open && current && !current.open) current.showModal();
     }, [open]);
+    useEffect(() => {
+        if (suggestion) {setSelected(suggestion.ref); setOpen(true);}
+    }, [suggestion]);
     useEffect(() => {
         if (!open || !branch || !head) return;
         let active = true;
@@ -183,25 +191,29 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
         setPlans(previous => [...(previous ?? []), plan]);
         return plan.id;
     };
-    const testGeneration = (plan: MergePlan, signal: AbortSignal) => act(async () => {
-        const current = await scope();
-        if (current.folder !== plan.folder) throw new GitPanelError('changed');
-        const files = await journal.files(plan);
-        if (await mergePlanContentId(files) !== plan.contentId) throw new GitPanelError('mergeCommitInvalid');
-        if (signal.aborted) return undefined;
-        current.guard();
-        let result: MergePlanTestResult;
+    const testGeneration = async (plan: MergePlan, signal: AbortSignal) => {
         try {
-            result = mergePlanTestResult(plan, await runTests!(mergePlanPreviewFiles(files), signal));
-        } catch (error) {
-            if (signal.aborted) return undefined;
-            result = mergePlanTestResult(plan, undefined, error instanceof Error ? error.message : String(error));
+            const current = await scope();
+            if (current.folder !== plan.folder) throw new GitPanelError('changed');
+            const files = await journal.files(plan);
+            if (await mergePlanContentId(files) !== plan.contentId) throw new GitPanelError('mergeCommitInvalid');
+            current.guard();
+            let result: MergePlanTestResult;
+            try {
+                signal.throwIfAborted();
+                const report = await runTests!(mergePlanPreviewFiles(files), signal);
+                signal.throwIfAborted();
+                result = mergePlanTestResult(plan, report);
+            } catch (error) {
+                result = signal.aborted ? mergePlanTestResult(plan, undefined, undefined, true) :
+                    mergePlanTestResult(plan, undefined, error instanceof Error ? error.message : String(error));
+            }
+            await journal.saveTestResult(result);
+            return result;
+        } catch (failure) {
+            if (activeContext.current === context) setError(failure instanceof DOMException ? text.storageFailed : message(failure));
         }
-        if (signal.aborted || activeContext.current !== context) return undefined;
-        current.guard();
-        await journal.saveTestResult(result);
-        return result;
-    });
+    };
     const branchRef = available?.some(item => item.ref === selected) ? selected : '';
     const groups = new Map<string, MergePlan[]>();
     for (const plan of plans ?? []) {
@@ -267,13 +279,29 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
             {[...groups].map(([id, generations]) => {
                 const original = plans?.find(plan => plan.id === generations[0].copiedFrom);
                 return <Candidate key={id} text={text} name={names.get(id)!} generations={generations} busy={busy}
-                    renderTests={runTests && (plan => <MergePlanTestView key={`tests-${plan.id}`} document={document} locale={locale}
+                    compareLabel={mergeComparisonLabel(locale)}
+                    compare={renderComparison && ((plan, id) => void act(async () => {
+                        const seed = await journal.seed(plan);
+                        if (activeContext.current === context) openMergeConflictComparison(document, locale, plan, seed, id, renderComparison);
+                    }))}
+                    renderTests={runTests && (plan => <MergePlanTestView document={document} locale={locale}
                         plan={plan} journal={journal} busy={busy} run={signal => testGeneration(plan, signal)}/>)}
                     copiedFrom={original && names.get(original.planId)}
                     duplicate={plan => void act(() => add(duplicateMergePlan(plan)))}
                     play={(plan, title) => void act(async () => {
                         const files = await journal.files(plan);
-                        return play(plan, files, title, mergePlaytestRequest(plan, files, await journal.seed(plan)), sharing && playtest.observe(plan));
+                        const seed = await journal.seed(plan);
+                        const request: ProjectVersionPlaytest = mergePlaytestRequest(plan, files, seed);
+                        request.saveGeneration = async edits => {
+                            const revision = await saveMergePlaytest(plan, files, seed, request, edits);
+                            await add(revision.plan, revision.files);
+                        };
+                        if (renderComparison) request.compare = point => {
+                            if (point.conflictId && activeContext.current === context) {
+                                openMergeConflictComparison(document, locale, plan, seed, point.conflictId, renderComparison, point);
+                            }
+                        };
+                        return play(plan, files, title, request, sharing && playtest.observe(plan));
                     })}
                     edit={edit && ((plan, title) => act(async () => {
                         const files = await journal.files(plan);
@@ -309,7 +337,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
 }
 
 function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise, edit, prepareImport, saveImport, finalize,
-    renderTests}: {
+    renderTests, compare, compareLabel}: {
     text: typeof words.en;
     name: string;
     generations: MergePlan[];
@@ -323,6 +351,8 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
     saveImport(draft: MergePlanImport): Promise<string | undefined>;
     finalize?(plan: MergePlan, title: string): Promise<void>;
     renderTests?(plan: MergePlan): React.ReactNode;
+    compareLabel: string;
+    compare?(plan: MergePlan, id: string): void;
 }) {
     const [selected, setSelected] = useState('');
     const plan = generations.find(item => item.id === selected) ?? generations[generations.length - 1];
@@ -343,6 +373,7 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
         {plan.conflicts.length > 0 && <details>
             <summary>{text.edit} · {text.unconfirmed} {unconfirmed}</summary>
             <ConflictChoices key={plan.id} text={text} plan={plan} busy={busy}
+                compareLabel={compareLabel} compare={compare && (id => compare(plan, id))}
                 save={async choices => {
                     const id = await revise(plan, choices);
                     if (id) setSelected(id);
@@ -401,8 +432,9 @@ function CandidateImport({text, plan, busy, prepare, save}: {
     </details>;
 }
 
-function ConflictChoices({text, plan, busy, save}: {
+function ConflictChoices({text, plan, busy, save, compare, compareLabel}: {
     text: typeof words.en; plan: MergePlan; busy: boolean; save(choices: MergePlanChoices): Promise<void>;
+    compareLabel: string; compare?(id: string): void;
 }) {
     const [choices, setChoices] = useState<Record<string, MergeSide>>(() => ({...plan.choices}));
     const changed = plan.conflicts.some(({id}) => choices[id] !== plan.choices[id]);
@@ -419,12 +451,14 @@ function ConflictChoices({text, plan, busy, save}: {
                             return next;
                         });
                     }}>
-                        <option value="">{plan.importedResolutions?.includes(conflict.id) ? text.imported : text.provisional}</option>
+                        <option value="">{plan.importedResolutions?.includes(conflict.id) ? text.imported :
+                            plan.playtestResolutions?.includes(conflict.id) ? text.playtestChoice : text.provisional}</option>
                         <option value="base">{text.base}</option>
                         <option value="current">{text.current} · {plan.inputs.current.name}</option>
                         <option value="incoming">{text.incoming} · {plan.inputs.incoming.name}</option>
                     </select>
                 </label>
+                {compare && <button type="button" disabled={busy} onClick={() => compare(conflict.id)}>{compareLabel}</button>}
             </li>)}
         </ol>
         <button type="submit" disabled={!changed || busy}>{text.save}</button>

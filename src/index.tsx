@@ -336,6 +336,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const running = useRef(false);
     const refreshPending = useRef<false | 'panel' | 'explorer'>(false);
     const remoteRequest = useRef<AbortController>();
+    const [mergeStart, setMergeStart] = useState<{repository: Repository; ref: string}>();
     const alive = useRef(true);
     const opening = useRef(false);
     const dialog = useRef<HTMLDivElement>(null);
@@ -643,16 +644,22 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             const ticket = epoch.current;
             const request = new AbortController();
             remoteRequest.current = request;
+            let mergeFrom: string | undefined;
             try {
-                await repository.remoteOperation(operation, getSession, () => {
+                const result = await repository.remoteOperation(operation, getSession, () => {
                     if (epoch.current !== ticket) throw new GitPanelError('changed');
                     if (operation === 'pull' && (host.isProjectDirty() || host.isProjectRunning?.()))
                         throw new GitPanelError('pullUnsafe');
-                }, request.signal);
+                }, request.signal, !!host.previewProjectVersion && current.current.project !== null);
+                mergeFrom = result?.mergeFrom;
             } finally {
                 remoteRequest.current = undefined;
             }
             const snapshot = await repository.read(current.current.project ?? '');
+            if (mergeFrom && epoch.current === ticket) {
+                setMergeStart({repository, ref: mergeFrom});
+                return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null};
+            }
             return {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null,
                 notice: operation === 'pull' && current.current.project !== null ? labels.pulledProject : labels.remoteDone};
         });
@@ -1039,6 +1046,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
                         <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
+                            suggestion={mergeStart?.repository === state.repository ? mergeStart : undefined}
+                            renderComparison={host.renderReviewBlock}
                             share={host.shareMergePlans} validate={host.validateProjectVersion} runTests={host.runMergePlanTests}
                             journal={persistentMergePlans ? mergePlanJournals.persistent! : mergePlanJournals.memory}
                             branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}

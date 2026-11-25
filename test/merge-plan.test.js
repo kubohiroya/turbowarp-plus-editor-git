@@ -87,7 +87,7 @@ test('rejects changed tips, changed snapshot bytes and active Git operations bef
     assert.deepEqual(await fixture.snapshot(), before);
 });
 
-test('refuses an incoming change outside the project and preserves unrelated current-side files', async t => {
+test('includes incoming changes outside the project and preserves unrelated current-side files', async t => {
     const fixture = await mergePlanFixture(t);
     await clean(fixture);
     fixture.git('switch', 'incoming');
@@ -95,14 +95,17 @@ test('refuses an incoming change outside the project and preserves unrelated cur
     const incoming = fixture.commit('Change outside the project');
     fixture.git('switch', 'main');
     const repository = await openRepository(directoryHandle(fixture.root));
-    const rejected = await repository.planMerge(fixture.folder, {branch: 'main', head: fixture.head}, 'refs/heads/incoming');
-    await assert.rejects(finalize(repository, rejected), {code: 'mergeCommitOutsideProject'});
-    await writeFile(path.join(fixture.root, 'outside.txt'), 'incoming only\n');
-    const head = fixture.commit('Keep the same change, already on current');
+    const candidate = await repository.planMerge(fixture.folder, {branch: 'main', head: fixture.head}, 'refs/heads/incoming');
+    const legacy = {...candidate, plan: {...candidate.plan, repositoryComplete: false}};
+    await assert.rejects(finalize(repository, legacy), {code: 'mergeCommitOutsideProject'});
+    await writeFile(path.join(fixture.root, 'current.txt'), 'current only\n');
+    const head = fixture.commit('Add an unrelated current file');
     const accepted = await repository.planMerge(fixture.folder, {branch: 'main', head}, 'refs/heads/incoming');
     const oid = await finalize(repository, accepted);
     assert.equal(fixture.git('show', '-s', '--format=%P', oid), head + ' ' + incoming);
     assert.equal(fixture.git('show', oid + ':outside.txt'), 'incoming only');
+    assert.equal(fixture.git('show', oid + ':current.txt'), 'current only');
+    assert.equal(fixture.git('status', '--porcelain'), '');
 });
 
 test('rolls back the index and worktree when the source ref changes during application', async t => {

@@ -189,6 +189,18 @@ test('tests the selected saved generation and reviews its persisted result befor
     assert.equal(revised.test.generationId, revisedGenerationId);
     assert.equal(revised.test.contentId, revised.contentId);
     assert.equal(revised.test.tests[0].failureCount, 1);
+    let releaseFrame;
+    const pendingFrame = new Promise(resolve => {releaseFrame = resolve;});
+    const delayNextTest = async route => {await pendingFrame; await route.fallback();};
+    await page.route('**/test-frame.html', delayNextTest);
+    await run.click();
+    await generation.selectOption({label: 'Generation 1'});
+    releaseFrame();
+    await page.unroute('**/test-frame.html', delayNextTest);
+    await expect(first).toContainText('Passed 1 · Failed 0');
+    await expect(run).toBeEnabled({timeout: 30_000});
+    await generation.selectOption({label: 'Generation 2'});
+    await expect(first.getByText('Earlier test runs', {exact: true})).toBeVisible();
 
     const copy = candidate(2);
     const copyGeneration = copy.getByRole('combobox', {name: /^Generation/});
@@ -208,6 +220,7 @@ test('tests the selected saved generation and reviews its persisted result befor
     await generation.selectOption({label: 'Generation 1'});
     await expect(first).toContainText('Passed 1 · Failed 0');
     await generation.selectOption({label: 'Generation 2'});
+    await expect(first.getByText('Earlier test runs', {exact: true})).toBeVisible();
     await first.getByRole('button', {name: 'Finalize this generation…'}).click();
     const confirm = page.getByRole('dialog', {name: 'Review merge commit'});
     await expect(confirm).toContainText('Candidate 1 · Generation 2');
@@ -269,7 +282,7 @@ test('conflict choices save new generations, which can be reopened and played af
     await fixture.put(35, 30);
     fixture.commit('Change the same input on main');
     const before = await fixture.snapshot();
-    const {candidate, createCandidate, play, startPlaytest, open, errors} = await start(t, fixture);
+    const {page, candidate, createCandidate, play, startPlaytest, open, errors} = await start(t, fixture);
     await createCandidate();
     await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
     await expect(candidate(2)).toBeVisible();
@@ -285,6 +298,13 @@ test('conflict choices save new generations, which can be reopened and played af
     await expect(first.getByRole('option', {name: 'Generation 2', exact: true})).toBeAttached();
     const generation = number => candidate(number).getByRole('combobox', {name: /^Generation/});
     await expect(generation(2).locator('option')).toHaveCount(1);
+    await generation(1).selectOption({label: 'Generation 1'});
+    await first.getByText(/Choose versions for conflicting changes/).click();
+    await first.getByRole('button', {name: 'Open comparison sources'}).click();
+    const comparison = page.getByRole('dialog', {name: 'Open comparison sources'});
+    await comparison.getByRole('button', {name: 'Incoming', exact: true}).click();
+    await expect(comparison.locator('.blocklySvg').getByText('25', {exact: true})).toBeVisible();
+    await comparison.getByRole('button', {name: 'Close', exact: true}).click();
     await generation(1).selectOption({label: 'Generation 2'});
     await play(1, 2, 25, 105);
     await generation(1).selectOption({label: 'Generation 1'});
@@ -362,7 +382,7 @@ test('pauses before an unresolved command, edits it in place and resumes the sam
     await fixture.put(35, 30);
     fixture.commit('Change the same inputs on main');
     const before = await fixture.snapshot();
-    const {candidate, createCandidate, startPlaytest, errors} = await start(t, fixture);
+    const {page, candidate, createCandidate, startPlaytest, errors} = await start(t, fixture);
     await createCandidate();
     await expect(candidate(1)).toContainText('Unconfirmed changes 2');
     const {player, frame} = await startPlaytest(1, 1);
@@ -394,6 +414,14 @@ test('pauses before an unresolved command, edits it in place and resumes the sam
     const input = draft.locator('.blocklyHtmlInput');
     await input.fill('42');
     await input.press('Enter');
+    await editor.getByRole('button', {name: 'Open comparison sources'}).click();
+    const comparison = page.getByRole('dialog', {name: 'Open comparison sources'});
+    await expect(comparison.locator('.blocklySvg').getByText('35', {exact: true})).toBeVisible();
+    await comparison.getByRole('button', {name: 'Common base', exact: true}).click();
+    await expect(comparison.locator('.blocklySvg').getByText('10', {exact: true})).toBeVisible();
+    await comparison.getByRole('button', {name: 'Close', exact: true}).click();
+    await expect(editor.getByText('The whole playtest is paused', {exact: true})).toBeVisible();
+    await expect(workspace.getByText('42', {exact: true})).toBeVisible();
     await adopt.click();
     await expect(editor).toHaveCount(0);
     await frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x === 47);
@@ -444,6 +472,75 @@ test('edits a real block in an isolated Editor and saves a replayable generation
     await play(1, 2, 42, 120);
     await generation.selectOption({label: 'Generation 1'});
     await play(1, 1, 25, 120);
+    assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
+test('saves adopted blocks as a new generation and reopens it without changing the original candidate or Git', options, async t => {
+    const fixture = await mergePlanFixture(t, '', true);
+    await fixture.put(35, 30);
+    fixture.commit('Change the same inputs on main');
+    const before = await fixture.snapshot();
+    const {candidate, createCandidate, startPlaytest, open, errors} = await start(t, fixture);
+    await createCandidate();
+    await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
+    await expect(candidate(2)).toBeVisible();
+    const {player, frame} = await startPlaytest(1, 1);
+    const save = player.getByRole('button', {name: 'Save as new generation', exact: true});
+    const paused = frame.getByText('The whole playtest is paused', {exact: true});
+    const position = () => window.vm.runtime.getSpriteTargetByName('Walker').x;
+    const adopt = async (frame, id, value) => {
+        await frame.getByRole('button', {name: 'Edit script', exact: true}).click();
+        const editor = frame.getByRole('dialog', {name: 'Edit script', exact: true});
+        const draft = await (await editor.locator('iframe').elementHandle()).contentFrame();
+        const field = draft.locator(`[data-id="${id}"] .blocklyEditableText`).filter({hasText: /^10$/});
+        await field.click();
+        const input = draft.locator('.blocklyHtmlInput');
+        await input.fill(value);
+        await input.press('Enter');
+        await editor.getByRole('button', {name: 'Try edit and resume', exact: true}).click();
+        await expect(editor).toHaveCount(0);
+    };
+    const saveGeneration = async player => {
+        const save = player.getByRole('button', {name: 'Save as new generation', exact: true});
+        await expect(save).toBeEnabled();
+        await save.click();
+        await expect(player.getByRole('status')).toHaveText('The adopted edits were saved as a new generation.');
+        await expect(save).toBeDisabled();
+        await player.getByRole('button', {name: 'Close', exact: true}).click();
+    };
+    await expect(paused).toBeVisible();
+    await expect(save).toBeDisabled();
+    await adopt(frame, 'move', '42');
+    await frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x === 47);
+    await saveGeneration(player);
+    await open();
+    const generations = candidate(1).getByRole('combobox', {name: /^Generation/});
+    await generations.selectOption({label: 'Generation 2'});
+    const saved = await startPlaytest(1, 2);
+    await saved.frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x === 47);
+    const stillPaused = saved.frame.getByText('The whole playtest is paused', {exact: true});
+    await expect(stillPaused).toBeHidden();
+    await saved.frame.locator('body').press('Space');
+    await expect(stillPaused).toBeVisible();
+    assert.equal(await saved.frame.evaluate(position), 47);
+    await adopt(saved.frame, 'unvisited', '12');
+    await saveGeneration(saved.player);
+
+    await generations.selectOption({label: 'Generation 3'});
+    const both = await startPlaytest(1, 3);
+    await both.frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x === 47);
+    await both.frame.locator('body').press('Space');
+    await both.frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x > 47);
+    await expect(both.frame.getByText('The whole playtest is paused', {exact: true})).toHaveCount(0);
+    await both.player.getByRole('button', {name: 'Close', exact: true}).click();
+    await generations.selectOption({label: 'Generation 1'});
+    for (const number of [1, 2]) {
+        const original = await startPlaytest(number, 1);
+        await expect(original.frame.getByText('The whole playtest is paused', {exact: true})).toBeVisible();
+        assert.equal(await original.frame.evaluate(position), 5);
+        await original.player.getByRole('button', {name: 'Close', exact: true}).click();
+    }
     assert.deepEqual(await fixture.snapshot(), before);
     assert.deepEqual(errors, []);
 });

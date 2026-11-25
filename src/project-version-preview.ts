@@ -1,5 +1,7 @@
 import {dialogAction, dialogActions} from '@kubohiroya/turbowarp-plus-editor-windows';
-import type {MergePlaytestRequest} from './merge-playtest.js';
+import {PLAYTEST_COMPARE, PLAYTEST_EDIT_ADOPTED, type MergePlaytestRequest, type PlaytestConflict, type PlaytestEdit,
+    type SavePlaytestGeneration} from './merge-playtest.js';
+import {isRecord} from './project-source-patch.js';
 import type {PlaytestObserver, PlaytestReadRequest} from './merge-playtest-observation.js';
 import {isProjectVersionEditor} from './project-version-editor.js';
 export {isProjectVersionEditor, openProjectVersionEditor, receiveProjectVersionEditor} from './project-version-editor.js';
@@ -32,6 +34,18 @@ export const isObservedProjectVersion = (view: Window) => view.parent !== view &
 
 const japanese = (locale: string | null | undefined) => /^ja(?:-|$)/i.test(locale || '');
 
+const generationMessages = (locale: string) => japanese(locale) ? {
+    save: '新しい世代として保存',
+    saving: '世代を保存中…',
+    saved: '仮採用した編集を新しい世代に保存しました。',
+    failed: '世代を保存できませんでした。仮採用した編集はこの試遊に残っています。'
+} : {
+    save: 'Save as new generation',
+    saving: 'Saving generation…',
+    saved: 'The adopted edits were saved as a new generation.',
+    failed: 'The generation could not be saved. Your adopted edits are still in this playtest.'
+};
+
 /** The words of the version preview, for the dialog and for the player page. */
 export function projectVersionPreviewMessages(locale: string | null | undefined) {
     return japanese(locale) ? {
@@ -52,8 +66,13 @@ export interface ProjectVersionPreviewOptions {
     params?: Readonly<Record<string, string>>;
     /** The caller's localized label for a preview outside the commit history. */
     title?: string;
-    playtest?: MergePlaytestRequest;
+    playtest?: ProjectVersionPlaytest;
     observe?: PlaytestObserver;
+}
+
+export interface ProjectVersionPlaytest extends MergePlaytestRequest {
+    compare?(conflict: PlaytestConflict): void;
+    saveGeneration?: SavePlaytestGeneration;
 }
 
 export function openProjectVersionPreview(document: Document, oid: string, archive: ArrayBuffer, locale: string,
@@ -93,7 +112,11 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
         }
         preview.append(summary, list);
     } else preview.append(frame);
-    preview.append(dialogActions(document, dialogAction(close, 'close')));
+    const actions = [dialogAction(close, 'close')];
+    const save = playtest?.saveGeneration && playtest.conflicts.length && !playtest.blocking.length ?
+        connectPlaytestSave(preview, frame, origin, close, locale, playtest, playtest.saveGeneration) : undefined;
+    if (save) actions.push(save.action);
+    preview.append(dialogActions(document, ...actions));
     const pending = new Set<() => void>();
     const unavailable = () => {
         observe?.(null);
@@ -101,6 +124,7 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
     };
     const dispose = () => {
         view.removeEventListener('message', send);
+        save?.disconnect();
         unavailable();
         preview.remove();
     };
@@ -138,9 +162,15 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
         if (event.source !== frame.contentWindow || event.origin !== origin) return;
         if (!sent && event.data === PROJECT_VERSION_PREVIEW_READY) {
             sent = true;
-            frame.contentWindow!.postMessage({kind: PROJECT_VERSION_PREVIEW_PROJECT, archive, ...(playtest && {playtest})}, origin, [archive]);
+            const request = playtest && {conflicts: playtest.conflicts, blocking: playtest.blocking,
+                ...(playtest.compare && {canCompare: true}), ...(playtest.saveGeneration && {canSaveGeneration: true})};
+            frame.contentWindow!.postMessage({kind: PROJECT_VERSION_PREVIEW_PROJECT, archive, ...(request && {playtest: request})},
+                origin, [archive]);
         } else if (sent && event.data === previewLoaded && preview.open) {
             observe?.(read);
+        } else if (sent && preview.open && playtest?.compare && event.data?.kind === PLAYTEST_COMPARE) {
+            const conflict = playtest.conflicts.find(({id}) => id === event.data.id);
+            if (conflict) playtest.compare(conflict);
         } else if (sent && (event.data === previewUnloaded || event.data === PROJECT_VERSION_PREVIEW_READY)) {
             unavailable();
         }
@@ -150,6 +180,54 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
     document.body.append(preview);
     preview.showModal();
     return preview;
+}
+
+function connectPlaytestSave(preview: HTMLDialogElement, frame: HTMLIFrameElement, origin: string, close: HTMLButtonElement,
+    locale: string, request: MergePlaytestRequest, save: SavePlaytestGeneration) {
+    const document = preview.ownerDocument;
+    const view = document.defaultView!;
+    const text = generationMessages(locale);
+    const status = document.createElement('p');
+    status.role = 'status';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text.save;
+    button.disabled = true;
+    preview.append(status);
+    const pending = new Set(request.conflicts.map(conflict => conflict.id));
+    const edits: PlaytestEdit[] = [];
+    let savedCount = 0;
+    let saving = false;
+    const receive = (event: MessageEvent) => {
+        if (!preview.open || event.source !== frame.contentWindow || event.origin !== origin ||
+            event.data?.kind !== PLAYTEST_EDIT_ADOPTED) return;
+        const {id, blocks} = event.data;
+        if (typeof id !== 'string' || !isRecord(blocks) || !Object.keys(blocks).length || !pending.delete(id)) return;
+        edits.push({id, blocks});
+        if (!saving) {
+            status.textContent = '';
+            button.disabled = false;
+        }
+    };
+    button.onclick = async () => {
+        if (saving || savedCount === edits.length || !preview.open) return;
+        saving = button.disabled = close.disabled = true;
+        status.textContent = text.saving;
+        const revision = edits.slice();
+        try {
+            await save(revision);
+            savedCount = revision.length;
+            status.textContent = text.saved;
+        } catch {
+            status.textContent = text.failed;
+        } finally {
+            saving = close.disabled = false;
+            button.disabled = savedCount === edits.length;
+        }
+    };
+    preview.addEventListener('cancel', event => {if (saving) event.preventDefault();});
+    view.addEventListener('message', receive);
+    return {action: dialogAction(button, 'confirm'), disconnect: () => view.removeEventListener('message', receive)};
 }
 
 /** The parts of an sb3-toolchain source manifest that packing reads. */

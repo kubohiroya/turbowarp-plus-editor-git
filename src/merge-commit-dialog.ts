@@ -1,5 +1,5 @@
 import type {labelsFor} from './messages.js';
-import type {MergePlan} from './merge-plan.js';
+import {mergePlanPathLabel, type MergePlan} from './merge-plan.js';
 import type {prepareMergeCommit} from './merge-plan-commit.js';
 import {createMergePlanTestSummary, type MergePlanTestResult} from './merge-plan-tests.js';
 
@@ -23,7 +23,7 @@ export function confirmMergeCommit(document: Document, locale: string, title: st
     for (const {relative, before, after} of changes) {
         const row = document.createElement('li');
         const path = document.createElement('code');
-        path.textContent = relative;
+        path.textContent = mergePlanPathLabel(relative);
         row.append((!before ? labels.added : !after ? labels.deleted : labels.modified) + ' ', path);
         list.append(row);
     }

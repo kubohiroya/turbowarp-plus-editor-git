@@ -97,7 +97,7 @@ test('panel operations preserve worktrees on rejected pulls and never retry an u
 
     git(seed, 'pull', '--ff-only', bare, 'main');
     await writeFile(join(seed, 'project.txt'), 'diverged remotely\n');
-    commit(seed, 'diverged remotely');
+    const divergedRemote = commit(seed, 'diverged remotely');
     git(seed, 'push', bare, 'main');
     await writeFile(source, 'diverged locally\n');
     const local = commit(client, 'diverged locally');
@@ -105,6 +105,11 @@ test('panel operations preserve worktrees on rejected pulls and never retry an u
     await assert.rejects(operate('pull'), {code: 'diverged'});
     assert.equal(git(client, 'rev-parse', 'HEAD'), local);
     assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/main'), uncertain);
+    assert.deepEqual(await capture(), beforeDiverged);
+    assert.deepEqual(await repository.remoteOperation('pull', session, () => {}, undefined, true),
+        {mergeFrom: 'refs/remotes/origin/main'});
+    assert.equal(git(client, 'rev-parse', 'refs/remotes/origin/main'), divergedRemote);
+    assert.equal(git(client, 'rev-parse', 'HEAD'), local);
     assert.deepEqual(await capture(), beforeDiverged);
 });
 

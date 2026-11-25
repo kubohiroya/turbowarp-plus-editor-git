@@ -1,5 +1,6 @@
+import {GitPanelError} from './filesystem.js';
 import {mergeJson} from './merge-json.js';
-import {mergePlanConflictResolved, type MergePlan, type MergePlanFiles, type MergePlanSeed} from './merge-plan.js';
+import {mergePlanConflictResolved, saveMergePlanProject, type MergePlan, type MergePlanFiles, type MergePlanSeed} from './merge-plan.js';
 import {checkProject, parseSourceProject, type SourceProject, type SourceTarget} from './project-source-merge.js';
 import {equal, isRecord} from './project-source-patch.js';
 
@@ -16,11 +17,22 @@ export interface PlaytestConflict {
 export interface MergePlaytestRequest {
     conflicts: PlaytestConflict[];
     blocking: string[];
+    canCompare?: boolean;
+    canSaveGeneration?: boolean;
 }
 
 export interface PlaytestStop extends PlaytestConflict {
     previous?: string;
 }
+
+export const PLAYTEST_COMPARE = 'tw-plus/merge-playtest-compare';
+export const PLAYTEST_EDIT_ADOPTED = 'tw-plus/merge-playtest-edit-adopted';
+export interface PlaytestEdit {
+    id: string;
+    blocks: Record<string, unknown>;
+}
+
+export type SavePlaytestGeneration = (edits: readonly PlaytestEdit[]) => Promise<void>;
 
 const records = (value: unknown): Record<string, unknown> => isRecord(value) ? value : {};
 const blocksOf = (target?: SourceTarget) => records(target?.blocks);
@@ -53,6 +65,7 @@ export function mergePlaytestRequest(plan: MergePlan, files: MergePlanFiles, see
     const request: MergePlaytestRequest = {conflicts: [], blocking: []};
     const bytes = files.get('project.source.json');
     const project = bytes && parseSourceProject(decode.decode(bytes));
+    const resolvedPoints = new Set(plan.playtestPoints);
     for (const item of seed.conflicts) {
         if (mergePlanConflictResolved(plan, item.id)) continue;
         if (item.type !== 'project') {
@@ -67,19 +80,21 @@ export function mergePlaytestRequest(plan: MergePlan, files: MergePlanFiles, see
         const blocks = blocksOf(target);
         if (location.type === 'scripts' && target) {
             const overlapping = mergeJson(base, current, incoming).conflicts;
-            const points = overlapping.map(({path}, index): PlaytestConflict | undefined => {
+            const points = overlapping.flatMap(({path}, index) => {
+                const id = item.id + ':' + index;
+                if (resolvedPoints.has(id)) return [];
                 const [focus, property, input] = path;
                 if (typeof focus !== 'string' || !isRecord(blocks[focus]) || (property !== 'fields' && property !== 'inputs') ||
-                    typeof input !== 'string' || input.startsWith('SUBSTACK')) return;
+                    typeof input !== 'string' || input.startsWith('SUBSTACK')) return [undefined];
                 const parents = parentIds(blocks, focus);
                 const script = parents.at(-1);
                 const next = executionBlock(blocks, focus, parents);
                 const entry = script && records(blocks[script]).opcode;
                 if (!script || !next || typeof entry !== 'string' ||
-                    !/^(event_when|control_start_as_clone)/.test(entry)) return;
-                return {id: item.id + ':' + index, conflictId: item.id, target: target.name, script, next, focus, input};
+                    !/^(event_when|control_start_as_clone)/.test(entry)) return [undefined];
+                return [{id, conflictId: item.id, target: target.name, script, next, focus, input}];
             });
-            if (points.length && points.every(point => point !== undefined)) {
+            if (overlapping.length && points.every(point => point !== undefined)) {
                 request.conflicts.push(...points);
                 continue;
             }
@@ -146,6 +161,41 @@ function scriptIds(blocks: Record<string, unknown>, start: string) {
 
 const targetByName = (project: SourceProject, name: string) => project.targets.find(target => target.name === name);
 
+export function saveMergePlaytest(plan: MergePlan, files: MergePlanFiles, seed: MergePlanSeed, request: MergePlaytestRequest,
+    edits: readonly PlaytestEdit[]) {
+    const source = files.get('project.source.json');
+    const project = source && parseSourceProject(decode.decode(source));
+    if (!project) throw new GitPanelError('versionMissing');
+    if (!edits.length) throw new GitPanelError('mergePlanEditUnchanged');
+    const conflicts = new Map(request.conflicts.map(conflict => [conflict.id, conflict]));
+    const points = new Set(plan.playtestPoints);
+    const resolutions = new Set(plan.playtestResolutions);
+    for (const edit of edits) {
+        const stop = conflicts.get(edit.id);
+        const target = stop && targetByName(project, stop.target);
+        if (!stop || !target || points.has(edit.id)) throw new GitPanelError('mergePlanEditUnsupported');
+        const builder = new Map(Object.entries(blocksOf(target)));
+        for (const [id, block] of Object.entries(edit.blocks)) {
+            if (block === null) builder.delete(id);
+            else builder.set(id, block);
+        }
+        const next = Object.fromEntries(builder);
+        const replacement = validateScriptEdit(project, target, next, stop);
+        if (!replacement?.changedIds.size || Object.keys(edit.blocks).some(id => !replacement.changedIds.has(id))) {
+            throw new GitPanelError('mergePlanEditUnsupported');
+        }
+        target.blocks = next;
+        points.add(edit.id);
+    }
+    for (const item of seed.conflicts) {
+        if (item.type !== 'project' || item.conflict.location.type !== 'scripts') continue;
+        const {base, current, incoming} = item.conflict;
+        const overlaps = mergeJson(base, current, incoming).conflicts;
+        if (overlaps.length && overlaps.every((_, index) => points.has(item.id + ':' + index))) resolutions.add(item.id);
+    }
+    return saveMergePlanProject({...plan, playtestPoints: [...points], playtestResolutions: [...resolutions]}, files, project);
+}
+
 /** Keep the live VM's state and all other scripts. Return only replacement block definitions. */
 export function resumeScriptEdit(before: string, after: string, stop: PlaytestStop) {
     const original = parseSourceProject(before);
@@ -161,8 +211,11 @@ export function resumeScriptEdit(before: string, after: string, stop: PlaytestSt
             return !result || codeProperties.some(key => !equal(candidate[key], result[key])) ||
                 (candidate !== target && !equal(candidate.blocks, result.blocks));
         })) return;
+    return validateScriptEdit(original, target, blocksOf(changed), stop);
+}
+
+function validateScriptEdit(original: SourceProject, target: SourceTarget, next: Record<string, unknown>, stop: PlaytestConflict) {
     const base = blocksOf(target);
-    const next = blocksOf(changed);
     const oldIds = scriptIds(base, stop.script);
     const newIds = scriptIds(next, stop.script);
     const parents = parentIds(base, stop.next);

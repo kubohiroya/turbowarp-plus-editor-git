@@ -11,7 +11,7 @@ import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import type {FileVersion} from './change-marks.js';
 import {planProjectRestore, projectScope, projectVersionFile} from './project-version.js';
-import {createMergePlan, type MergePlan, type MergePlanBranch, type MergePlanFiles} from './merge-plan.js';
+import {createMergePlan, mergeRepositoryFilePrefix, type MergePlan, type MergePlanBranch, type MergePlanFiles} from './merge-plan.js';
 import {prepareMergeCommit, type ValidateMergeProject} from './merge-plan-commit.js';
 import type {FileVersions} from './project-folder-merge.js';
 
@@ -254,7 +254,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     };
 
     const entries = async (ref: string | null, scope: string,
-        include: (path: string) => boolean = () => true): Promise<Map<string, Entry>> => {
+        include: (path: string) => boolean = () => true, rejectSpecial = true): Promise<Map<string, Entry>> => {
         const tree = ref === null ? git.STAGE() : git.TREE({ref});
         const result = await git.walk({
             ...options, cache, trees: [tree],
@@ -262,7 +262,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                 if (path !== '.' && !inScope(path, scope) && !scope.startsWith(path + '/')) return null;
                 if (!entry || await entry.type() === 'tree' || !include(path)) return;
                 const mode = await entry.mode();
-                if (mode === 0o160000 || mode === 0o120000) throw new GitPanelError('unsupported');
+                if (rejectSpecial && (mode === 0o160000 || mode === 0o120000)) throw new GitPanelError('unsupported');
                 return {path, oid: await entry.oid(), mode};
             }
         }) as {path: string; oid: string; mode: number}[];
@@ -368,7 +368,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         if (bases.length > 1) throw new GitPanelError('mergePlanMultipleBases');
         const [base] = bases;
         const prefix = scope ? scope + '/' : '';
-        const trees = await Promise.all([base, expected.head, incoming].map(oid => entries(oid, scope)));
+        const trees = await Promise.all([base, expected.head, incoming].map(oid => entries(oid, '', undefined, false)));
         const paths = new Set(trees.flatMap(tree => [...tree.keys()]));
         if (paths.size > 20_000) throw new GitPanelError('large');
         const blobs = new Map<string, Uint8Array<ArrayBuffer>>();
@@ -387,10 +387,13 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         };
         const versions = new Map<string, FileVersions>();
         for (const path of paths) {
-            if (!path.startsWith(prefix)) throw new GitPanelError('versionMissing');
-            const relative = path.slice(prefix.length);
+            const inProject = path.startsWith(prefix);
+            const relative = inProject ? path.slice(prefix.length) : path;
             projectScope(relative);
-            versions.set(relative, {
+            if (!inProject && trees[0].get(path)?.oid === trees[2].get(path)?.oid &&
+                trees[0].get(path)?.mode === trees[2].get(path)?.mode) continue;
+            // A reserved key prefixes repository-relative paths outside the project. Player snapshots omit these files.
+            versions.set(inProject ? relative : mergeRepositoryFilePrefix + relative, {
                 base: await read(trees[0].get(path)),
                 current: await read(trees[1].get(path)),
                 incoming: await read(trees[2].get(path))
@@ -400,7 +403,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             base,
             current: {name: expected.branch, ref: 'refs/heads/' + expected.branch, oid: expected.head},
             incoming: {...incomingBranch, oid: incoming}
-        }, versions);
+        }, versions, true);
         await fs.checkReads();
         fs.clearReads();
         const after = await readHead();
@@ -964,12 +967,14 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
     return {root, openProject, browse, defaultProject, probe,
         readHead: () => serial(readHead),
         readOrigin: () => serial(() => git.getConfig({...options, path: 'remote.origin.url'})),
-        remoteOperation: (operation: RemoteOperation, getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal) =>
+        remoteOperation: (operation: RemoteOperation, getSession: GetRemoteSession, guard: () => void, signal?: AbortSignal,
+            offerMergePlan = false) =>
             serial(async () => {
                 if (operation === 'push' && pushNeedsFetch) throw new GitPanelError('pushUnknown');
                 try {
-                    await runRemoteOperation(root, operation, getSession, guard, signal);
+                    const result = await runRemoteOperation(root, operation, getSession, guard, signal, offerMergePlan);
                     if (operation === 'fetch') pushNeedsFetch = false;
+                    return result;
                 } catch (error) {
                     if (operation === 'push' && error instanceof GitPanelError &&
                         (error.code === 'pushUnknown' || error.code === 'pushRefresh')) pushNeedsFetch = true;

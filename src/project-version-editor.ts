@@ -13,7 +13,7 @@ const editMessages = (locale: string) => locale.startsWith('ja') ? {
     loadFailed: '候補を開けませんでした。', unchanged: '保存できるブロックの変更がありません。',
     unsupported: 'この画面では、スプライト・素材・拡張の追加や削除は保存できません。',
     help: 'ブロック、コメント、変数・リスト・メッセージの定義を保存できます。試遊中の値や座標は保存されません。',
-    resume: '仮採用して再開', paused: '試遊全体を一時停止中', script: 'スクリプトを編集',
+    resume: '仮採用して再開', paused: '試遊全体を一時停止中', script: 'スクリプトを編集', compare: '比較元を開く',
     applying: '編集中のスクリプトを確認中…', rejected: 'この編集では停止地点から再開できません。停止地点までのブロックと参照を確認してください。'
 } : {
     save: 'Save as new generation', close: 'Close without saving', loading: 'Loading candidate…',
@@ -21,7 +21,7 @@ const editMessages = (locale: string) => locale.startsWith('ja') ? {
     loadFailed: 'The candidate could not be opened.', unchanged: 'There are no block edits to save.',
     unsupported: 'This editor cannot save changes to sprites, assets or custom extensions.',
     help: 'Save blocks, comments, and variable, list and message definitions. Playtest values and positions are left as they were.',
-    resume: 'Try edit and resume', paused: 'The whole playtest is paused', script: 'Edit script',
+    resume: 'Try edit and resume', paused: 'The whole playtest is paused', script: 'Edit script', compare: 'Open comparison sources',
     applying: 'Checking the edited script…', rejected: 'This edit cannot resume at the paused block. Check the blocks and references up to that point.'
 };
 
@@ -29,7 +29,9 @@ export const isProjectVersionEditor = (view: Window) =>
     view.parent !== view && Boolean(new URLSearchParams(view.location.search).get(sessionParam));
 
 export function openProjectVersionEditor(document: Document, archive: ArrayBuffer, locale: string,
-    {page, params = {}, title, stop}: ProjectVersionPreviewOptions & {title: string; stop?: PlaytestStop},
+    {page, params = {}, title, stop, compare}: ProjectVersionPreviewOptions & {
+        title: string; stop?: PlaytestStop; compare?(): void;
+    },
     save: (edit: MergePlanCodeEdit) => Promise<string>): Promise<string | undefined> {
     const view = document.defaultView!;
     const text = editMessages(locale);
@@ -81,7 +83,16 @@ export function openProjectVersionEditor(document: Document, archive: ArrayBuffe
         editor.id = id;
         editor.setAttribute('role', 'tabpanel');
         editor.setAttribute('aria-labelledby', tab.id);
-        dialog.append(heading, help, tabs);
+        const bar = document.createElement('div');
+        bar.append(tabs);
+        if (compare) {
+            const source = document.createElement('button');
+            source.type = 'button';
+            source.textContent = text.compare;
+            source.onclick = compare;
+            bar.append(source);
+        }
+        dialog.append(heading, help, bar);
     } else dialog.append(heading, help);
     editor.append(frame);
     dialog.append(editor, status, dialogActions(document,

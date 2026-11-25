@@ -13,6 +13,7 @@ export interface MergePlanJournal {
     files(plan: MergePlan): Promise<MergePlanFiles>;
     seed(plan: MergePlan): Promise<MergePlanSeed>;
     testResult(plan: MergePlan): Promise<MergePlanTestResult | null>;
+    testHistory(plan: MergePlan): Promise<MergePlanTestResult[]>;
     saveTestResult(result: MergePlanTestResult): Promise<void>;
 }
 
@@ -39,6 +40,7 @@ export function createMemoryMergePlanJournal(): MergePlanJournal {
     const contents = new Map<string, MergePlanFiles>();
     const seeds = new Map<string, MergePlanSeed>();
     const results = new Map<string, MergePlanTestResult>();
+    const history = new Map<string, MergePlanTestResult[]>();
     const key = (generationId: string, contentId: string) => JSON.stringify([generationId, contentId]);
     return {
         list: scope => matching(scope, rows),
@@ -50,7 +52,12 @@ export function createMemoryMergePlanJournal(): MergePlanJournal {
         async files(plan) {return required(contents.get(plan.contentId));},
         async seed(plan) {return required(seeds.get(plan.seedId));},
         async testResult(plan) {return results.get(key(plan.id, plan.contentId)) ?? null;},
-        async saveTestResult(result) {results.set(key(result.generationId, result.contentId), result);}
+        async testHistory(plan) {return [...(history.get(key(plan.id, plan.contentId)) ?? [])];},
+        async saveTestResult(result) {
+            const id = key(result.generationId, result.contentId);
+            history.set(id, [result, ...(history.get(id) ?? [])]);
+            results.set(id, result);
+        }
     };
 }
 
@@ -111,6 +118,13 @@ export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePla
     const tests = connectTo(indexedDb, 'turbowarp-plus-editor-merge-plan-tests', db => {
         db.createObjectStore(testStore, {keyPath: ['generationId', 'contentId']});
     });
+    // The original key continues to hold the latest result. History occupies a separate key range.
+    const historyKey = (generationId: string, contentId: string, runId = '') =>
+        [`run:${generationId}`, `${contentId}:${runId}`];
+    const historyRow = (result: MergePlanTestResult, runId: string) => {
+        const [generationId, contentId] = historyKey(result.generationId, result.contentId, runId);
+        return {generationId, contentId, result};
+    };
     const readResult = (db: IDBDatabase, key: string[]) => transact<MergePlanTestResult | undefined>(
         db, testStore, 'readonly', tx => tx.objectStore(testStore).get(key));
     return {
@@ -141,8 +155,36 @@ export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePla
             const candidateDatabase = await plans();
             return candidateDatabase.objectStoreNames.contains(testStore) ? await readResult(candidateDatabase, key) ?? null : null;
         },
+        async testHistory(plan) {
+            const db = await tests();
+            const range = IDBKeyRange.bound(historyKey(plan.id, plan.contentId), historyKey(plan.id, plan.contentId, '\uffff'));
+            const runs = await transact<{result: MergePlanTestResult}[]>(db, testStore, 'readonly',
+                tx => tx.objectStore(testStore).getAll(range));
+            const latest = await this.testResult(plan);
+            const results = runs.map(row => row.result);
+            if (latest && !results.some(run => run.runId ? run.runId === latest.runId : run.finishedAt === latest.finishedAt)) {
+                results.push(latest);
+            }
+            return results.sort((a, b) => b.finishedAt - a.finishedAt);
+        },
         async saveTestResult(result) {
-            await transact(await tests(), testStore, 'readwrite', tx => tx.objectStore(testStore).put(result));
+            if (!result.runId) return void await transact(await tests(), testStore, 'readwrite', tx => tx.objectStore(testStore).put(result));
+            const key = [result.generationId, result.contentId];
+            const db = await tests();
+            const candidateDatabase = await plans();
+            const fallback = candidateDatabase.objectStoreNames.contains(testStore) ? await readResult(candidateDatabase, key) : undefined;
+            const runId = result.runId;
+            await transact(db, testStore, 'readwrite', tx => {
+                const latest = tx.objectStore(testStore);
+                const previous = latest.get(key);
+                previous.onsuccess = () => {
+                    const legacy = previous.result ?? fallback;
+                    if (legacy && !legacy.runId) latest.put(historyRow(legacy, `legacy:${legacy.finishedAt}`));
+                    latest.add(historyRow(result, runId));
+                    latest.put(result);
+                };
+                return previous;
+            });
         }
     };
 }
