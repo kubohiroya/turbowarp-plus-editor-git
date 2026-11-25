@@ -1,8 +1,8 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {GitPanelError} from './filesystem.js';
-import {duplicateMergePlan, reviseMergePlan, type MergePlan, type MergePlanBranch,
-    type MergePlanBuild, type MergePlanChoices, type MergePlanFiles} from './merge-plan.js';
+import {duplicateMergePlan, editMergePlan, reviseMergePlan, type MergePlan, type MergePlanBranch,
+    type MergePlanBuild, type MergePlanChoices, type MergePlanCodeEdit, type MergePlanFiles} from './merge-plan.js';
 import type {MergePlanJournal, MergePlanScope} from './merge-plan-journal.js';
 import type {MergeSide} from './project-source-merge.js';
 import {labelsFor} from './messages.js';
@@ -17,6 +17,8 @@ const words = {
         temporary: 'This folder supports session storage only. Candidates are kept until you reload or close the Editor.',
         storageFailed: 'Could not load or save the merge plans. The previous generations are unchanged.',
         edit: 'Choose versions for conflicting changes', generation: 'Generation', save: 'Save as new generation',
+        editCode: 'Edit blocks', edited: 'Edited in the block editor',
+        mergePlanEditConflict: 'The new choice overlaps a manual edit. Choose it in an earlier generation, or keep the manual edit.',
         provisional: 'Unconfirmed (use base for playtest)', base: 'Common base', current: 'Current', incoming: 'Incoming',
         mergePlanNoBase: 'No common commit was found. Fetch more of the history and try again.',
         mergePlanMultipleBases: 'These branches have more than one common starting point.'
@@ -30,6 +32,8 @@ const words = {
         temporary: 'このフォルダの候補は、Editorを再読み込みするか閉じるまで保持されます。',
         storageFailed: 'マージプランを読み込みまたは保存できませんでした。保存済みの世代は残っています。',
         edit: '競合箇所の採用元を選ぶ', generation: '世代', save: '新しい世代として保存',
+        editCode: 'ブロックを編集', edited: 'ブロックを直接編集済み',
+        mergePlanEditConflict: '採用元の変更と直接編集が重なっています。前の世代で採用元を選ぶか、直接編集の内容を残してください。',
         provisional: '未確認（試遊では共通の元を使う）', base: '共通の元', current: '取り込み先', incoming: '取り込み元',
         mergePlanNoBase: '共通のコミットが見つかりません。履歴を取得してからやり直してください。',
         mergePlanMultipleBases: 'このブランチには共通の起点が複数あります。'
@@ -48,9 +52,11 @@ interface Props {
     scope(): Promise<MergePlanScope & {guard(): void}>;
     create(expected: {branch: string; head: string}, from: string): Promise<MergePlanBuild>;
     play(plan: MergePlan, files: MergePlanFiles, title: string): Promise<void>;
+    edit?(plan: MergePlan, files: MergePlanFiles, title: string, save: (edit: MergePlanCodeEdit) => Promise<string>):
+        Promise<string | undefined>;
 }
 
-export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play}: Props) {
+export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play, edit}: Props) {
     const text = locale.startsWith('ja') ? words.ja : words.en;
     const labels = labelsFor(locale);
     const [open, setOpen] = useState(false);
@@ -106,7 +112,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     const message = (failure: unknown) => {
         if (!(failure instanceof GitPanelError)) return labels.failed;
         const {code} = failure;
-        if (code === 'mergePlanNoBase' || code === 'mergePlanMultipleBases') return text[code];
+        if (code === 'mergePlanNoBase' || code === 'mergePlanMultipleBases' || code === 'mergePlanEditConflict') return text[code];
         const localized = labels[code as keyof typeof labels];
         return typeof localized === 'string' ? localized : labels.failed;
     };
@@ -185,8 +191,16 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                     copiedFrom={original && names.get(original.planId)}
                     duplicate={plan => void act(() => add(duplicateMergePlan(plan)))}
                     play={(plan, title) => void act(async () => play(plan, await journal.files(plan), title))}
+                    edit={edit && ((plan, title) => act(async () => {
+                        const files = await journal.files(plan);
+                        return edit(plan, files, title, async changes => {
+                            const revision = await editMergePlan(plan, files, changes);
+                            return add(revision.plan, revision.files);
+                        });
+                    }))}
                     revise={(plan, choices) => act(async () => {
-                        const revision = await reviseMergePlan(plan, await journal.seed(plan), choices);
+                        const revision = await reviseMergePlan(plan, await journal.seed(plan), choices,
+                            plan.edited ? await journal.files(plan) : undefined);
                         return add(revision.plan, revision.files);
                     })}/>;
             })}
@@ -197,7 +211,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     </>;
 }
 
-function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise}: {
+function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise, edit}: {
     text: typeof words.en;
     name: string;
     generations: MergePlan[];
@@ -205,13 +219,14 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
     copiedFrom?: string;
     duplicate(plan: MergePlan): void;
     play(plan: MergePlan, title: string): void;
+    edit?(plan: MergePlan, title: string): Promise<string | undefined>;
     revise(plan: MergePlan, choices: MergePlanChoices): Promise<string | undefined>;
 }) {
     const [selected, setSelected] = useState('');
     const plan = generations.find(item => item.id === selected) ?? generations[generations.length - 1];
     const generation = (index: number) => `${text.generation} ${index + 1}`;
     const unconfirmed = plan.conflicts.filter(conflict => !plan.choices[conflict.id]).length;
-    const title = `${text.play} · ${name} · ${generation(generations.indexOf(plan))}`;
+    const title = `${name} · ${generation(generations.indexOf(plan))}`;
     return <section aria-label={name} className="twgit-merge-candidate">
         <h3>{name}</h3>
         <p><code>{plan.inputs.incoming.name} @{plan.inputs.incoming.oid.slice(0, 8)}</code> →{' '}
@@ -222,6 +237,7 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
                 {generations.map((item, index) => <option key={item.id} value={item.id}>{generation(index)}</option>)}
             </select>
         </label>
+        {plan.edited && <p>{text.edited}</p>}
         {plan.conflicts.length > 0 && <details>
             <summary>{text.edit} · {text.unconfirmed} {unconfirmed}</summary>
             <ConflictChoices key={plan.id} text={text} plan={plan} busy={busy}
@@ -233,7 +249,11 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
         {plan.problems > 0 && <p>{text.problems} · {plan.problems}</p>}
         <div className="twgit-merge-plan-actions">
             <button type="button" disabled={busy} onClick={() => duplicate(plan)}>{text.duplicate}</button>
-            <button type="button" disabled={busy} onClick={() => play(plan, title)}>{text.play}</button>
+            {edit && <button type="button" disabled={busy} onClick={async () => {
+                const id = await edit(plan, `${text.editCode} · ${title}`);
+                if (id) setSelected(id);
+            }}>{text.editCode}</button>}
+            <button type="button" disabled={busy} onClick={() => play(plan, `${text.play} · ${title}`)}>{text.play}</button>
         </div>
     </section>;
 }

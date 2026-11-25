@@ -438,6 +438,22 @@
 .twgit-merge-choices select { display: block; max-width: 100%; }
 .twgit-merge-candidate details form { margin-bottom: .6rem; }
 .twgit-merge-plan-dialog > .twgit-merge-plan-actions { justify-content: end; }
+.twgit-merge-code-editor {
+    box-sizing: border-box;
+    width: min(100rem, 96vw);
+    height: 94vh;
+    padding: .65rem;
+    color: CanvasText;
+    background: Canvas;
+}
+.twgit-merge-code-editor[open] {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+    gap: .45rem;
+}
+.twgit-merge-code-editor h2, .twgit-merge-code-editor p { margin: 0; }
+.twgit-merge-code-editor iframe { display: block; width: 100%; height: 100%; border: 0; }
+.twgit-merge-code-editor p[role="status"]:empty { display: none; }
 .twgit-remote-repository-dialog .twgit-connection-body > label { display: grid; gap: 4px; }
 .twgit-remote-repository-dialog input[type="url"] { font: inherit; width: 100%; box-sizing: border-box; }
 .twgit-remote-repository-dialog fieldset { border: 0; margin: 8px 0; padding: 0; }

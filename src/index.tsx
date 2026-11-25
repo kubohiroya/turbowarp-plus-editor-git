@@ -41,7 +41,7 @@ export {createEditorBlockLocator} from './editor-block-locator.js';
 import {createEditorBlockLocator} from './editor-block-locator.js';
 import type {LocatorVM} from './editor-block-locator.js';
 import {MergePlanPanel} from './merge-plan-panel.js';
-import {mergePlanPreviewFiles} from './merge-plan.js';
+import {mergePlanPreviewFiles, type MergePlanCodeEdit} from './merge-plan.js';
 import {canPersistMergePlans, createIndexedDbMergePlanJournal, createMemoryMergePlanJournal} from './merge-plan-journal.js';
 
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
@@ -85,6 +85,8 @@ export interface GitHost {
     validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
     previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
         title?: string; guard?: () => void}): Promise<void>;
+    editProjectVersion?(request: {title: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
+        guard(): void; save(edit: MergePlanCodeEdit): Promise<string>}): Promise<string | undefined>;
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed' | 'folder') => void): () => void;
@@ -1055,7 +1057,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                     if (error instanceof GitPanelError) throw error;
                                     throw new GitPanelError('versionOpenFailed');
                                 }
-                            }}/>}
+                            }}
+                            edit={host.editProjectVersion && (async (plan, files, title, save) => {
+                                const {folder, guard} = await projectVersionScope(state.repository!, false);
+                                if (folder !== plan.folder) throw new GitPanelError('changed');
+                                return host.editProjectVersion!({title, files: mergePlanPreviewFiles(files), guard, save});
+                            })}/>}
                 </div>
                 {!slot && <CloseButton label={labels.close} onClick={closePanel}/>}
             </header>

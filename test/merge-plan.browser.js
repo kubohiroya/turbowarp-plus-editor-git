@@ -135,3 +135,40 @@ test('conflict choices save new generations, which can be reopened and played af
     assert.deepEqual(await fixture.snapshot(), afterExternalUpdate);
     assert.deepEqual(errors, []);
 });
+
+test('edits a real block in an isolated Editor and saves a replayable generation', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    const before = await fixture.snapshot();
+    const {page, candidate, createCandidate, open, play, errors} = await start(t, fixture);
+    await createCandidate();
+    const first = candidate(1);
+    await first.getByRole('button', {name: 'Edit blocks', exact: true}).click();
+    const edit = page.getByRole('dialog', {name: 'Edit blocks · Candidate 1 · Generation 1', exact: true});
+    const save = edit.getByRole('button', {name: 'Save as new generation', exact: true});
+    await expect(save).toBeEnabled({timeout: 30_000});
+    const frame = await (await edit.locator('iframe').elementHandle()).contentFrame();
+    assert.ok(frame);
+    await expect(frame.getByText('File', {exact: true})).toHaveCount(0);
+    await save.click();
+    await expect(edit.getByRole('status')).toContainText('There are no block edits to save.');
+    const workspace = frame.locator('.blocklySvg > .blocklyWorkspace > .blocklyBlockCanvas');
+    await workspace.locator('.blocklyEditableText').filter({hasText: /^25$/}).click();
+    const input = frame.locator('.blocklyHtmlInput');
+    await input.fill('42');
+    await input.press('Enter');
+    await workspace.getByText('42', {exact: true}).waitFor();
+    // Running inside the editor must not save the sprite's runtime position into the generation.
+    await frame.getByTitle('Go', {exact: true}).click();
+    await frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x === 42);
+    await save.click();
+    await expect(edit).toHaveCount(0);
+    await expect(first.getByRole('option', {name: 'Generation 2', exact: true})).toBeAttached();
+    await open();
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    await generation.selectOption({label: 'Generation 2'});
+    await play(1, 2, 42, 120);
+    await generation.selectOption({label: 'Generation 1'});
+    await play(1, 1, 25, 120);
+    assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});

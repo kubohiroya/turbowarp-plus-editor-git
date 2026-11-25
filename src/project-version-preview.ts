@@ -1,4 +1,6 @@
 import {dialogAction, dialogActions} from '@kubohiroya/turbowarp-plus-editor-windows';
+export {isProjectVersionEditor, openProjectVersionEditor, receiveProjectVersionEditor} from './project-version-editor.js';
+export type {MergePlanCodeEdit} from './merge-plan.js';
 
 /**
  * Shows a past version of the project, read from the repository's history, in a player inside a
