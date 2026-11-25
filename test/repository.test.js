@@ -11,7 +11,9 @@ import {directoryHandle} from './directory.js';
 async function fixture(t, commit = true) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-'));
     t.after(() => fs.rm(root, {recursive: true, force: true}));
-    const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8'}).trimEnd();
+    // Native Git can start background maintenance after a fetch or commit, between byte snapshots.
+    const git = (...args) => execFileSync('git', ['-c', 'maintenance.auto=false', ...args],
+        {cwd: root, encoding: 'utf8'}).trimEnd();
     git('init', '-q', '-b', 'main');
     git('config', 'user.name', 'Git panel fixture');
     git('config', 'user.email', 'fixture@example.invalid');
