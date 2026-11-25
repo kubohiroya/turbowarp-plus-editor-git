@@ -4,6 +4,8 @@ import {PLAYTEST_COMPARE, PLAYTEST_EDIT_ADOPTED, type MergePlaytestRequest, type
 import {isRecord} from './project-source-patch.js';
 import type {PlaytestObserver, PlaytestReadRequest} from './merge-playtest-observation.js';
 import {isProjectVersionEditor} from './project-version-editor.js';
+import {connectPlaytestRecord} from './merge-playtest-record-dialog.js';
+import type {PlaytestRecordPort} from './merge-playtest-record.js';
 export {isProjectVersionEditor, openProjectVersionEditor, receiveProjectVersionEditor} from './project-version-editor.js';
 export type {MergePlanCodeEdit} from './merge-plan.js';
 export {connectMergePlaytest, focusPlaytestStop} from './merge-playtest-view.js';
@@ -73,6 +75,8 @@ export interface ProjectVersionPreviewOptions {
 export interface ProjectVersionPlaytest extends MergePlaytestRequest {
     compare?(conflict: PlaytestConflict): void;
     saveGeneration?: SavePlaytestGeneration;
+    record?: PlaytestRecordPort;
+    importRevision?(): void;
 }
 
 export function openProjectVersionPreview(document: Document, oid: string, archive: ArrayBuffer, locale: string,
@@ -115,16 +119,30 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
     const actions = [dialogAction(close, 'close')];
     const save = playtest?.saveGeneration && playtest.conflicts.length && !playtest.blocking.length ?
         connectPlaytestSave(preview, frame, origin, close, locale, playtest, playtest.saveGeneration) : undefined;
+    const record = playtest?.record && observe && !playtest.blocking.length ?
+        connectPlaytestRecord(preview, locale, playtest.record) : undefined;
+    const importRevision = playtest?.importRevision && !playtest.blocking.length ? document.createElement('button') : undefined;
+    if (importRevision) {
+        importRevision.type = 'button';
+        importRevision.textContent = japanese(locale) ? '修正候補を取り込む…' : 'Import a revised candidate…';
+        importRevision.disabled = true;
+        importRevision.onclick = playtest!.importRevision!;
+        actions.push(importRevision);
+    }
     if (save) actions.push(save.action);
+    if (record) actions.push(record.button);
     preview.append(dialogActions(document, ...actions));
     const pending = new Set<() => void>();
     const unavailable = () => {
         observe?.(null);
+        record?.available(false);
+        if (importRevision) importRevision.disabled = true;
         pending.forEach(cancel => cancel());
     };
     const dispose = () => {
         view.removeEventListener('message', send);
         save?.disconnect();
+        record?.dispose();
         unavailable();
         preview.remove();
     };
@@ -168,6 +186,8 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
                 origin, [archive]);
         } else if (sent && event.data === previewLoaded && preview.open) {
             observe?.(read);
+            record?.available(true);
+            if (importRevision) importRevision.disabled = false;
         } else if (sent && preview.open && playtest?.compare && event.data?.kind === PLAYTEST_COMPARE) {
             const conflict = playtest.conflicts.find(({id}) => id === event.data.id);
             if (conflict) playtest.compare(conflict);

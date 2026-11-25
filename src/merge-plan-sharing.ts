@@ -1,6 +1,7 @@
 import type {MergePlanJournal, MergePlanScope} from './merge-plan-journal.js';
 import type {MergePlan} from './merge-plan.js';
 import type {PlaytestObserver, PlaytestReadRequest, ReadPlaytest} from './merge-playtest-observation.js';
+import type {MergePlanTestResult} from './merge-plan-tests.js';
 
 type ReadMergePlan = (tool: string, args: Record<string, unknown>) => Promise<unknown>;
 
@@ -31,28 +32,37 @@ export function createMergePlanPlaytest() {
     type Session = {sessionId: string; planId: string; generationId: string; contentId: string; startedAt: number};
     let active: {session: Session; read: ReadPlaytest} | null = null;
     const empty = () => ({playtest: null, observedAt: Date.now()});
+    const current = async (expected: unknown, query: PlaytestReadRequest) => {
+        const live = active;
+        if (expected !== undefined && live?.session.sessionId !== expected) throw new Error('The playtest session has ended.');
+        if (!live) return empty();
+        const observation = await live.read(query).catch(error => {
+            if (active || expected !== undefined) throw error;
+        });
+        if (!active && expected === undefined) return empty();
+        if (active !== live) throw new Error('The playtest session has ended.');
+        return {playtest: live.session, observation, observedAt: Date.now()};
+    };
     return {
-        async current(expected: unknown, query: PlaytestReadRequest) {
-            const current = active;
-            if (expected !== undefined && current?.session.sessionId !== expected) throw new Error('The playtest session has ended.');
-            if (!current) return empty();
-            const observation = await current.read(query).catch(error => {
-                if (active || expected !== undefined) throw error;
-            });
-            if (!active && expected === undefined) return empty();
-            if (active !== current) throw new Error('The playtest session has ended.');
-            return {playtest: current.session, observation, observedAt: Date.now()};
-        },
-        observe(plan: MergePlan): PlaytestObserver {
+        current,
+        bind(plan: MergePlan) {
             const {id: generationId, planId, contentId} = plan;
             const sessionId = crypto.randomUUID();
-            return read => {
+            const observe: PlaytestObserver = read => {
                 if (read) active = {session: {sessionId, planId, generationId, contentId, startedAt: Date.now()}, read};
                 else if (active?.session.sessionId === sessionId) active = null;
             };
+            return {observe, capture: (query: PlaytestReadRequest) => current(sessionId, query)};
         }
     };
 }
+
+export type MergePlaytestCapture = ReturnType<ReturnType<typeof createMergePlanPlaytest>['bind']>['capture'];
+
+export const summarizeMergePlanTest = (result: MergePlanTestResult | null) => result && {
+    generationId: result.generationId, contentId: result.contentId, finishedAt: result.finishedAt,
+    counts: result.counts, total: result.total, error: result.error
+};
 
 /** Access only immutable journal snapshots for the captured project. File names are keys, never filesystem paths. */
 export function createMergePlanReader(journal: MergePlanJournal, scope: MergePlanScope & {guard(): void},
@@ -88,8 +98,7 @@ export function createMergePlanReader(journal: MergePlanJournal, scope: MergePla
             const paths = [...files.keys()].sort();
             const result = await journal.testResult(plans[index]);
             scope.guard();
-            const latestTest = result && {generationId: result.generationId, contentId: result.contentId,
-                finishedAt: result.finishedAt, counts: result.counts, total: result.total, error: result.error};
+            const latestTest = summarizeMergePlanTest(result);
             return {project, generation: generations[index], latestTest,
                 files: paths.slice(offset, offset + limit).map(path => ({path, size: files.get(path)!.byteLength})),
                 nextOffset: offset + limit < paths.length ? offset + limit : null};
