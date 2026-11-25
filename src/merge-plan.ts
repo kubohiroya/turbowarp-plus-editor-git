@@ -67,7 +67,7 @@ function summarize({id, path, type, ...rest}: FolderConflict): MergePlanConflict
     return result;
 }
 
-async function contentId(files: MergePlanFiles) {
+export async function mergePlanContentId(files: MergePlanFiles) {
     const hash = async (bytes: Uint8Array<ArrayBuffer>) =>
         Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value =>
             value.toString(16).padStart(2, '0')).join('');
@@ -89,7 +89,7 @@ function resolveFiles(seed: MergePlanSeed, choices: MergePlanChoices) {
 }
 
 async function snapshot(plan: Omit<MergePlan, 'contentId' | 'problems'>, files: MergePlanFiles, problems: number): Promise<MergePlanBuild> {
-    return {plan: {...plan, contentId: await contentId(files), problems}, files};
+    return {plan: {...plan, contentId: await mergePlanContentId(files), problems}, files};
 }
 
 function materialize(plan: Omit<MergePlan, 'contentId' | 'problems'>, seed: MergePlanSeed) {

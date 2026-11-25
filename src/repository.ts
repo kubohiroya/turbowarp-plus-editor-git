@@ -11,7 +11,8 @@ import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import type {FileVersion} from './change-marks.js';
 import {planProjectRestore, projectScope, projectVersionFile} from './project-version.js';
-import {createMergePlan, type MergePlanBranch} from './merge-plan.js';
+import {createMergePlan, type MergePlan, type MergePlanBranch, type MergePlanFiles} from './merge-plan.js';
+import {prepareMergeCommit, type ValidateMergeProject} from './merge-plan-commit.js';
 import type {FileVersions} from './project-folder-merge.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
@@ -1034,6 +1035,8 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         }),
         planMerge: (folder: string, expected: {branch: string; head: string}, from: string) =>
             serial(() => planMerge(folder, expected, from)),
+        prepareMergeCommit: (plan: MergePlan, files: MergePlanFiles, validate: ValidateMergeProject) =>
+            serial(() => prepareMergeCommit({...options, fs: createReadOnlyFs(root), cache: {}}, plan, files, validate)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
         /**
          * Reads one page of the commits reachable from the local branches, `origin/*` and a detached HEAD, newest first

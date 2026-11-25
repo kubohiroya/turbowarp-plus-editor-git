@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {readFile} from 'node:fs/promises';
+import {readFile, rm, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {chromium, expect} from '@playwright/test';
 import {mergePlanFixture} from './merge-plan-fixture.js';
@@ -209,6 +209,58 @@ test('conflict choices save new generations, which can be reopened and played af
         await player.getByRole('button', {name: 'Close', exact: true}).click();
     }
     assert.deepEqual(await fixture.snapshot(), afterExternalUpdate);
+    assert.deepEqual(errors, []);
+});
+
+test('reviews the selected tested generation and rejects changes made while confirmation is open', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    fixture.git('reset', '--hard');
+    await rm(path.join(fixture.project, 'notes.txt'));
+    await fixture.put(35, 30);
+    fixture.commit('Change the same block locally');
+    const {page, candidate, createCandidate, play, errors} = await start(t, fixture);
+    await createCandidate();
+    const first = candidate(1);
+    const finalize = first.getByRole('button', {name: 'Finalize this generation…'});
+    const plans = page.getByRole('dialog', {name: 'Merge plans'});
+    const confirm = page.getByRole('dialog', {name: 'Review merge commit'});
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    await finalize.click();
+    await expect(plans.getByRole('alert')).toContainText('Resolve the remaining conflicts');
+    await first.getByText(/Choose versions for conflicting changes/).click();
+    const select = first.getByLabel(/project.source.json.*Walker/);
+    await select.selectOption('incoming');
+    await first.getByRole('button', {name: 'Save as new generation'}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 2');
+    await select.selectOption('current');
+    await first.getByRole('button', {name: 'Save as new generation'}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 3');
+    await generation.selectOption({label: 'Generation 2'});
+    await play(1, 2, 25, 105);
+    const before = await fixture.snapshot();
+    await finalize.click();
+    await expect(confirm).toContainText('Candidate 1 · Generation 2');
+    await expect(confirm).toContainText('project.source.json');
+    await confirm.getByRole('button', {name: 'Cancel'}).click();
+    assert.deepEqual(await fixture.snapshot(), before);
+
+    await finalize.click();
+    await expect(confirm).toBeVisible();
+    fixture.git('update-ref', 'refs/remotes/origin/main', fixture.base);
+    await confirm.getByRole('button', {name: 'Create merge commit'}).click();
+    await expect(plans.getByRole('alert')).toContainText('one of the recorded tips has changed');
+    fixture.git('update-ref', 'refs/remotes/origin/main', fixture.incoming);
+    assert.deepEqual(await fixture.snapshot(), before);
+
+    await finalize.click();
+    await expect(confirm).toBeVisible();
+    const concurrent = path.join(fixture.project, 'added-while-reviewing.txt');
+    await writeFile(concurrent, 'An external editor wrote this file.\n');
+    await confirm.getByRole('button', {name: 'Create merge commit'}).click();
+    await expect(plans.getByRole('alert')).toContainText('clear unsaved and uncommitted changes before merging');
+    assert.equal(await readFile(concurrent, 'utf8'), 'An external editor wrote this file.\n');
+    await rm(concurrent);
+    assert.deepEqual(await fixture.snapshot(), before);
     assert.deepEqual(errors, []);
 });
 

@@ -26,6 +26,7 @@ const words = {
         importContent: 'Base content ID', importReview: 'Review the file changes before saving this generation.',
         importResolutions: 'Use the imported changes for these conflicts', imported: 'Includes imported changes',
         add: 'Add', replace: 'Replace', delete: 'Delete', cancelImport: 'Cancel import',
+        finalize: 'Finalize this generation…', committed: 'Merge commit created',
         mergePlanImportFormat: 'Choose a version 1 candidate changes JSON file within the size limit.',
         mergePlanImportBase: 'Select the generation named by the file, or ask for changes based on this generation.',
         mergePlanImportInvalid: 'The imported project has invalid references, files or conflict resolutions.',
@@ -51,6 +52,7 @@ const words = {
         importContent: '元の内容ID', importReview: 'ファイルの変更を確認してから、新しい世代として保存してください。',
         importResolutions: '次の競合に取り込んだ変更を採用する', imported: '外部から取り込んだ変更を含む',
         add: '追加', replace: '置換', delete: '削除', cancelImport: '取り込みをキャンセル',
+        finalize: 'この世代をマージとして確定…', committed: 'マージコミットを作成しました',
         mergePlanImportFormat: '形式がバージョン1で、サイズ上限内の修正候補JSONを選んでください。',
         mergePlanImportBase: 'ファイルが指定する元の世代を選ぶか、この世代を元にした修正を用意してください。',
         mergePlanImportInvalid: '取り込んだ作品の参照・ファイル・競合の指定に問題があります。',
@@ -78,12 +80,13 @@ interface Props {
     play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: MergePlaytestRequest, observe?: PlaytestObserver): Promise<void>;
     share?: MergePlanSharePort;
     validate?(files: MergePlanFiles): void;
+    finalize?(plan: MergePlan, files: MergePlanFiles, title: string): Promise<string | undefined>;
     edit?(plan: MergePlan, files: MergePlanFiles, title: string, save: (edit: MergePlanCodeEdit) => Promise<string>):
         Promise<string | undefined>;
 }
 
 export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play, edit,
-    share, validate}: Props) {
+    share, validate, finalize}: Props) {
     const text = locale.startsWith('ja') ? words.ja : words.en;
     const labels = labelsFor(locale);
     const [open, setOpen] = useState(false);
@@ -93,6 +96,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     const [error, setError] = useState('');
     const [plans, setPlans] = useState<MergePlan[]>();
     const [storageError, setStorageError] = useState(false);
+    const [committed, setCommitted] = useState('');
     const dialog = useRef<HTMLDialogElement>(null);
     const operation = useRef(false);
     const activeContext = useRef<object | null>(context);
@@ -188,6 +192,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
         setAvailable(undefined);
         setSelected('');
         setError('');
+        setCommitted('');
     };
     return <>
         <button type="button" className="twgit-panel-action"
@@ -235,6 +240,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
             </form>}
             {busy && <p role="status">{labels.loading}</p>}
             {error && <p role="alert">{error}</p>}
+            {committed && <p role="status">{text.committed} <code>{committed}</code></p>}
             {[...groups].map(([id, generations]) => {
                 const original = plans?.find(plan => plan.id === generations[0].copiedFrom);
                 return <Candidate key={id} text={text} name={names.get(id)!} generations={generations} busy={busy}
@@ -260,6 +266,10 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                         const revision = await draft.save();
                         return add(revision.plan, revision.files);
                     })}
+                    finalize={finalize && (async (plan, title) => {
+                        const oid = await act(async () => finalize(plan, await journal.files(plan), title));
+                        if (oid) setCommitted(oid);
+                    })}
                     revise={(plan, choices) => act(async () => {
                         const revision = await reviseMergePlan(plan, await journal.seed(plan), choices,
                             plan.edited ? await journal.files(plan) : undefined);
@@ -273,7 +283,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     </>;
 }
 
-function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise, edit, prepareImport, saveImport}: {
+function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise, edit, prepareImport, saveImport, finalize}: {
     text: typeof words.en;
     name: string;
     generations: MergePlan[];
@@ -285,6 +295,7 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
     revise(plan: MergePlan, choices: MergePlanChoices): Promise<string | undefined>;
     prepareImport?(plan: MergePlan, file: File): Promise<MergePlanImport | undefined>;
     saveImport(draft: MergePlanImport): Promise<string | undefined>;
+    finalize?(plan: MergePlan, title: string): Promise<void>;
 }) {
     const [selected, setSelected] = useState('');
     const plan = generations.find(item => item.id === selected) ?? generations[generations.length - 1];
@@ -318,6 +329,7 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
                 if (id) setSelected(id);
             }}>{text.editCode}</button>}
             <button type="button" disabled={busy} onClick={() => play(plan, `${text.play} · ${title}`)}>{text.play}</button>
+            {finalize && <button type="button" disabled={busy} onClick={() => void finalize(plan, title)}>{text.finalize}</button>}
         </div>
         {prepareImport && <CandidateImport key={plan.id} text={text} plan={plan} busy={busy}
             prepare={file => prepareImport(plan, file)}

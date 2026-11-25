@@ -6,7 +6,8 @@ export class GitPanelError extends Error {
         'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'publicationConflict' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe' | 'notEmpty' |
         'mergePlanNoBase' | 'mergePlanMultipleBases' | 'mergePlanEditUnsupported' | 'mergePlanEditUnchanged' |
         'mergePlanEditConflict' | 'mergePlanImportFormat' | 'mergePlanImportBase' | 'mergePlanImportInvalid' |
-        'mergePlanImportUnchanged', message: string = code) {
+        'mergePlanImportUnchanged' | 'mergeCommitUnresolved' | 'mergeCommitDirty' | 'mergeCommitTipsChanged' |
+        'mergeCommitOutsideProject' | 'mergeCommitIntegrated' | 'mergeCommitInvalid', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }

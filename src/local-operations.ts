@@ -3,6 +3,8 @@ import {createReadOnlyFs, errorCode, GitPanelError, pathParts} from './filesyste
 import {createMutationFs} from './mutation-fs.js';
 import {planProjectRestore, projectVersionFile} from './project-version.js';
 import type {ProjectRestorePlan} from './project-version.js';
+import {assertMergeCommitClean, assertMergeCommitTips, prepareMergeCommit, type ValidateMergeProject} from './merge-plan-commit.js';
+import type {MergePlan, MergePlanFiles} from './merge-plan.js';
 
 /** The name and email a commit records. */
 export type GitAuthor = {name: string; email: string};
@@ -11,6 +13,8 @@ export type LocalOperation =
     | {kind: 'unstage'; paths: readonly string[]}
     | {kind: 'commit'; message: string; author?: GitAuthor; selection?: CommitSelection}
     | {kind: 'restoreProject'; plan: ProjectRestorePlan; author?: GitAuthor}
+    | {kind: 'finalizeMergePlan'; plan: MergePlan; files: MergePlanFiles; message: string; author?: GitAuthor;
+        validate: ValidateMergeProject}
     /**
      * Creates `name` at HEAD, at the commit `at`, or at `origin/<name>` with `fromRemote`, and switches to it with
      * `checkout`. With `reuse` (only with `at`), a branch `name` that already points at `at` is switched to instead of
@@ -67,8 +71,9 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
     const execute = async () => {
         guard();
         let commitOid: string | undefined;
+        let verify: Parameters<ReturnType<typeof createMutationFs>['commit']>[2];
         const switching = operation.kind === 'switchBranch' || (operation.kind === 'createBranch' && operation.checkout);
-        const transaction = createMutationFs(root, switching || operation.kind === 'restoreProject');
+        const transaction = createMutationFs(root, switching || operation.kind === 'restoreProject' || operation.kind === 'finalizeMergePlan');
         const options = {fs: transaction.fs, dir: '/', gitdir: '/.git', cache: {}};
         const read = createReadOnlyFs(root).promises;
         const exists = async (path: string) => {
@@ -100,7 +105,54 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             '/.git/rebase-merge', '/.git/rebase-apply']) {
             if (await exists(path)) throw new GitPanelError('locked');
         }
-        if (operation.kind === 'restoreProject') {
+        if (operation.kind === 'finalizeMergePlan') {
+            const {plan, files, validate} = operation;
+            const message = operation.message.trim();
+            if (!message) throw new GitPanelError('commitMessage');
+            const changes = await prepareMergeCommit(options, plan, files, validate);
+            const {current, incoming} = plan.inputs;
+            const selected = new Map(changes.map(({path, after}) => [path, after]));
+            const before = changes.map(({path, before: oid}) => ({path, oid}));
+            const expectCleanIndex = async (fresh: GitReadOptions & {fs: Parameters<typeof assertWorktree>[0]}) => {
+                try {
+                    await assertIndex(fresh, current.oid, new Map(), false);
+                    await assertWorktree(fresh.fs, before);
+                } catch (error) {
+                    if ((error instanceof GitPanelError && error.code === 'changed') || errorCode(error) === 'EISDIR')
+                        throw new GitPanelError('mergeCommitDirty');
+                    throw error;
+                }
+            };
+            await expectCleanIndex(options);
+            const author = await commitAuthor(options, operation.author);
+            for (const {path, after} of changes) {
+                if (after) continue;
+                await options.fs.promises.unlink('/' + path);
+                await git.remove({...options, filepath: path});
+            }
+            for (const {path, relative, after} of changes) {
+                if (!after) continue;
+                const bytes = files.get(relative)!;
+                await mkdirParents(options.fs, path);
+                await options.fs.promises.writeFile('/' + path, bytes);
+                if (await git.writeBlob({...options, blob: bytes}) !== after) throw new GitPanelError('changed');
+                await git.updateIndex({...options, filepath: path, oid: after, mode: 0o100644, add: true});
+            }
+            await assertIndex(options, current.oid, selected, true);
+            commitOid = await git.commit({...options, ref: current.ref, author, parent: [current.oid, incoming.oid],
+                message: message + '\n'});
+            verify = async phase => {
+                const fresh = {...options, fs: createReadOnlyFs(root), cache: {}};
+                await assertMergeCommitTips(fresh, plan);
+                await assertMergeCommitClean(fresh, phase === 'beforeRefs');
+                if (phase === 'beforeRefs') {
+                    await assertIndex(fresh, current.oid, selected, true);
+                    await assertWorktree(fresh.fs, changes.map(({path, after: oid}) => ({path, oid})));
+                } else {
+                    await expectCleanIndex(fresh);
+                }
+            };
+        } else if (operation.kind === 'restoreProject') {
             const {plan} = operation;
             const fresh = await planProjectRestore(options, plan.oid, plan.folder);
             if (fresh.branch !== plan.branch || fresh.head !== plan.head ||
@@ -140,14 +192,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             for (const {path, after} of fresh.changes) {
                 if (after) {
                     const {blob} = await git.readBlob({...options, oid: after});
-                    const parents = pathParts(path);
-                    parents.pop();
-                    let directory = '';
-                    for (const part of parents) {
-                        directory += '/' + part;
-                        try {await options.fs.promises.mkdir(directory);}
-                        catch (error) {if (errorCode(error) !== 'EEXIST') throw error;}
-                    }
+                    await mkdirParents(options.fs, path);
                     await options.fs.promises.writeFile('/' + path, blob);
                     await git.updateIndex({...options, filepath: path, oid: after, mode: 0o100644, add: true});
                 } else {
@@ -265,10 +310,19 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             }
         }
         guard();
-        await transaction.commit(guard);
+        await transaction.commit(guard, false, verify);
         return commitOid;
     };
     return execute();
+}
+
+async function mkdirParents(fs: ReturnType<typeof createMutationFs>['fs'], path: string) {
+    let directory = '';
+    for (const part of pathParts(path).slice(0, -1)) {
+        directory += '/' + part;
+        try {await fs.promises.mkdir(directory);}
+        catch (error) {if (errorCode(error) !== 'EEXIST') throw error;}
+    }
 }
 
 const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
