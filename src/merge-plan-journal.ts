@@ -17,7 +17,7 @@ export interface MergePlanJournal {
 }
 
 type Row = MergePlanScope & {plan: MergePlan};
-type Store = 'generations' | 'files' | 'seeds' | 'testResults';
+type Store = 'generations' | 'files' | 'seeds';
 const stores: Store[] = ['generations', 'files', 'seeds'];
 const rootIndex = 'rootNameAndFolder';
 
@@ -63,20 +63,12 @@ export function canPersistMergePlans(root: FileSystemDirectoryHandle): boolean {
     }
 }
 
-export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePlanJournal {
+function connectTo(indexedDb: IDBFactory, name: string, initialize: (db: IDBDatabase) => void) {
     let connection: Promise<IDBDatabase> | undefined;
-    function connect() {
+    return () => {
         return connection ??= new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDb.open('turbowarp-plus-editor-merge-plans', 2);
-            request.onupgradeneeded = ({oldVersion}) => {
-                if (oldVersion < 1) {
-                    request.result.createObjectStore('generations', {keyPath: 'plan.id'})
-                        .createIndex(rootIndex, ['rootName', 'folder']);
-                    request.result.createObjectStore('files');
-                    request.result.createObjectStore('seeds');
-                }
-                request.result.createObjectStore('testResults', {keyPath: ['generationId', 'contentId']});
-            };
+            const request = indexedDb.open(name);
+            request.onupgradeneeded = () => initialize(request.result);
             request.onerror = () => reject(request.error);
             request.onsuccess = () => {
                 const database = request.result;
@@ -90,47 +82,67 @@ export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePla
             connection = undefined;
             throw error;
         });
-    }
-    async function transact<T>(used: Store | Store[], mode: IDBTransactionMode,
-        operation: (transaction: IDBTransaction) => IDBRequest<T>) {
-        const database = await connect();
-        return new Promise<T>((resolve, reject) => {
-            const transaction = database.transaction(used, mode);
-            try {
-                const request = operation(transaction);
-                transaction.oncomplete = () => resolve(request.result);
-                transaction.onabort = () => reject(transaction.error ?? request.error);
-            } catch (error) {
-                transaction.abort();
-                reject(error);
-            }
-        });
-    }
+    };
+}
+
+async function transact<T>(database: IDBDatabase, stores: string | string[], mode: IDBTransactionMode,
+    operation: (transaction: IDBTransaction) => IDBRequest<T>) {
+    return new Promise<T>((resolve, reject) => {
+        const transaction = database.transaction(stores, mode);
+        try {
+            const request = operation(transaction);
+            transaction.oncomplete = () => resolve(request.result);
+            transaction.onabort = () => reject(transaction.error ?? request.error);
+        } catch (error) {
+            transaction.abort();
+            reject(error);
+        }
+    });
+}
+
+export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePlanJournal {
+    const plans = connectTo(indexedDb, 'turbowarp-plus-editor-merge-plans', db => {
+        db.createObjectStore('generations', {keyPath: 'plan.id'}).createIndex(rootIndex, ['rootName', 'folder']);
+        db.createObjectStore('files');
+        db.createObjectStore('seeds');
+    });
+    // Keep the candidate schema at v1 so a previous Editor build can still open its saved generations.
+    const testStore = 'testResults';
+    const tests = connectTo(indexedDb, 'turbowarp-plus-editor-merge-plan-tests', db => {
+        db.createObjectStore(testStore, {keyPath: ['generationId', 'contentId']});
+    });
+    const readResult = (db: IDBDatabase, key: string[]) => transact<MergePlanTestResult | undefined>(
+        db, testStore, 'readonly', tx => tx.objectStore(testStore).get(key));
     return {
         async list(scope) {
-            const rows = await transact('generations', 'readonly', tx =>
+            const rows = await transact(await plans(), 'generations', 'readonly', tx =>
                 tx.objectStore('generations').index(rootIndex).getAll([scope.root.name, scope.folder]));
             return matching(scope, rows);
         },
         async append(scope, plan, files, seed) {
             // Publishing the generation and its dependencies together makes a failed write leave the old plan usable.
-            await transact(stores, 'readwrite', tx => {
+            await transact(await plans(), stores, 'readwrite', tx => {
                 if (files) tx.objectStore('files').put(files, plan.contentId);
                 if (seed) tx.objectStore('seeds').add(seed, plan.seedId);
                 return tx.objectStore('generations').add({...scope, rootName: scope.root.name, plan});
             });
         },
         async files(plan) {
-            return required(await transact('files', 'readonly', tx => tx.objectStore('files').get(plan.contentId)));
+            return required(await transact(await plans(), 'files', 'readonly', tx => tx.objectStore('files').get(plan.contentId)));
         },
         async seed(plan) {
-            return required(await transact('seeds', 'readonly', tx => tx.objectStore('seeds').get(plan.seedId)));
+            return required(await transact(await plans(), 'seeds', 'readonly', tx => tx.objectStore('seeds').get(plan.seedId)));
         },
         async testResult(plan) {
-            return await transact('testResults', 'readonly', tx => tx.objectStore('testResults').get([plan.id, plan.contentId])) ?? null;
+            const key = [plan.id, plan.contentId];
+            const result = await readResult(await tests(), key);
+            if (result) return result;
+            // Unreleased integration builds used a v2 store in the candidate database.
+            const candidateDatabase = await plans();
+            return candidateDatabase.objectStoreNames.contains(testStore) ? await readResult(candidateDatabase, key) ?? null : null;
         },
         async saveTestResult(result) {
-            await transact('testResults', 'readwrite', tx => tx.objectStore('testResults').put(result));
+            await transact(await tests(), testStore, 'readwrite', tx => tx.objectStore(testStore).put(result));
         }
     };
 }

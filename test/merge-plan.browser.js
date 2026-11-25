@@ -100,24 +100,32 @@ async function start(t, fixture, testDigest) {
     return {page, candidate, createCandidate, play, startPlaytest, open, errors};
 }
 
-const storedGeneration = (page, id) => page.evaluate(generationId => new Promise((resolve, reject) => {
-    const database = indexedDB.open('turbowarp-plus-editor-merge-plans');
-    database.onerror = () => reject(database.error);
-    database.onsuccess = () => {
-        const db = database.result;
-        const tx = db.transaction(['generations', 'files', 'testResults'], 'readonly');
-        tx.onerror = () => reject(tx.error);
-        tx.oncomplete = () => db.close();
-        const read = tx.objectStore('generations').get(generationId);
-        read.onsuccess = () => {
-            const {contentId} = read.result.plan;
-            const files = tx.objectStore('files').get(contentId);
-            const test = tx.objectStore('testResults').get([generationId, contentId]);
-            test.onsuccess = () => resolve({contentId, test: test.result, project: JSON.parse(new TextDecoder()
-                .decode(files.result.get('project.source.json')))});
-        };
-    };
-}), id);
+const storedGeneration = (page, generationId, withTest = false) => page.evaluate(async ({generationId, withTest}) => {
+    const resultOf = request => new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+    // The previous Editor opens this exact version, including on rollback after a test has run.
+    const db = await resultOf(indexedDB.open('turbowarp-plus-editor-merge-plans', 1));
+    let contentId;
+    let project;
+    try {
+        const row = await resultOf(db.transaction('generations').objectStore('generations').get(generationId));
+        contentId = row.plan.contentId;
+        const files = await resultOf(db.transaction('files').objectStore('files').get(contentId));
+        project = JSON.parse(new TextDecoder().decode(files.get('project.source.json')));
+    } finally {
+        db.close();
+    }
+    if (!withTest) return {contentId, project};
+    const results = await resultOf(indexedDB.open('turbowarp-plus-editor-merge-plan-tests', 1));
+    try {
+        const test = await resultOf(results.transaction('testResults').objectStore('testResults').get([generationId, contentId]));
+        return {contentId, project, test};
+    } finally {
+        results.close();
+    }
+}, {generationId, withTest});
 
 test('the Editor creates and duplicates a merge candidate, and both play in fresh, isolated players', options, async t => {
     const fixture = await mergePlanFixture(t, '');
@@ -156,7 +164,7 @@ test('tests the selected saved generation and reviews its persisted result befor
     await expect(first).toContainText('No tests have been run for this generation.');
     await run.click();
     await expect(first).toContainText('Passed 1 · Failed 0', {timeout: 30_000});
-    const base = await storedGeneration(page, baseGenerationId);
+    const base = await storedGeneration(page, baseGenerationId, true);
     assert.equal(base.test.generationId, baseGenerationId);
     assert.equal(base.test.contentId, base.contentId);
     assert.equal(base.test.tests[0].status, 'passed');
@@ -176,7 +184,7 @@ test('tests the selected saved generation and reviews its persisted result befor
     await expect(first).toContainText('No tests have been run for this generation.');
     await run.click();
     await expect(first).toContainText('Passed 0 · Failed 1', {timeout: 30_000});
-    const revised = await storedGeneration(page, revisedGenerationId);
+    const revised = await storedGeneration(page, revisedGenerationId, true);
     assert.notEqual(revised.contentId, base.contentId);
     assert.equal(revised.test.generationId, revisedGenerationId);
     assert.equal(revised.test.contentId, revised.contentId);
