@@ -3,7 +3,9 @@ export class GitPanelError extends Error {
         'session' | 'pushUnknown' | 'pushRefresh' | 'rollbackFailed' | 'remoteFailed' |
         'saveFirst' | 'saveFilesFailed' | 'author' | 'nothingStaged' | 'commitMessage' | 'ignoredProjectFile' |
         'switchUnsafe' | 'branchExists' | 'branchConflict' | 'pullRequestBranch' | 'branchName' | 'locked' |
-        'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'publicationConflict' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe' | 'notEmpty', message: string = code) {
+        'pullRequestNotFound' | 'forbidden' | 'network' | 'baseMissing' | 'publicationConflict' | 'versionMissing' | 'versionOpenFailed' | 'versionIdentical' | 'restoreUnsafe' | 'notEmpty' |
+        'mergePlanNoBase' | 'mergePlanMultipleBases' | 'mergePlanEditUnsupported' | 'mergePlanEditUnchanged' |
+        'mergePlanEditConflict', message: string = code) {
         super(message);
         this.name = 'GitPanelError';
     }

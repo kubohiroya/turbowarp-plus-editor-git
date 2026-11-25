@@ -11,6 +11,8 @@ import {assetLimit, assetsDirectoryParts, folderSettingsLimit, isAssetName} from
 import type {ProjectAssetLoader, ProjectVersion} from './project-assets.js';
 import type {FileVersion} from './change-marks.js';
 import {planProjectRestore, projectScope, projectVersionFile} from './project-version.js';
+import {createMergePlan, type MergePlanBranch} from './merge-plan.js';
+import type {FileVersions} from './project-folder-merge.js';
 
 export {createReadOnlyFs, GitPanelError} from './filesystem.js';
 export {pullRequestRef} from './remote-operations.js';
@@ -337,6 +339,73 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
         const remoteBranches = (await git.listBranches({...options, remote: 'origin'}))
             .filter(name => name !== 'HEAD' && !branches.includes(name)).sort();
         return {branch, head, branches, remoteBranches};
+    };
+    const mergePlanBranches = async (current: string): Promise<MergePlanBranch[]> => {
+        const local = await git.listBranches(options);
+        const remote = await git.listBranches({...options, remote: 'origin'});
+        return [
+            ...local.filter(name => name !== current).map(name => ({
+                name, ref: 'refs/heads/' + name
+            })),
+            ...remote.filter(name => name !== 'HEAD').map(name => ({
+                name: 'origin/' + name, ref: 'refs/remotes/origin/' + name
+            }))
+        ];
+    };
+
+    const planMerge = async (folder: string, expected: {branch: string; head: string}, from: string) => {
+        const scope = projectScope(folder);
+        fs.clearReads();
+        const before = await readHead();
+        if (before.branch !== expected.branch || before.head !== expected.head) throw new GitPanelError('changed');
+        const incomingBranch = (await mergePlanBranches(before.branch)).find(branch => branch.ref === from);
+        if (!incomingBranch) throw new GitPanelError('changed');
+        const incoming = await git.resolveRef({...options, ref: incomingBranch.ref});
+        const mergeCache = {};
+        const bases = await git.findMergeBase({...options, cache: mergeCache, oids: [expected.head, incoming]});
+        if (!bases.length) throw new GitPanelError('mergePlanNoBase');
+        if (bases.length > 1) throw new GitPanelError('mergePlanMultipleBases');
+        const [base] = bases;
+        const prefix = scope ? scope + '/' : '';
+        const trees = await Promise.all([base, expected.head, incoming].map(oid => entries(oid, scope)));
+        const paths = new Set(trees.flatMap(tree => [...tree.keys()]));
+        if (paths.size > 20_000) throw new GitPanelError('large');
+        const blobs = new Map<string, Uint8Array<ArrayBuffer>>();
+        let size = 0;
+        const read = async (entry: Entry | undefined) => {
+            if (!entry) return null;
+            if (entry.mode !== 0o100644) throw new GitPanelError('unsupported');
+            const prior = blobs.get(entry.oid);
+            if (prior) return prior;
+            const {blob} = await git.readBlob({...options, cache: mergeCache, oid: entry.oid});
+            size += blob.byteLength;
+            if (size > 100 * 1024 * 1024) throw new GitPanelError('large');
+            const bytes = Uint8Array.from(blob);
+            blobs.set(entry.oid, bytes);
+            return bytes;
+        };
+        const versions = new Map<string, FileVersions>();
+        for (const path of paths) {
+            if (!path.startsWith(prefix)) throw new GitPanelError('versionMissing');
+            const relative = path.slice(prefix.length);
+            projectScope(relative);
+            versions.set(relative, {
+                base: await read(trees[0].get(path)),
+                current: await read(trees[1].get(path)),
+                incoming: await read(trees[2].get(path))
+            });
+        }
+        const plan = await createMergePlan(scope, {
+            base,
+            current: {name: expected.branch, ref: 'refs/heads/' + expected.branch, oid: expected.head},
+            incoming: {...incomingBranch, oid: incoming}
+        }, versions);
+        await fs.checkReads();
+        fs.clearReads();
+        const after = await readHead();
+        if (after.branch !== before.branch || after.head !== before.head ||
+            await git.resolveRef({...options, ref: incomingBranch.ref}) !== incoming) throw new GitPanelError('changed');
+        return plan;
     };
     const readHeadFile = async (path: string, limit: number): Promise<HeadFile> => {
         const parts = pathParts(path);
@@ -959,6 +1028,12 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
             serial(() => readUnsavedDiff(snapshot, path, draft)),
         planProjectRestore: (oid: string, folder: string) => serial(() => readRestorePlan(oid, folder)),
         readProjectVersion: (oid: string, folder: string) => serial(() => readProjectVersion(oid, folder)),
+        mergePlanBranches: (currentBranch: string) => serial(() => {
+            fs.clearReads();
+            return mergePlanBranches(currentBranch);
+        }),
+        planMerge: (folder: string, expected: {branch: string; head: string}, from: string) =>
+            serial(() => planMerge(folder, expected, from)),
         historyChanges: (snapshot: Snapshot, oid: string) => serial(() => historyChanges(snapshot, oid)),
         /**
          * Reads one page of the commits reachable from the local branches, `origin/*` and a detached HEAD, newest first

@@ -52,6 +52,17 @@ test('the archive goes only to the player frame, once, after it is ready', t => 
     assert.deepEqual(sent, [[{kind: PROJECT_VERSION_PREVIEW_PROJECT, archive}, 'https://editor.test']]);
 });
 
+test('reports a structural conflict before opening a playtest', t => {
+    const {document, close} = fixture();
+    t.after(close);
+    const dialog = openProjectVersionPreview(document, 'a'.repeat(40), new ArrayBuffer(0), 'ja', {
+        page: 'preview.html', playtest: {conflicts: [], blocking: ['Walker · costumes']}
+    });
+    assert.match(dialog.querySelector('[role="alert"]')!.textContent!, /試遊の前に.*構造上の競合/);
+    assert.equal(dialog.querySelector('li')!.textContent, 'Walker · costumes');
+    assert.equal(dialog.querySelector('iframe'), null);
+});
+
 test('the words follow the locale', () => {
     assert.equal(projectVersionPreviewMessages('ja-JP').loadFailed, 'この版の作品を読み込めませんでした。');
     assert.equal(projectVersionPreviewMessages(null).loadFailed, 'This version could not be loaded.');
