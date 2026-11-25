@@ -1036,7 +1036,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
                         <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
-                            share={host.shareMergePlans}
+                            share={host.shareMergePlans} validate={host.validateProjectVersion}
                             journal={persistentMergePlans ? mergePlanJournals.persistent! : mergePlanJournals.memory}
                             branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}
                             scope={async () => {

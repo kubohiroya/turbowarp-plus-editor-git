@@ -20,10 +20,12 @@ const pageSize = (args: Record<string, unknown>, fallback: number, maximum: numb
     return {offset, limit};
 };
 
-const describe = ({id, planId, previousId, copiedFrom, contentId, createdAt, inputs, conflicts, choices, problems, edited}:
+const describe = ({id, planId, previousId, copiedFrom, contentId, createdAt, inputs, conflicts, choices, problems, edited,
+    imported, importedResolutions}:
     MergePlan, generation: number) =>
     ({generationId: id, planId, previousId, copiedFrom, contentId, generation, createdAt, inputs,
-        conflicts, choices, problems, edited: Boolean(edited)});
+        conflicts, choices, problems, edited: Boolean(edited), imported: Boolean(imported),
+        importedResolutions: importedResolutions ?? []});
 
 export function createMergePlanPlaytest() {
     type Session = {sessionId: string; planId: string; generationId: string; contentId: string; startedAt: number};

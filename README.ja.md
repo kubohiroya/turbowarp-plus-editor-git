@@ -219,6 +219,31 @@ Editor のコミット・公開・リポジトリ作成の流れも、このパ�
 
 `checkProject(project)` は、ブロックのつながり、変数・リストの参照、ブロックのコメント、表示中のコスチュームの番号を確かめます。問題のある作品はコミットしないでください。
 
+## 外部で修正したマージ候補を取り込む
+
+AIエージェントは読み取り専用MCPの `merge_plan_get_generation` と `merge_plan_read_file` で元の世代を取得し、修正したファイルを次の形式のJSONにまとめます。元の作品フォルダと別の場所にJSONを置き、エディタの **マージプラン → 元の世代 → 修正候補を取り込む** で選びます。変更するファイルを確認し、**新しい世代として保存** を押すと、その世代が選ばれます。
+
+```json
+{
+  "formatVersion": 1,
+  "baseGenerationId": "<MCPの generationId>",
+  "baseContentId": "<MCPの contentId>",
+  "files": [
+    {
+      "path": "project.source.json",
+      "encoding": "utf8",
+      "data": "<修正後の project.source.json 全文をJSON文字列として格納>"
+    }
+  ],
+  "resolves": []
+}
+```
+
+- `files` に含めるのは変更分だけです。`data` はファイル全体で、テキストは `utf8`、バイナリは標準の `base64` を使います。削除は `{"path":"assets/旧ファイル名.svg","delete":true}` で指定します。
+- 対象パスは `project.source.json`、`sb3-source.json`、`embedded-extensions.json`、`block-palette.json`、`.tw-plus/workspace.json`、`assets/` と `extensions/` の配下です。JSONは32 MiBまで、1回の変更は256パスまでです。
+- `resolves` は任意です。修正したファイルに関わる未解決競合の `conflicts[].id` を指定できます。エディタで保存を承認した項目は、その新しい世代の試遊で採用されます。ほかの競合は引き続き未確認です。
+- 取り込み後は同じ候補で元の世代と新しい世代を切り替えて試遊できます。保存先は候補のジャーナルです。
+
 ## 公開
 
 npm への公開は `.github/workflows/release.yml` が行う。`package.json` の版と同じ `v<版>` のタグを

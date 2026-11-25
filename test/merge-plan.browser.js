@@ -110,6 +110,67 @@ test('the Editor creates and duplicates a merge candidate, and both play in fres
     assert.deepEqual(errors, []);
 });
 
+test('imports only an approved fix for the selected generation and plays the new generation after reload', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    const before = await fixture.snapshot();
+    const {page, candidate, createCandidate, play, open, errors} = await start(t, fixture);
+    await createCandidate();
+    const first = candidate(1);
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    await first.getByText('Import a revised candidate', {exact: true}).click();
+    const baseGenerationId = await generation.inputValue();
+    const base = await page.evaluate(id => new Promise((resolve, reject) => {
+        const database = indexedDB.open('turbowarp-plus-editor-merge-plans', 1);
+        database.onerror = () => reject(database.error);
+        database.onsuccess = () => {
+            const db = database.result;
+            const tx = db.transaction(['generations', 'files'], 'readonly');
+            tx.onerror = () => reject(tx.error);
+            tx.oncomplete = () => db.close();
+            const read = tx.objectStore('generations').get(id);
+            read.onsuccess = () => {
+                const {contentId} = read.result.plan;
+                const files = tx.objectStore('files').get(contentId);
+                files.onsuccess = () => resolve({contentId, project: JSON.parse(new TextDecoder()
+                    .decode(files.result.get('project.source.json')))});
+            };
+        };
+    }), baseGenerationId);
+    const input = first.getByLabel('Candidate changes file');
+    const revised = structuredClone(base.project);
+    revised.targets[1].blocks.move.inputs.STEPS[1][1] = '42';
+    const change = {path: 'project.source.json', encoding: 'utf8', data: JSON.stringify(revised)};
+    const manifest = {formatVersion: 1, baseGenerationId, baseContentId: base.contentId, files: [change]};
+    const load = patch => input.setInputFiles({
+        name: 'candidate.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({...manifest, ...patch}))
+    });
+    const status = page.getByRole('dialog', {name: 'Merge plans'}).getByRole('alert');
+    await load({baseContentId: 'wrong'});
+    await expect(status).toContainText('Select the generation named by the file');
+    await load({files: [{...change, path: 'assets/../project.source.json'}]});
+    await expect(status).toContainText('Choose a version 1 candidate changes JSON file');
+    revised.targets[1].blocks.move.next = 'missing-block';
+    await load({files: [{...change, data: JSON.stringify(revised)}]});
+    await expect(status).toContainText('The imported project has invalid references');
+
+    await load({});
+    await expect(first.getByText('Replace project.source.json')).toBeVisible();
+    await expect(generation.locator('option')).toHaveCount(1);
+    await first.getByRole('button', {name: 'Cancel import', exact: true}).click();
+    await expect(generation.locator('option')).toHaveCount(1);
+    await load({});
+    await first.getByRole('button', {name: 'Save as new generation', exact: true}).click();
+    await expect(generation.locator('option:checked')).toHaveText('Generation 2');
+    await expect(first.getByText('Includes imported changes')).toBeVisible();
+    await open();
+    await generation.selectOption({label: 'Generation 2'});
+    await play(1, 2, 42, 120);
+    await generation.selectOption({label: 'Generation 1'});
+    await play(1, 1, 25, 120);
+    assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
 test('conflict choices save new generations, which can be reopened and played after a reload', options, async t => {
     const fixture = await mergePlanFixture(t, '');
     await fixture.put(35, 30);

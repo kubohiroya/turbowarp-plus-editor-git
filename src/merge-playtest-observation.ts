@@ -88,7 +88,8 @@ export function readPlaytestObservation(vm: ObservationVM, request: PlaytestRead
             reason: conflictThread ? 'merge-conflict' : 'breakpoint',
             target: thread.target.getName(), targetId: thread.target.id,
             threadIndex: threads.indexOf(thread), topBlockId: thread.topBlock, blockId,
-            ...(conflictThread && {focusBlockId: conflict!.stop.focus, lastExecutedBlockId: conflict!.stop.previous})
+            ...(conflictThread && {focusBlockId: conflict!.stop.focus, lastExecutedBlockId: conflict!.stop.previous,
+                ...(conflict!.stop.conflictId && {conflictId: conflict!.stop.conflictId})})
         } : null,
         values: (request.variables ?? []).map(query => readValue(targets, query)),
         logs: {

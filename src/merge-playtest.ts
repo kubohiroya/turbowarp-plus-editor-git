@@ -1,10 +1,11 @@
 import {mergeJson} from './merge-json.js';
-import type {MergePlan, MergePlanFiles, MergePlanSeed} from './merge-plan.js';
+import {mergePlanConflictResolved, type MergePlan, type MergePlanFiles, type MergePlanSeed} from './merge-plan.js';
 import {checkProject, parseSourceProject, type SourceProject, type SourceTarget} from './project-source-merge.js';
 import {equal, isRecord} from './project-source-patch.js';
 
 export interface PlaytestConflict {
     id: string;
+    conflictId?: string;
     target: string;
     script: string;
     next: string;
@@ -53,7 +54,7 @@ export function mergePlaytestRequest(plan: MergePlan, files: MergePlanFiles, see
     const bytes = files.get('project.source.json');
     const project = bytes && parseSourceProject(decode.decode(bytes));
     for (const item of seed.conflicts) {
-        if (plan.choices[item.id]) continue;
+        if (mergePlanConflictResolved(plan, item.id)) continue;
         if (item.type !== 'project') {
             if (/^(?:project\.source\.json|sb3-source\.json|embedded-extensions\.json|block-palette\.json|assets\/)/.test(item.path)) {
                 request.blocking.push(item.path);
@@ -76,7 +77,7 @@ export function mergePlaytestRequest(plan: MergePlan, files: MergePlanFiles, see
                 const entry = script && records(blocks[script]).opcode;
                 if (!script || !next || typeof entry !== 'string' ||
                     !/^(event_when|control_start_as_clone)/.test(entry)) return;
-                return {id: item.id + ':' + index, target: target.name, script, next, focus, input};
+                return {id: item.id + ':' + index, conflictId: item.id, target: target.name, script, next, focus, input};
             });
             if (points.length && points.every(point => point !== undefined)) {
                 request.conflicts.push(...points);

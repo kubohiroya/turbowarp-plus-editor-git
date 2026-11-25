@@ -440,6 +440,7 @@
 .twgit-merge-plan-dialog > .twgit-merge-plan-actions { justify-content: end; }
 .twgit-merge-plan-sharing label { display: flex; align-items: center; gap: 0.5em; margin-bottom: 0.5em; }
 .twgit-merge-plan-sharing input { flex: auto; min-width: 0; }
+.twgit-merge-import { margin-top: .5rem; overflow-wrap: anywhere; }
 .twgit-merge-code-editor {
     box-sizing: border-box;
     width: min(100rem, 96vw);
