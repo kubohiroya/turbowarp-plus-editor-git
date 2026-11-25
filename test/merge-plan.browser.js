@@ -40,6 +40,7 @@ async function start(t, fixture, testDigest) {
     await context.addInitScript(() => {
         if (parent !== window) return;
         let directory;
+        let recordDirectory;
         for (const type of ['dragenter', 'dragover', 'drop']) {
             window.addEventListener(type, async event => {
                 event.preventDefault();
@@ -47,19 +48,27 @@ async function start(t, fixture, testDigest) {
                 if (type === 'drop') directory = await event.dataTransfer.items[0].getAsFileSystemHandle();
             }, {capture: true});
         }
-        Object.defineProperty(window, 'showDirectoryPicker', {value: async () => directory});
+        Object.defineProperty(window, 'showDirectoryPicker', {value: async ({id} = {}) =>
+            id === 'turbowarp-plus-playtest-records' ? recordDirectory ?? directory : directory});
         Object.defineProperty(window, 'mergePlanFixtureReady', {get: () => directory?.kind === 'directory'});
+        window.selectMergePlanRecordFolder = async () => {
+            const storage = await navigator.storage.getDirectory();
+            recordDirectory = await storage.getDirectoryHandle('shared-playtest-records', {create: true});
+        };
     });
+    async function dropDirectory(directory) {
+        const cdp = await context.newCDPSession(page);
+        for (const type of ['dragEnter', 'dragOver', 'drop']) {
+            await cdp.send('Input.dispatchDragEvent', {type, x: 100, y: 100,
+                data: {items: [], files: [directory], dragOperationsMask: 1}});
+        }
+        await cdp.detach();
+    }
     async function open() {
         // Use the Editor's receiving tab, where Open Folder hands the selected directory to this Editor.
         await page.goto(origin + prefix + 'editor.html?lang=en&twPlusOpenTab=playtest-fixture');
         await page.waitForFunction(() => window.vm?.runtime.getTargetForStage(), null, {timeout: 45_000});
-        const cdp = await context.newCDPSession(page);
-        for (const type of ['dragEnter', 'dragOver', 'drop']) {
-            await cdp.send('Input.dispatchDragEvent', {type, x: 100, y: 100,
-                data: {items: [], files: [fixture.root], dragOperationsMask: 1}});
-        }
-        await cdp.detach();
+        await dropDirectory(fixture.root);
         await page.waitForFunction(() => window.mergePlanFixtureReady);
         await page.getByText('File', {exact: true}).click();
         await page.getByRole('button', {name: 'Open Folder…', exact: true}).click();
@@ -147,6 +156,119 @@ test('the Editor creates and duplicates a merge candidate, and both play in fres
 });
 
 const testExtensionPath = process.env.E2E_TEST_EXTENSION_JS;
+test('shares paused playtest records outside Git and keeps them after switching generations', {
+    ...options, skip: options.skip || !testExtensionPath && 'Set E2E_TEST_EXTENSION_JS to the official Test extension build'
+}, async t => {
+    const testCode = await readFile(testExtensionPath);
+    const fixture = await mergePlanFixture(t, '', true, testCode);
+    await fixture.put(35, 30);
+    const sourceFile = path.join(fixture.project, 'project.source.json');
+    const changed = JSON.parse(await readFile(sourceFile, 'utf8'));
+    changed.targets[0].variables.steps[1] = 10;
+    await writeFile(sourceFile, JSON.stringify(changed));
+    fixture.commit('Overlap the move');
+    const before = await fixture.snapshot();
+    const {page, candidate, createCandidate, startPlaytest, errors} =
+        await start(t, fixture, createHash('sha256').update(testCode).digest('hex'));
+    await createCandidate();
+    const first = candidate(1);
+    const generation = first.getByRole('combobox', {name: /^Generation/});
+    const baseId = await generation.inputValue();
+    await first.getByRole('button', {name: 'Run tests for this generation'}).click();
+    await expect(first).toContainText(/Passed \d+ · Failed \d+/, {timeout: 30_000});
+    const base = await storedGeneration(page, baseId, true);
+    const {player, frame} = await startPlaytest(1, 1);
+    const paused = frame.getByText('The whole playtest is paused', {exact: true});
+    await expect(paused).toBeVisible();
+    const openRecord = player.getByRole('button', {name: 'Share this playtest state…'});
+    await openRecord.click();
+    const record = page.getByRole('dialog', {name: 'Share playtest state', exact: true});
+    const save = record.getByRole('button', {name: 'Choose a shared folder and save…'});
+    const status = record.getByRole('status');
+    await record.getByRole('checkbox', {name: 'Stage · Saved steps'}).check();
+    await record.getByRole('checkbox', {name: 'Include recent logs'}).check();
+    await record.getByLabel('Playtest note (optional)').fill('Stopped on the move block');
+    await save.click();
+    await expect(status).toContainText('Choose a shared folder outside the Git repository.');
+    // The stub supplies an independent writable directory without displaying a native picker.
+    await page.evaluate(() => window.selectMergePlanRecordFolder());
+    await save.click();
+    await expect(status).toContainText(/Saved merge-playtest-.+\.json/);
+    const records = () => page.evaluate(async () => {
+        const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('shared-playtest-records');
+        const files = [];
+        for await (const file of directory.values()) files.push([file.name, await (await file.getFile()).text()]);
+        return files;
+    });
+    const [[firstFile, firstBytes]] = await records();
+    const saved = JSON.parse(firstBytes);
+    assert.equal(saved.kind, 'merge-plan-playtest-observation');
+    assert.equal(saved.formatVersion, 1);
+    assert.equal(saved.playtest.generationId, baseId);
+    assert.equal(saved.playtest.contentId, base.contentId);
+    assert.ok(saved.playtest.sessionId);
+    assert.equal(saved.note, 'Stopped on the move block');
+    assert.equal(saved.observation.state, 'paused');
+    assert.equal(saved.observation.stop.blockId, 'move');
+    assert.deepEqual(saved.requested, {variables: ['steps'], logLimit: 20});
+    assert.equal(saved.observation.values[0].id, 'steps');
+    assert.equal(saved.observation.values[0].value, 25);
+    assert.equal(saved.observation.logs.status, 'available');
+    assert.equal(saved.latestTest.result.contentId, base.contentId);
+    assert.equal(saved.latestTest.result.generationId, baseId);
+    await page.evaluate(() => {
+        const prototype = FileSystemFileHandle.prototype;
+        const createWritable = prototype.createWritable;
+        prototype.createWritable = function (...args) {
+            if (this.name.startsWith('merge-playtest-')) {
+                prototype.createWritable = createWritable;
+                throw new DOMException('Simulated write failure', 'NotAllowedError');
+            }
+            return createWritable.apply(this, args);
+        };
+    });
+    await save.click();
+    await expect(status).toHaveText('Could not save the playtest state in the selected folder.');
+    assert.deepEqual(await records(), [[firstFile, firstBytes]]);
+    await record.getByRole('button', {name: 'Close', exact: true}).click();
+    await expect(paused).toBeVisible();
+
+    base.project.targets[0].variables.steps[1] = 42;
+    await player.getByRole('button', {name: 'Import a revised candidate…'}).click();
+    const importer = page.getByRole('dialog', {name: 'Import a revised candidate', exact: true});
+    await importer.getByLabel('Candidate changes file').setInputFiles({
+        name: 'candidate-from-observation.json', mimeType: 'application/json',
+        buffer: Buffer.from(JSON.stringify({formatVersion: 1, baseGenerationId: saved.playtest.generationId,
+            baseContentId: saved.playtest.contentId, files: [{path: 'project.source.json', encoding: 'utf8',
+                data: JSON.stringify(base.project)}]}))
+    });
+    await importer.getByRole('button', {name: 'Save as new generation', exact: true}).click();
+    await expect(importer.getByRole('status')).toHaveText('The revised candidate was saved as a new generation.');
+    await importer.getByRole('button', {name: 'Close', exact: true}).click();
+    await expect(paused).toBeVisible();
+    assert.equal(await frame.evaluate(() => window.vm.runtime.getTargetForStage().variables.steps.value), 25);
+    await player.getByRole('button', {name: 'Close', exact: true}).click();
+    await generation.selectOption({label: 'Generation 2'});
+    const revisedId = await generation.inputValue();
+    const revised = await startPlaytest(1, 2);
+    await revised.player.getByRole('button', {name: 'Share this playtest state…'}).click();
+    await save.click();
+    await expect(status).toContainText(/Saved merge-playtest-.+\.json/);
+    const files = await records();
+    assert.equal(files.length, 2);
+    const next = JSON.parse(files.find(([name]) => name !== firstFile)[1]);
+    assert.equal(next.playtest.generationId, revisedId);
+    assert.notEqual(next.playtest.contentId, saved.playtest.contentId);
+    assert.notEqual(next.playtest.sessionId, saved.playtest.sessionId);
+    assert.equal(next.observation.logs.status, 'omitted');
+    assert.equal(next.latestTest.result, null);
+    await record.getByRole('button', {name: 'Close', exact: true}).click();
+    await revised.player.getByRole('button', {name: 'Close', exact: true}).click();
+    assert.equal((await records()).find(([name]) => name === firstFile)[1], firstBytes);
+    assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
 test('tests the selected saved generation and reviews its persisted result before merging', {
     ...options, skip: options.skip || !testExtensionPath && 'Set E2E_TEST_EXTENSION_JS to the official Test extension build'
 }, async t => {
@@ -200,6 +322,16 @@ test('tests the selected saved generation and reviews its persisted result befor
     await expect(run).toBeEnabled({timeout: 30_000});
     await generation.selectOption({label: 'Generation 2'});
     await expect(first.getByText('Earlier test runs', {exact: true})).toBeVisible();
+    await page.unroute('**/test-frame.html', delayNextTest);
+    await page.route('**/test-frame.html', route => route.abort());
+    await run.click();
+    await first.getByRole('button', {name: 'Stop tests'}).click();
+    await expect(first).toContainText('Test run stopped.');
+    await expect(first).toContainText('Passed 0 · Failed 1');
+    await page.unroute('**/test-frame.html');
+    await run.click();
+    await expect(first.getByRole('region', {name: 'Generation test results'}).first())
+        .toContainText('Passed 0 · Failed 1', {timeout: 30_000});
 
     const copy = candidate(2);
     const copyGeneration = copy.getByRole('combobox', {name: /^Generation/});

@@ -10,6 +10,7 @@ import type {ProjectBlockRenderer} from './scratch-block-diff-renderer.js';
 import type {ProjectVersionPlaytest} from './project-version-preview.js';
 import {mergePlanImportLimit, prepareMergePlanImport, type MergePlanImport} from './merge-plan-import.js';
 import {mergePlaytestRequest, saveMergePlaytest} from './merge-playtest.js';
+import {createPlaytestRecordPort, playtestRecordPicker} from './merge-playtest-record.js';
 import {createMergePlanPlaytest, createMergePlanReader, type MergePlanSharePort} from './merge-plan-sharing.js';
 import type {PlaytestObserver} from './merge-playtest-observation.js';
 import {MergePlanTestView} from './merge-plan-test-view.js';
@@ -31,6 +32,7 @@ const words = {
         importCandidate: 'Import a revised candidate', importFile: 'Candidate changes file', importBase: 'Base generation ID',
         importContent: 'Base content ID', importReview: 'Review the file changes before saving this generation.',
         importResolutions: 'Use the imported changes for these conflicts', imported: 'Includes imported changes',
+        importSaved: 'The revised candidate was saved as a new generation.',
         add: 'Add', replace: 'Replace', delete: 'Delete', cancelImport: 'Cancel import',
         finalize: 'Finalize this generation…', committed: 'Merge commit created',
         mergePlanImportFormat: 'Choose a version 1 candidate changes JSON file within the size limit.',
@@ -57,6 +59,7 @@ const words = {
         importCandidate: '修正候補を取り込む', importFile: '修正候補のファイル', importBase: '元の世代ID',
         importContent: '元の内容ID', importReview: 'ファイルの変更を確認してから、新しい世代として保存してください。',
         importResolutions: '次の競合に取り込んだ変更を採用する', imported: '外部から取り込んだ変更を含む',
+        importSaved: '修正候補を新しい世代として保存しました。',
         add: '追加', replace: '置換', delete: '削除', cancelImport: '取り込みをキャンセル',
         finalize: 'この世代をマージとして確定…', committed: 'マージコミットを作成しました',
         mergePlanImportFormat: '形式がバージョン1で、サイズ上限内の修正候補JSONを選んでください。',
@@ -106,6 +109,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     const [plans, setPlans] = useState<MergePlan[]>();
     const [storageError, setStorageError] = useState(false);
     const [committed, setCommitted] = useState('');
+    const [playtestImport, setPlaytestImport] = useState<{plan: MergePlan; context: object}>();
     const dialog = useRef<HTMLDialogElement>(null);
     const operation = useRef(false);
     const activeContext = useRef<object | null>(context);
@@ -191,6 +195,15 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
         setPlans(previous => [...(previous ?? []), plan]);
         return plan.id;
     };
+    const prepareImport = async (plan: MergePlan, file: File) => {
+        if (file.size > mergePlanImportLimit) throw new GitPanelError('mergePlanImportFormat');
+        const content = await file.text();
+        return prepareMergePlanImport(plan, await journal.files(plan), content, validate!);
+    };
+    const saveImport = async (draft: MergePlanImport) => {
+        const revision = await draft.save();
+        return add(revision.plan, revision.files);
+    };
     const testGeneration = async (plan: MergePlan, signal: AbortSignal) => {
         try {
             const current = await scope();
@@ -224,6 +237,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     const names = new Map([...groups.keys()].map((id, index) => [id, name(index)]));
     const close = () => {
         setOpen(false);
+        setPlaytestImport(undefined);
         setAvailable(undefined);
         setSelected('');
         setError('');
@@ -301,7 +315,15 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                                 openMergeConflictComparison(document, locale, plan, seed, point.conflictId, renderComparison, point);
                             }
                         };
-                        return play(plan, files, title, request, sharing && playtest.observe(plan));
+                        if (validate) request.importRevision = () => setPlaytestImport({plan, context});
+                        const pick = persistent && !request.blocking.length ? playtestRecordPicker(document) : undefined;
+                        const session = sharing || pick ? playtest.bind(plan) : undefined;
+                        if (pick && session) {
+                            const current = await scope();
+                            if (current.folder !== plan.folder) throw new GitPanelError('changed');
+                            request.record = createPlaytestRecordPort(current, plan, files, journal, session.capture, pick);
+                        }
+                        return play(plan, files, title, request, session?.observe);
                     })}
                     edit={edit && ((plan, title) => act(async () => {
                         const files = await journal.files(plan);
@@ -310,15 +332,8 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                             return add(revision.plan, revision.files);
                         });
                     }))}
-                    prepareImport={validate && ((plan, file) => act(async () => {
-                        if (file.size > mergePlanImportLimit) throw new GitPanelError('mergePlanImportFormat');
-                        const content = await file.text();
-                        return prepareMergePlanImport(plan, await journal.files(plan), content, validate);
-                    }))}
-                    saveImport={draft => act(async () => {
-                        const revision = await draft.save();
-                        return add(revision.plan, revision.files);
-                    })}
+                    prepareImport={validate && ((plan, file) => act(() => prepareImport(plan, file)))}
+                    saveImport={draft => act(() => saveImport(draft))}
                     finalize={finalize && (async (plan, title) => {
                         const oid = await act(async () => finalize(plan, await journal.files(plan), title, await journal.testResult(plan)));
                         if (oid) setCommitted(oid);
@@ -333,6 +348,9 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                 <button type="submit" disabled={busy}>{labels.close}</button>
             </form>
         </dialog>, document.body)}
+        {open && playtestImport?.context === context && createPortal(<PlaytestImportDialog text={text} plan={playtestImport.plan}
+            prepare={file => prepareImport(playtestImport.plan, file)} save={saveImport} label={labels.close}
+            errorText={message} close={() => setPlaytestImport(undefined)}/>, document.body)}
     </>;
 }
 
@@ -402,13 +420,52 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
 const conflictLabel = (conflict: MergePlan['conflicts'][number]) =>
     [conflict.path, conflict.target, conflict.detail].filter(Boolean).join(' · ');
 
-function CandidateImport({text, plan, busy, prepare, save}: {
-    text: typeof words.en; plan: MergePlan; busy: boolean;
+function PlaytestImportDialog({text, plan, prepare, save, label, errorText, close}: {
+    text: typeof words.en; plan: MergePlan;
+    prepare(file: File): Promise<MergePlanImport>;
+    save(draft: MergePlanImport): Promise<string>;
+    label: string;
+    errorText(error: unknown): string;
+    close(): void;
+}) {
+    const dialog = useRef<HTMLDialogElement>(null);
+    const pending = useRef(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const [saved, setSaved] = useState(false);
+    useEffect(() => {dialog.current?.showModal();}, []);
+    const run = async <T,>(action: () => Promise<T>) => {
+        if (pending.current) return undefined;
+        pending.current = true;
+        setBusy(true);
+        setError('');
+        try {
+            return await action();
+        } catch (error) {
+            setError(error instanceof DOMException ? text.storageFailed : errorText(error));
+        } finally {
+            pending.current = false;
+            setBusy(false);
+        }
+    };
+    return <dialog ref={dialog} className="twgit-merge-plan-dialog" aria-label={text.importCandidate}
+        onClose={close} onCancel={event => {if (pending.current) event.preventDefault();}}>
+        {saved ? <p role="status">{text.importSaved}</p> : <CandidateImport text={text} plan={plan} open busy={busy}
+            prepare={file => run(() => prepare(file))} save={async draft => {
+                if (await run(() => save(draft))) setSaved(true);
+            }}/>}
+        {error && <p role="alert">{error}</p>}
+        <button type="button" disabled={busy} onClick={() => dialog.current?.close()}>{label}</button>
+    </dialog>;
+}
+
+function CandidateImport({text, plan, busy, prepare, save, open}: {
+    text: typeof words.en; plan: MergePlan; busy: boolean; open?: boolean;
     prepare(file: File): Promise<MergePlanImport | undefined>;
     save(draft: MergePlanImport): Promise<void>;
 }) {
     const [draft, setDraft] = useState<MergePlanImport>();
-    return <details className="twgit-merge-import">
+    return <details className="twgit-merge-import" open={open}>
         <summary>{text.importCandidate}</summary>
         <p>{text.importBase} <code>{plan.id}</code><br/>{text.importContent} <code>{plan.contentId}</code></p>
         <label>{text.importFile}{' '}

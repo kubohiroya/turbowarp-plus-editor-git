@@ -59,7 +59,7 @@ test('links a merge conflict to its saved block and ignores an ended thread', ()
 
 test('a sample requested as the player closes returns no live data', async () => {
     const playtest = createMergePlanPlaytest();
-    const observe = playtest.observe({id: 'generation', planId: 'plan', contentId: 'content'} as MergePlan);
+    const {observe} = playtest.bind({id: 'generation', planId: 'plan', contentId: 'content'} as MergePlan);
     let close!: () => void;
     observe(() => new Promise((_, reject) => {
         close = () => {observe(null); reject(new Error('Player closed'));};
@@ -68,4 +68,19 @@ test('a sample requested as the player closes returns no live data', async () =>
     close();
     assert.equal((await pending).playtest, null);
     await assert.rejects(playtest.current('ended', {}), /session has ended/);
+});
+
+test('records bind to the same session as MCP and cannot read a replacement player', async () => {
+    const playtest = createMergePlanPlaytest();
+    const first = playtest.bind({id: 'generation', planId: 'plan', contentId: 'content'} as MergePlan);
+    const next = playtest.bind({id: 'new-generation', planId: 'plan', contentId: 'new-content'} as MergePlan);
+    first.observe(async () => ({state: 'paused'}));
+    const record = await first.capture({});
+    const live = await playtest.current(undefined, {});
+    assert.deepEqual(record.playtest, live.playtest);
+    assert.deepEqual(record.observation, {state: 'paused'});
+    next.observe(async () => ({state: 'running'}));
+    await assert.rejects(first.capture({}), /session has ended/);
+    first.observe(null);
+    assert.equal((await next.capture({})).playtest?.generationId, 'new-generation');
 });
