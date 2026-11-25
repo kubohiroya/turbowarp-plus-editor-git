@@ -216,6 +216,20 @@ test('shares paused playtest records outside Git and keeps them after switching 
     assert.equal(saved.observation.logs.status, 'available');
     assert.equal(saved.latestTest.result.contentId, base.contentId);
     assert.equal(saved.latestTest.result.generationId, baseId);
+    await page.evaluate(() => {
+        const prototype = FileSystemFileHandle.prototype;
+        const createWritable = prototype.createWritable;
+        prototype.createWritable = function (...args) {
+            if (this.name.startsWith('merge-playtest-')) {
+                prototype.createWritable = createWritable;
+                throw new DOMException('Simulated write failure', 'NotAllowedError');
+            }
+            return createWritable.apply(this, args);
+        };
+    });
+    await save.click();
+    await expect(status).toHaveText('Could not save the playtest state in the selected folder.');
+    assert.deepEqual(await records(), [[firstFile, firstBytes]]);
     await record.getByRole('button', {name: 'Close', exact: true}).click();
     await expect(paused).toBeVisible();
 
