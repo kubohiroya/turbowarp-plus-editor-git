@@ -84,7 +84,7 @@ export interface GitHost {
     restoreProjectVersions?: boolean;
     validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
     previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
-        title?: string; guard?: () => void}): Promise<void>;
+        title?: string; guard?: () => void; playtest?: import('./merge-playtest.js').MergePlaytestRequest}): Promise<void>;
     editProjectVersion?(request: {title: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
         guard(): void; save(edit: MergePlanCodeEdit): Promise<string>}): Promise<string | undefined>;
     isProjectDirty(): boolean;
@@ -1047,11 +1047,11 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 guard();
                                 return plan;
                             }}
-                            play={async (plan, files, title) => {
+                            play={async (plan, files, title, playtest) => {
                                 const {folder, guard} = await projectVersionScope(state.repository!, false);
                                 if (folder !== plan.folder) throw new GitPanelError('changed');
                                 try {
-                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard,
+                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard, playtest,
                                         files: mergePlanPreviewFiles(files)});
                                 } catch (error) {
                                     if (error instanceof GitPanelError) throw error;

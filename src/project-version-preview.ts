@@ -1,6 +1,10 @@
 import {dialogAction, dialogActions} from '@kubohiroya/turbowarp-plus-editor-windows';
+import type {MergePlaytestRequest} from './merge-playtest.js';
 export {isProjectVersionEditor, openProjectVersionEditor, receiveProjectVersionEditor} from './project-version-editor.js';
 export type {MergePlanCodeEdit} from './merge-plan.js';
+export {connectMergePlaytest, focusPlaytestStop} from './merge-playtest-view.js';
+export type {MergePlaytestRequest, PlaytestStop} from './merge-playtest.js';
+export type {PlaytestVM} from './merge-playtest-view.js';
 
 /**
  * Shows a past version of the project, read from the repository's history, in a player inside a
@@ -37,10 +41,11 @@ export interface ProjectVersionPreviewOptions {
     params?: Readonly<Record<string, string>>;
     /** The caller's localized label for a preview outside the commit history. */
     title?: string;
+    playtest?: MergePlaytestRequest;
 }
 
 export function openProjectVersionPreview(document: Document, oid: string, archive: ArrayBuffer, locale: string,
-    {page, params = {}, title}: ProjectVersionPreviewOptions) {
+    {page, params = {}, title, playtest}: ProjectVersionPreviewOptions) {
     const text = projectVersionPreviewMessages(locale);
     const preview = document.createElement('dialog');
     const heading = document.createElement('h2');
@@ -59,7 +64,21 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
     frame.title = heading.textContent;
     frame.allow = 'autoplay; fullscreen';
     frame.style.cssText = 'width: min(850px, 85vw); height: min(630px, 75vh); border: 0; display: block';
-    preview.append(heading, frame, dialogActions(document, dialogAction(close, 'close')));
+    preview.append(heading);
+    if (playtest?.blocking.length) {
+        const summary = document.createElement('p');
+        summary.role = 'alert';
+        summary.textContent = japanese(locale) ? '試遊の前に、次の構造上の競合を候補で解決してください。' :
+            'Resolve these structural conflicts in the candidate before playtesting.';
+        const list = document.createElement('ul');
+        for (const description of playtest.blocking) {
+            const item = document.createElement('li');
+            item.textContent = description;
+            list.append(item);
+        }
+        preview.append(summary, list);
+    } else preview.append(frame);
+    preview.append(dialogActions(document, dialogAction(close, 'close')));
     const dispose = () => {
         view.removeEventListener('message', send);
         preview.remove();
@@ -68,7 +87,8 @@ export function openProjectVersionPreview(document: Document, oid: string, archi
         if (event.source !== frame.contentWindow || event.origin !== url.origin ||
             event.data !== PROJECT_VERSION_PREVIEW_READY) return;
         view.removeEventListener('message', send);
-        frame.contentWindow!.postMessage({kind: PROJECT_VERSION_PREVIEW_PROJECT, archive}, url.origin, [archive]);
+        frame.contentWindow!.postMessage({kind: PROJECT_VERSION_PREVIEW_PROJECT, archive, ...(playtest && {playtest})},
+            url.origin, [archive]);
     };
     preview.addEventListener('close', dispose, {once: true});
     view.addEventListener('message', send);
@@ -143,7 +163,7 @@ export async function packProjectVersion(files: ReadonlyMap<string, Uint8Array>,
 /** What the player page does with the archive it receives; the host's GUI supplies each step. */
 export interface ProjectVersionPreviewPlayer {
     /** Loads the archive into the player's VM. */
-    load(archive: ArrayBuffer): Promise<void>;
+    load(archive: ArrayBuffer, playtest?: MergePlaytestRequest): Promise<void>;
     /** Marks the project as loading, before `load`. */
     loading?(): void;
     /** Marks loading as finished, with whether it succeeded. */
@@ -166,7 +186,7 @@ export function receiveProjectVersionPreview(view: Window, player: ProjectVersio
         view.removeEventListener('message', load);
         player.loading?.();
         try {
-            await player.load(event.data.archive);
+            await player.load(event.data.archive, event.data.playtest);
             player.loaded?.(true);
         } catch {
             player.loaded?.(false);

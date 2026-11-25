@@ -4,6 +4,7 @@ import {GitPanelError} from './filesystem.js';
 import {duplicateMergePlan, editMergePlan, reviseMergePlan, type MergePlan, type MergePlanBranch,
     type MergePlanBuild, type MergePlanChoices, type MergePlanCodeEdit, type MergePlanFiles} from './merge-plan.js';
 import type {MergePlanJournal, MergePlanScope} from './merge-plan-journal.js';
+import {mergePlaytestRequest, type MergePlaytestRequest} from './merge-playtest.js';
 import type {MergeSide} from './project-source-merge.js';
 import {labelsFor} from './messages.js';
 
@@ -19,7 +20,7 @@ const words = {
         edit: 'Choose versions for conflicting changes', generation: 'Generation', save: 'Save as new generation',
         editCode: 'Edit blocks', edited: 'Edited in the block editor',
         mergePlanEditConflict: 'The new choice overlaps a manual edit. Choose it in an earlier generation, or keep the manual edit.',
-        provisional: 'Unconfirmed (use base for playtest)', base: 'Common base', current: 'Current', incoming: 'Incoming',
+        provisional: 'Unconfirmed', base: 'Common base', current: 'Current', incoming: 'Incoming',
         mergePlanNoBase: 'No common commit was found. Fetch more of the history and try again.',
         mergePlanMultipleBases: 'These branches have more than one common starting point.'
     },
@@ -34,7 +35,7 @@ const words = {
         edit: '競合箇所の採用元を選ぶ', generation: '世代', save: '新しい世代として保存',
         editCode: 'ブロックを編集', edited: 'ブロックを直接編集済み',
         mergePlanEditConflict: '採用元の変更と直接編集が重なっています。前の世代で採用元を選ぶか、直接編集の内容を残してください。',
-        provisional: '未確認（試遊では共通の元を使う）', base: '共通の元', current: '取り込み先', incoming: '取り込み元',
+        provisional: '未確認', base: '共通の元', current: '取り込み先', incoming: '取り込み元',
         mergePlanNoBase: '共通のコミットが見つかりません。履歴を取得してからやり直してください。',
         mergePlanMultipleBases: 'このブランチには共通の起点が複数あります。'
     }
@@ -51,7 +52,7 @@ interface Props {
     branches(current: string): Promise<MergePlanBranch[]>;
     scope(): Promise<MergePlanScope & {guard(): void}>;
     create(expected: {branch: string; head: string}, from: string): Promise<MergePlanBuild>;
-    play(plan: MergePlan, files: MergePlanFiles, title: string): Promise<void>;
+    play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: MergePlaytestRequest): Promise<void>;
     edit?(plan: MergePlan, files: MergePlanFiles, title: string, save: (edit: MergePlanCodeEdit) => Promise<string>):
         Promise<string | undefined>;
 }
@@ -190,7 +191,10 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                 return <Candidate key={id} text={text} name={names.get(id)!} generations={generations} busy={busy}
                     copiedFrom={original && names.get(original.planId)}
                     duplicate={plan => void act(() => add(duplicateMergePlan(plan)))}
-                    play={(plan, title) => void act(async () => play(plan, await journal.files(plan), title))}
+                    play={(plan, title) => void act(async () => {
+                        const files = await journal.files(plan);
+                        return play(plan, files, title, mergePlaytestRequest(plan, files, await journal.seed(plan)));
+                    })}
                     edit={edit && ((plan, title) => act(async () => {
                         const files = await journal.files(plan);
                         return edit(plan, files, title, async changes => {

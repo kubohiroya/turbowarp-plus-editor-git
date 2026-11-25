@@ -451,9 +451,42 @@
     grid-template-rows: auto auto minmax(0, 1fr) auto auto;
     gap: .45rem;
 }
+.twgit-merge-code-editor[data-playtest][open] {
+    grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+}
 .twgit-merge-code-editor h2, .twgit-merge-code-editor p { margin: 0; }
 .twgit-merge-code-editor iframe { display: block; width: 100%; height: 100%; border: 0; }
 .twgit-merge-code-editor p[role="status"]:empty { display: none; }
+.twgit-playtest-toolbar {
+    position: fixed;
+    inset: 0 0 auto;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    background: Canvas;
+    color: CanvasText;
+    padding: .65rem;
+}
+.twgit-playtest-toolbar[hidden] { display: none; }
+.twgit-playtest-overlay {
+    position: fixed;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 1000;
+}
+.twgit-playtest-overlay > * { position: absolute; }
+.twgit-playtest-band { background: rgba(255, 217, 37, .30); }
+.twgit-playtest-marker {
+    z-index: 1;
+    transform: translateY(-50%);
+    padding: .2rem .35rem;
+    border-radius: .25rem;
+    background: #173a71;
+    color: #fff;
+    font: 600 .75rem/1.2 system-ui, sans-serif;
+    white-space: nowrap;
+}
 .twgit-remote-repository-dialog .twgit-connection-body > label { display: grid; gap: 4px; }
 .twgit-remote-repository-dialog input[type="url"] { font: inherit; width: 100%; box-sizing: border-box; }
 .twgit-remote-repository-dialog fieldset { border: 0; margin: 8px 0; padding: 0; }

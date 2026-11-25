@@ -16,7 +16,7 @@ const options = {skip: !build && 'Set E2E_PROJECT_FOLDER_BUILD to a built Editor
 async function start(t, fixture) {
     assert.ok(path.isAbsolute(build));
     const args = ['--enable-experimental-web-platform-features', '--enable-unsafe-swiftshader'];
-    const browser = await chromium.launch({headless: true, args});
+    const browser = await chromium.launch({channel: 'chromium', headless: true, args});
     t.after(() => browser.close());
     const context = await browser.newContext({viewport: {width: 1260, height: 940}});
     const page = await context.newPage();
@@ -68,7 +68,7 @@ async function start(t, fixture) {
         await plans.getByRole('button', {name: 'Create candidate'}).click();
         await expect(candidate(1)).toBeVisible();
     }
-    async function play(number, generation, x, direction) {
+    async function startPlaytest(number, generation) {
         await candidate(number).getByRole('button', {name: 'Playtest'}).click();
         const player = page.getByRole('dialog', {name: `Playtest · Candidate ${number} · Generation ${generation}`});
         await expect(player).toBeVisible();
@@ -77,6 +77,10 @@ async function start(t, fixture) {
         await frame.waitForFunction(sprite, null, {timeout: 45_000});
         assert.equal(await frame.evaluate(() => window.vm.runtime.getSpriteTargetByName('Walker').x), 0);
         await frame.getByTitle('Go', {exact: true}).click();
+        return {player, frame};
+    }
+    async function play(number, generation, x, direction) {
+        const {player, frame} = await startPlaytest(number, generation);
         await frame.waitForFunction(({x, direction}) => {
             const target = window.vm.runtime.getSpriteTargetByName('Walker');
             return target.x === x && target.direction === direction;
@@ -86,7 +90,7 @@ async function start(t, fixture) {
         return frame;
     }
     await open();
-    return {page, candidate, createCandidate, play, open, errors};
+    return {page, candidate, createCandidate, play, startPlaytest, open, errors};
 }
 
 test('the Editor creates and duplicates a merge candidate, and both play in fresh, isolated players', options, async t => {
@@ -111,7 +115,7 @@ test('conflict choices save new generations, which can be reopened and played af
     await fixture.put(35, 30);
     fixture.commit('Change the same input on main');
     const before = await fixture.snapshot();
-    const {candidate, createCandidate, play, open, errors} = await start(t, fixture);
+    const {candidate, createCandidate, play, startPlaytest, open, errors} = await start(t, fixture);
     await createCandidate();
     await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
     await expect(candidate(2)).toBeVisible();
@@ -130,9 +134,66 @@ test('conflict choices save new generations, which can be reopened and played af
     await generation(1).selectOption({label: 'Generation 2'});
     await play(1, 2, 25, 105);
     await generation(1).selectOption({label: 'Generation 1'});
-    await play(1, 1, 10, 105);
-    await play(2, 1, 10, 105);
+    for (const number of [1, 2]) {
+        const {player, frame} = await startPlaytest(number, 1);
+        await expect(frame.getByText('The whole playtest is paused', {exact: true})).toBeVisible();
+        if (number === 1) {
+            await frame.getByRole('button', {name: 'Edit script', exact: true}).click();
+            const editor = frame.getByRole('dialog', {name: 'Edit script', exact: true});
+            const draft = await (await editor.locator('iframe').elementHandle()).contentFrame();
+            await expect(draft.getByText('▶ Next to execute', {exact: true})).toBeVisible();
+            await expect(draft.getByText('✓ Last executed', {exact: true})).toBeHidden();
+            await editor.getByRole('button', {name: 'Close without saving', exact: true}).click();
+        }
+        await player.getByRole('button', {name: 'Close', exact: true}).click();
+    }
     assert.deepEqual(await fixture.snapshot(), afterExternalUpdate);
+    assert.deepEqual(errors, []);
+});
+
+test('pauses before an unresolved command, edits it in place and resumes the same playtest', options, async t => {
+    const fixture = await mergePlanFixture(t, '', true);
+    await fixture.put(35, 30);
+    fixture.commit('Change the same inputs on main');
+    const before = await fixture.snapshot();
+    const {candidate, createCandidate, startPlaytest, errors} = await start(t, fixture);
+    await createCandidate();
+    await expect(candidate(1)).toContainText('Unconfirmed changes 2');
+    const {player, frame} = await startPlaytest(1, 1);
+    const paused = frame.getByText('The whole playtest is paused', {exact: true});
+    await expect(paused).toBeVisible();
+    const position = () => window.vm.runtime.getSpriteTargetByName('Walker').x;
+    assert.equal(await frame.evaluate(position), 5);
+    await frame.getByRole('button', {name: 'Edit script', exact: true}).click();
+    const editor = frame.getByRole('dialog', {name: 'Edit script', exact: true});
+    const adopt = editor.getByRole('button', {name: 'Try edit and resume', exact: true});
+    await expect(adopt).toBeEnabled({timeout: 30_000});
+    await expect(editor.getByRole('tab', {name: 'Edit script'})).toBeVisible();
+    await expect(editor.getByText('The whole playtest is paused', {exact: true})).toBeVisible();
+    const draft = await (await editor.locator('iframe').elementHandle()).contentFrame();
+    assert.ok(draft);
+    await expect(draft.locator('.twgit-playtest-band')).toHaveCount(2);
+    await expect(draft.getByText('✓ Last executed', {exact: true})).toBeVisible();
+    await expect(draft.getByText('▶ Next to execute', {exact: true})).toBeVisible();
+    const workspace = draft.locator('.blocklySvg > .blocklyWorkspace > .blocklyBlockCanvas');
+    await workspace.locator('[data-id="move"] .blocklyEditableText').filter({hasText: /^10$/}).click();
+    const input = draft.locator('.blocklyHtmlInput');
+    await input.fill('42');
+    await input.press('Enter');
+    await adopt.click();
+    await expect(editor).toHaveCount(0);
+    await frame.waitForFunction(() => window.vm.runtime.getSpriteTargetByName('Walker').x === 47);
+    assert.equal(await frame.evaluate(position), 47);
+    await expect(paused).toBeHidden();
+    await frame.locator('body').press('Space');
+    await expect(paused).toBeVisible();
+    assert.equal(await frame.evaluate(position), 47);
+    await player.getByRole('button', {name: 'Close', exact: true}).click();
+    await expect(candidate(1).getByRole('option', {name: 'Generation 2', exact: true})).toHaveCount(0);
+    const replay = await startPlaytest(1, 1);
+    await expect(replay.frame.getByText('The whole playtest is paused', {exact: true})).toBeVisible();
+    assert.equal(await replay.frame.evaluate(position), 5);
+    assert.deepEqual(await fixture.snapshot(), before);
     assert.deepEqual(errors, []);
 });
 

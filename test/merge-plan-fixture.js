@@ -13,25 +13,30 @@ const block = (opcode, next, parent, inputs = {}) => ({
     opcode, next, parent, inputs, fields: {}, shadow: false, topLevel: parent === null,
     ...(parent === null ? {x: 10, y: 10} : {})
 });
-const source = (steps, turn) => JSON.stringify({
+const source = (steps, turn, runtimeConflicts) => JSON.stringify({
     targets: [{...state, isStage: true, name: 'Stage', blocks: {}}, {
         ...state, isStage: false, name: 'Walker', x: 0, y: 0, visible: true, size: 100, direction: 90, rotationStyle: 'all around',
         blocks: {
-            flag: block('event_whenflagclicked', 'move', null),
-            move: block('motion_movesteps', 'turn', 'flag', {STEPS: [1, [4, String(steps)]]}),
-            turn: block('motion_turnright', null, 'move', {DEGREES: [1, [4, String(turn)]]})
+            flag: block('event_whenflagclicked', runtimeConflicts ? 'advance' : 'move', null),
+            move: block('motion_movesteps', 'turn', runtimeConflicts ? 'advance' : 'flag', {STEPS: [1, [4, String(steps)]]}),
+            turn: block('motion_turnright', null, 'move', {DEGREES: [1, [4, String(turn)]]}),
+            ...runtimeConflicts && {
+                advance: block('motion_movesteps', 'move', 'flag', {STEPS: [1, [4, '5']]}),
+                secondHat: {...block('event_whenkeypressed', 'unvisited', null), y: 250, fields: {KEY_OPTION: ['space', null]}},
+                unvisited: block('motion_movesteps', null, 'secondHat', {STEPS: [1, [4, String(steps)]]})
+            }
         }
     }],
     monitors: [], extensions: [], meta: {semver: '3.0.0'}
 }, null, 2) + '\n';
 
-export async function mergePlanFixture(t, folder = 'projects/demo') {
+export async function mergePlanFixture(t, folder = 'projects/demo', runtimeConflicts = false) {
     const root = await mkdtemp(path.join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'twgit-merge-plan-'));
     t.after(() => rm(root, {recursive: true, force: true}));
     const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8'}).trimEnd();
     const project = path.join(root, folder);
     const write = (file, contents) => writeFile(path.join(project, file), contents);
-    const put = (steps, turn) => write('project.source.json', source(steps, turn));
+    const put = (steps, turn) => write('project.source.json', source(steps, turn, runtimeConflicts));
     const commit = message => {
         git('add', '--all');
         git('commit', '-qm', message);
