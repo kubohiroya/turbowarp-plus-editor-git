@@ -173,9 +173,17 @@ test('pauses before an unresolved command, edits it in place and resumes the sam
     const draft = await (await editor.locator('iframe').elementHandle()).contentFrame();
     assert.ok(draft);
     await expect(draft.locator('.twgit-playtest-band')).toHaveCount(2);
-    await expect(draft.getByText('✓ Last executed', {exact: true})).toBeVisible();
-    await expect(draft.getByText('▶ Next to execute', {exact: true})).toBeVisible();
     const workspace = draft.locator('.blocklySvg > .blocklyWorkspace > .blocklyBlockCanvas');
+    for (const [blockId, label] of [['advance', '✓ Last executed'], ['move', '▶ Next to execute']]) {
+        const marker = draft.getByText(label, {exact: true});
+        await expect(marker).toBeVisible();
+        const outline = workspace.locator(`[data-id="${blockId}"] > .blocklyBlockBackground`);
+        await expect.poll(async () => {
+            const [mark, block] = await Promise.all([marker.boundingBox(), outline.boundingBox()]);
+            return Boolean(mark && block && mark.x + mark.width < block.x &&
+                Math.abs(mark.y + mark.height / 2 - block.y - block.height / 2) <= 1);
+        }, {message: `${label} is centered to the left of ${blockId}`}).toBe(true);
+    }
     await workspace.locator('[data-id="move"] .blocklyEditableText').filter({hasText: /^10$/}).click();
     const input = draft.locator('.blocklyHtmlInput');
     await input.fill('42');
