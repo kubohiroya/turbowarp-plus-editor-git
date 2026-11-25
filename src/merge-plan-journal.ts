@@ -1,5 +1,6 @@
 import {GitPanelError} from './filesystem.js';
 import type {MergePlan, MergePlanFiles, MergePlanSeed} from './merge-plan.js';
+import type {MergePlanTestResult} from './merge-plan-tests.js';
 
 export interface MergePlanScope {
     root: FileSystemDirectoryHandle;
@@ -11,10 +12,12 @@ export interface MergePlanJournal {
     append(scope: MergePlanScope, plan: MergePlan, files?: MergePlanFiles, seed?: MergePlanSeed): Promise<void>;
     files(plan: MergePlan): Promise<MergePlanFiles>;
     seed(plan: MergePlan): Promise<MergePlanSeed>;
+    testResult(plan: MergePlan): Promise<MergePlanTestResult | null>;
+    saveTestResult(result: MergePlanTestResult): Promise<void>;
 }
 
 type Row = MergePlanScope & {plan: MergePlan};
-type Store = 'generations' | 'files' | 'seeds';
+type Store = 'generations' | 'files' | 'seeds' | 'testResults';
 const stores: Store[] = ['generations', 'files', 'seeds'];
 const rootIndex = 'rootNameAndFolder';
 
@@ -35,6 +38,8 @@ export function createMemoryMergePlanJournal(): MergePlanJournal {
     const rows: Row[] = [];
     const contents = new Map<string, MergePlanFiles>();
     const seeds = new Map<string, MergePlanSeed>();
+    const results = new Map<string, MergePlanTestResult>();
+    const key = (generationId: string, contentId: string) => JSON.stringify([generationId, contentId]);
     return {
         list: scope => matching(scope, rows),
         async append(scope, plan, files, seed) {
@@ -43,7 +48,9 @@ export function createMemoryMergePlanJournal(): MergePlanJournal {
             rows.push({...scope, plan});
         },
         async files(plan) {return required(contents.get(plan.contentId));},
-        async seed(plan) {return required(seeds.get(plan.seedId));}
+        async seed(plan) {return required(seeds.get(plan.seedId));},
+        async testResult(plan) {return results.get(key(plan.id, plan.contentId)) ?? null;},
+        async saveTestResult(result) {results.set(key(result.generationId, result.contentId), result);}
     };
 }
 
@@ -60,12 +67,15 @@ export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePla
     let connection: Promise<IDBDatabase> | undefined;
     function connect() {
         return connection ??= new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDb.open('turbowarp-plus-editor-merge-plans', 1);
-            request.onupgradeneeded = () => {
-                request.result.createObjectStore('generations', {keyPath: 'plan.id'})
-                    .createIndex(rootIndex, ['rootName', 'folder']);
-                request.result.createObjectStore('files');
-                request.result.createObjectStore('seeds');
+            const request = indexedDb.open('turbowarp-plus-editor-merge-plans', 2);
+            request.onupgradeneeded = ({oldVersion}) => {
+                if (oldVersion < 1) {
+                    request.result.createObjectStore('generations', {keyPath: 'plan.id'})
+                        .createIndex(rootIndex, ['rootName', 'folder']);
+                    request.result.createObjectStore('files');
+                    request.result.createObjectStore('seeds');
+                }
+                request.result.createObjectStore('testResults', {keyPath: ['generationId', 'contentId']});
             };
             request.onerror = () => reject(request.error);
             request.onsuccess = () => {
@@ -115,6 +125,12 @@ export function createIndexedDbMergePlanJournal(indexedDb: IDBFactory): MergePla
         },
         async seed(plan) {
             return required(await transact('seeds', 'readonly', tx => tx.objectStore('seeds').get(plan.seedId)));
+        },
+        async testResult(plan) {
+            return await transact('testResults', 'readonly', tx => tx.objectStore('testResults').get([plan.id, plan.contentId])) ?? null;
+        },
+        async saveTestResult(result) {
+            await transact('testResults', 'readwrite', tx => tx.objectStore('testResults').put(result));
         }
     };
 }

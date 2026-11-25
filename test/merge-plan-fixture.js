@@ -13,8 +13,16 @@ const block = (opcode, next, parent, inputs = {}) => ({
     opcode, next, parent, inputs, fields: {}, shadow: false, topLevel: parent === null,
     ...(parent === null ? {x: 10, y: 10} : {})
 });
-const source = (steps, turn, runtimeConflicts) => JSON.stringify({
-    targets: [{...state, isStage: true, name: 'Stage', blocks: {}}, {
+const testExtensionId = 'kubohiroyatest';
+const testExtensionPath = `extensions/${testExtensionId}.js`;
+const testBlocks = {
+    test: {...block('kubohiroyatest_whentest', 'assert', null, {NAME: [1, [10, 'Saved steps is 25']]}), y: 40},
+    assert: block('kubohiroyatest_assert_equals', null, 'test', {ACTUAL: [2, 'value'], EXPECTED: [1, [4, '25']]}),
+    value: {...block('data_variable', null, 'assert'), fields: {VARIABLE: ['Saved steps', 'steps']}}
+};
+const source = (steps, turn, runtimeConflicts, includeTest) => JSON.stringify({
+    targets: [{...state, isStage: true, name: 'Stage', blocks: includeTest ? testBlocks : {},
+        variables: includeTest ? {steps: ['Saved steps', steps]} : {}}, {
         ...state, isStage: false, name: 'Walker', x: 0, y: 0, visible: true, size: 100, direction: 90, rotationStyle: 'all around',
         blocks: {
             flag: block('event_whenflagclicked', runtimeConflicts ? 'advance' : 'move', null),
@@ -27,16 +35,17 @@ const source = (steps, turn, runtimeConflicts) => JSON.stringify({
             }
         }
     }],
-    monitors: [], extensions: [], meta: {semver: '3.0.0'}
+    monitors: [], extensions: includeTest ? [testExtensionId] : [], meta: {semver: '3.0.0'},
+    ...includeTest && {extensionURLs: {[testExtensionId]: `embedded-extension:${testExtensionPath}`}}
 }, null, 2) + '\n';
 
-export async function mergePlanFixture(t, folder = 'projects/demo', runtimeConflicts = false) {
+export async function mergePlanFixture(t, folder = 'projects/demo', runtimeConflicts = false, testCode) {
     const root = await mkdtemp(path.join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'twgit-merge-plan-'));
     t.after(() => rm(root, {recursive: true, force: true}));
     const git = (...args) => execFileSync('git', args, {cwd: root, encoding: 'utf8'}).trimEnd();
     const project = path.join(root, folder);
     const write = (file, contents) => writeFile(path.join(project, file), contents);
-    const put = (steps, turn) => write('project.source.json', source(steps, turn, runtimeConflicts));
+    const put = (steps, turn) => write('project.source.json', source(steps, turn, runtimeConflicts, Boolean(testCode)));
     const commit = message => {
         git('add', '--all');
         git('commit', '-qm', message);
@@ -52,7 +61,10 @@ export async function mergePlanFixture(t, folder = 'projects/demo', runtimeConfl
     await write('sb3-source.json', JSON.stringify({formatVersion: 1, project: 'project.source.json',
         embeddedExtensions: 'embedded-extensions.json', assetsDirectory: 'assets',
         archiveEntries: ['project.json', md5ext, 'tw-plus/workspace.json']}));
-    await write('embedded-extensions.json', '{"formatVersion":1,"extensions":[]}');
+    await write('embedded-extensions.json', JSON.stringify({formatVersion: 1, extensions: testCode ? [{
+        id: testExtensionId, path: testExtensionPath, mediaType: 'text/javascript', parameters: [], encoding: 'base64'
+    }] : []}));
+    if (testCode) await write(testExtensionPath, testCode);
     await write('.tw-plus/workspace.json', '{}');
     await write('README.md', 'A local project\n');
     await put(10, 15);

@@ -86,7 +86,11 @@ export function createMergePlanReader(journal: MergePlanJournal, scope: MergePla
         if (tool === 'merge_plan_get_generation') {
             const {offset, limit} = pageSize(args, 100, 200);
             const paths = [...files.keys()].sort();
-            return {project, generation: generations[index],
+            const result = await journal.testResult(plans[index]);
+            scope.guard();
+            const latestTest = result && {generationId: result.generationId, contentId: result.contentId,
+                finishedAt: result.finishedAt, counts: result.counts, total: result.total, error: result.error};
+            return {project, generation: generations[index], latestTest,
                 files: paths.slice(offset, offset + limit).map(path => ({path, size: files.get(path)!.byteLength})),
                 nextOffset: offset + limit < paths.length ? offset + limit : null};
         }

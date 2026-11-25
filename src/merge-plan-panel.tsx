@@ -1,13 +1,16 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {GitPanelError} from './filesystem.js';
-import {duplicateMergePlan, editMergePlan, mergePlanConflictResolved, reviseMergePlan, type MergePlan, type MergePlanBranch,
+import {duplicateMergePlan, editMergePlan, mergePlanConflictResolved, mergePlanContentId, mergePlanPreviewFiles, reviseMergePlan,
+    type MergePlan, type MergePlanBranch,
     type MergePlanBuild, type MergePlanChoices, type MergePlanCodeEdit, type MergePlanFiles} from './merge-plan.js';
 import type {MergePlanJournal, MergePlanScope} from './merge-plan-journal.js';
 import {mergePlanImportLimit, prepareMergePlanImport, type MergePlanImport} from './merge-plan-import.js';
 import {mergePlaytestRequest, type MergePlaytestRequest} from './merge-playtest.js';
 import {createMergePlanPlaytest, createMergePlanReader, type MergePlanSharePort} from './merge-plan-sharing.js';
 import type {PlaytestObserver} from './merge-playtest-observation.js';
+import {MergePlanTestView} from './merge-plan-test-view.js';
+import {mergePlanTestResult, type MergePlanTestResult, type RunMergePlanTests} from './merge-plan-tests.js';
 import type {MergeSide} from './project-source-merge.js';
 import {labelsFor} from './messages.js';
 
@@ -80,13 +83,14 @@ interface Props {
     play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: MergePlaytestRequest, observe?: PlaytestObserver): Promise<void>;
     share?: MergePlanSharePort;
     validate?(files: MergePlanFiles): void;
-    finalize?(plan: MergePlan, files: MergePlanFiles, title: string): Promise<string | undefined>;
+    runTests?: RunMergePlanTests;
+    finalize?(plan: MergePlan, files: MergePlanFiles, title: string, result: MergePlanTestResult | null): Promise<string | undefined>;
     edit?(plan: MergePlan, files: MergePlanFiles, title: string, save: (edit: MergePlanCodeEdit) => Promise<string>):
         Promise<string | undefined>;
 }
 
 export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play, edit,
-    share, validate, finalize}: Props) {
+    share, validate, runTests, finalize}: Props) {
     const text = locale.startsWith('ja') ? words.ja : words.en;
     const labels = labelsFor(locale);
     const [open, setOpen] = useState(false);
@@ -179,6 +183,25 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
         setPlans(previous => [...(previous ?? []), plan]);
         return plan.id;
     };
+    const testGeneration = (plan: MergePlan, signal: AbortSignal) => act(async () => {
+        const current = await scope();
+        if (current.folder !== plan.folder) throw new GitPanelError('changed');
+        const files = await journal.files(plan);
+        if (await mergePlanContentId(files) !== plan.contentId) throw new GitPanelError('mergeCommitInvalid');
+        if (signal.aborted) return undefined;
+        current.guard();
+        let result: MergePlanTestResult;
+        try {
+            result = mergePlanTestResult(plan, await runTests!(mergePlanPreviewFiles(files), signal));
+        } catch (error) {
+            if (signal.aborted) return undefined;
+            result = mergePlanTestResult(plan, undefined, error instanceof Error ? error.message : String(error));
+        }
+        if (signal.aborted || activeContext.current !== context) return undefined;
+        current.guard();
+        await journal.saveTestResult(result);
+        return result;
+    });
     const branchRef = available?.some(item => item.ref === selected) ? selected : '';
     const groups = new Map<string, MergePlan[]>();
     for (const plan of plans ?? []) {
@@ -244,6 +267,8 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
             {[...groups].map(([id, generations]) => {
                 const original = plans?.find(plan => plan.id === generations[0].copiedFrom);
                 return <Candidate key={id} text={text} name={names.get(id)!} generations={generations} busy={busy}
+                    renderTests={runTests && (plan => <MergePlanTestView key={`tests-${plan.id}`} document={document} locale={locale}
+                        plan={plan} journal={journal} busy={busy} run={signal => testGeneration(plan, signal)}/>)}
                     copiedFrom={original && names.get(original.planId)}
                     duplicate={plan => void act(() => add(duplicateMergePlan(plan)))}
                     play={(plan, title) => void act(async () => {
@@ -267,7 +292,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                         return add(revision.plan, revision.files);
                     })}
                     finalize={finalize && (async (plan, title) => {
-                        const oid = await act(async () => finalize(plan, await journal.files(plan), title));
+                        const oid = await act(async () => finalize(plan, await journal.files(plan), title, await journal.testResult(plan)));
                         if (oid) setCommitted(oid);
                     })}
                     revise={(plan, choices) => act(async () => {
@@ -283,7 +308,8 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     </>;
 }
 
-function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise, edit, prepareImport, saveImport, finalize}: {
+function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, revise, edit, prepareImport, saveImport, finalize,
+    renderTests}: {
     text: typeof words.en;
     name: string;
     generations: MergePlan[];
@@ -296,6 +322,7 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
     prepareImport?(plan: MergePlan, file: File): Promise<MergePlanImport | undefined>;
     saveImport(draft: MergePlanImport): Promise<string | undefined>;
     finalize?(plan: MergePlan, title: string): Promise<void>;
+    renderTests?(plan: MergePlan): React.ReactNode;
 }) {
     const [selected, setSelected] = useState('');
     const plan = generations.find(item => item.id === selected) ?? generations[generations.length - 1];
@@ -322,6 +349,7 @@ function Candidate({text, name, generations, busy, copiedFrom, duplicate, play, 
                 }}/>
         </details>}
         {plan.problems > 0 && <p>{text.problems} · {plan.problems}</p>}
+        {renderTests?.(plan)}
         <div className="twgit-merge-plan-actions">
             <button type="button" disabled={busy} onClick={() => duplicate(plan)}>{text.duplicate}</button>
             {edit && <button type="button" disabled={busy} onClick={async () => {

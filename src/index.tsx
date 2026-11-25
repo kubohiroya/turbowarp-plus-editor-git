@@ -42,6 +42,7 @@ import {createEditorBlockLocator} from './editor-block-locator.js';
 import type {LocatorVM} from './editor-block-locator.js';
 import {MergePlanPanel} from './merge-plan-panel.js';
 import {confirmMergeCommit} from './merge-commit-dialog.js';
+import type {RunMergePlanTests} from './merge-plan-tests.js';
 import type {MergePlanSharePort} from './merge-plan-sharing.js';
 import type {PlaytestObserver} from './merge-playtest-observation.js';
 import {mergePlanPreviewFiles, type MergePlanCodeEdit} from './merge-plan.js';
@@ -89,6 +90,7 @@ export interface GitHost {
     previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
         title?: string; guard?: () => void; playtest?: import('./merge-playtest.js').MergePlaytestRequest; observe?: PlaytestObserver}): Promise<void>;
     shareMergePlans?: MergePlanSharePort;
+    runMergePlanTests?: RunMergePlanTests;
     editProjectVersion?(request: {title: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
         guard(): void; save(edit: MergePlanCodeEdit): Promise<string>}): Promise<string | undefined>;
     isProjectDirty(): boolean;
@@ -1037,7 +1039,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
                         <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
-                            share={host.shareMergePlans} validate={host.validateProjectVersion}
+                            share={host.shareMergePlans} validate={host.validateProjectVersion} runTests={host.runMergePlanTests}
                             journal={persistentMergePlans ? mergePlanJournals.persistent! : mergePlanJournals.memory}
                             branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}
                             scope={async () => {
@@ -1068,7 +1070,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 if (folder !== plan.folder) throw new GitPanelError('changed');
                                 return host.editProjectVersion!({title, files: mergePlanPreviewFiles(files), guard, save});
                             })}
-                            finalize={host.localWrite && host.validateProjectVersion && (async (plan, files, title) => {
+                            finalize={host.localWrite && host.validateProjectVersion && (async (plan, files, title, result) => {
                                 const repository = state.repository!;
                                 const {folder, guard} = await projectVersionScope(repository, false);
                                 const validate = host.validateProjectVersion!;
@@ -1080,7 +1082,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 check();
                                 const changes = await repository.prepareMergeCommit(plan, files, validate);
                                 check();
-                                const message = await confirmMergeCommit(document, locale, title, plan, changes, labels);
+                                const message = await confirmMergeCommit(document, locale, title, plan, changes, labels, result);
                                 if (message === undefined) return;
                                 check();
                                 const oid = await repository.localOperation({kind: 'finalizeMergePlan', plan, files,

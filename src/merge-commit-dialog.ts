@@ -1,9 +1,10 @@
 import type {labelsFor} from './messages.js';
 import type {MergePlan} from './merge-plan.js';
 import type {prepareMergeCommit} from './merge-plan-commit.js';
+import {createMergePlanTestSummary, type MergePlanTestResult} from './merge-plan-tests.js';
 
 export function confirmMergeCommit(document: Document, locale: string, title: string, plan: MergePlan,
-    changes: Awaited<ReturnType<typeof prepareMergeCommit>>, labels: ReturnType<typeof labelsFor>) {
+    changes: Awaited<ReturnType<typeof prepareMergeCommit>>, labels: ReturnType<typeof labelsFor>, result: MergePlanTestResult | null) {
     const ja = locale.startsWith('ja');
     const headingText = ja ? 'マージコミットを確認' : 'Review merge commit';
     const dialog = document.createElement('dialog');
@@ -48,7 +49,7 @@ export function confirmMergeCommit(document: Document, locale: string, title: st
     apply.value = 'apply';
     apply.textContent = ja ? 'マージコミットを作成' : 'Create merge commit';
     form.append(label, cancel, apply);
-    dialog.append(heading, summary, parents, content, list, form);
+    dialog.append(heading, summary, parents, content, createMergePlanTestSummary(document, locale, result), list, form);
     return new Promise<string | undefined>(resolve => {
         dialog.addEventListener('close', () => {
             dialog.remove();
