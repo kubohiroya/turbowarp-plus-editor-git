@@ -41,6 +41,8 @@ export {createEditorBlockLocator} from './editor-block-locator.js';
 import {createEditorBlockLocator} from './editor-block-locator.js';
 import type {LocatorVM} from './editor-block-locator.js';
 import {MergePlanPanel} from './merge-plan-panel.js';
+import type {MergePlanSharePort} from './merge-plan-sharing.js';
+import type {PlaytestObserver} from './merge-playtest-observation.js';
 import {mergePlanPreviewFiles, type MergePlanCodeEdit} from './merge-plan.js';
 import {canPersistMergePlans, createIndexedDbMergePlanJournal, createMemoryMergePlanJournal} from './merge-plan-journal.js';
 
@@ -84,7 +86,8 @@ export interface GitHost {
     restoreProjectVersions?: boolean;
     validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
     previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
-        title?: string; guard?: () => void; playtest?: import('./merge-playtest.js').MergePlaytestRequest}): Promise<void>;
+        title?: string; guard?: () => void; playtest?: import('./merge-playtest.js').MergePlaytestRequest; observe?: PlaytestObserver}): Promise<void>;
+    shareMergePlans?: MergePlanSharePort;
     editProjectVersion?(request: {title: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
         guard(): void; save(edit: MergePlanCodeEdit): Promise<string>}): Promise<string | undefined>;
     isProjectDirty(): boolean;
@@ -1033,6 +1036,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
                         <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
+                            share={host.shareMergePlans}
                             journal={persistentMergePlans ? mergePlanJournals.persistent! : mergePlanJournals.memory}
                             branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}
                             scope={async () => {
@@ -1047,11 +1051,11 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 guard();
                                 return plan;
                             }}
-                            play={async (plan, files, title, playtest) => {
+                            play={async (plan, files, title, playtest, observe) => {
                                 const {folder, guard} = await projectVersionScope(state.repository!, false);
                                 if (folder !== plan.folder) throw new GitPanelError('changed');
                                 try {
-                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard, playtest,
+                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard, playtest, observe,
                                         files: mergePlanPreviewFiles(files)});
                                 } catch (error) {
                                     if (error instanceof GitPanelError) throw error;

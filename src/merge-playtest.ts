@@ -98,14 +98,17 @@ export function observePlaytest(conflicts: readonly PlaytestConflict[], onStop: 
     const previous = new WeakMap<ExecutionThread, string>();
     const adopted = new Set<string>();
     let stopped: PlaytestStop | undefined;
+    let stoppedThread: ExecutionThread | undefined;
     return {
         get paused() {return stopped !== undefined;},
         get stopped() {return stopped;},
+        get stoppedThread() {return stoppedThread;},
         before(thread: ExecutionThread, block: string) {
             const conflict = conflicts.find(item => item.next === block && item.script === thread.topBlock &&
                 item.target === thread.target.getName() && !adopted.has(item.id));
             if (!conflict) return true;
             stopped = {...conflict, previous: previous.get(thread)};
+            stoppedThread = thread;
             onStop(stopped);
             return false;
         },
@@ -117,6 +120,7 @@ export function observePlaytest(conflicts: readonly PlaytestConflict[], onStop: 
             if (!stopped) return;
             adopted.add(stopped.id);
             stopped = undefined;
+            stoppedThread = undefined;
         }
     };
 }

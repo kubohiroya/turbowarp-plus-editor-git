@@ -1,10 +1,12 @@
-import React, {useEffect, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {createPortal} from 'react-dom';
 import {GitPanelError} from './filesystem.js';
 import {duplicateMergePlan, editMergePlan, reviseMergePlan, type MergePlan, type MergePlanBranch,
     type MergePlanBuild, type MergePlanChoices, type MergePlanCodeEdit, type MergePlanFiles} from './merge-plan.js';
 import type {MergePlanJournal, MergePlanScope} from './merge-plan-journal.js';
 import {mergePlaytestRequest, type MergePlaytestRequest} from './merge-playtest.js';
+import {createMergePlanPlaytest, createMergePlanReader, type MergePlanSharePort} from './merge-plan-sharing.js';
+import type {PlaytestObserver} from './merge-playtest-observation.js';
 import type {MergeSide} from './project-source-merge.js';
 import {labelsFor} from './messages.js';
 
@@ -22,7 +24,9 @@ const words = {
         mergePlanEditConflict: 'The new choice overlaps a manual edit. Choose it in an earlier generation, or keep the manual edit.',
         provisional: 'Unconfirmed', base: 'Common base', current: 'Current', incoming: 'Incoming',
         mergePlanNoBase: 'No common commit was found. Fetch more of the history and try again.',
-        mergePlanMultipleBases: 'These branches have more than one common starting point.'
+        mergePlanMultipleBases: 'These branches have more than one common starting point.',
+        share: 'Share via MCP', stopShare: 'Stop MCP sharing', token: 'MCP bearer token',
+        sharing: 'This connection can read saved generations, debugger state, requested variables and recent logs for this project.'
     },
     ja: {
         title: 'マージプラン', target: '取り込み先', from: '取り込み元', choose: 'ブランチを選ぶ',
@@ -37,7 +41,9 @@ const words = {
         mergePlanEditConflict: '採用元の変更と直接編集が重なっています。前の世代で採用元を選ぶか、直接編集の内容を残してください。',
         provisional: '未確認', base: '共通の元', current: '取り込み先', incoming: '取り込み元',
         mergePlanNoBase: '共通のコミットが見つかりません。履歴を取得してからやり直してください。',
-        mergePlanMultipleBases: 'このブランチには共通の起点が複数あります。'
+        mergePlanMultipleBases: 'このブランチには共通の起点が複数あります。',
+        share: 'MCPで共有', stopShare: 'MCP共有を停止', token: 'MCPアクセストークン',
+        sharing: 'この接続で、この作品の保存済み世代、試遊の停止位置、指定された変数・リスト、直近のログを読み取れます。'
     }
 };
 
@@ -52,12 +58,13 @@ interface Props {
     branches(current: string): Promise<MergePlanBranch[]>;
     scope(): Promise<MergePlanScope & {guard(): void}>;
     create(expected: {branch: string; head: string}, from: string): Promise<MergePlanBuild>;
-    play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: MergePlaytestRequest): Promise<void>;
+    play(plan: MergePlan, files: MergePlanFiles, title: string, playtest: MergePlaytestRequest, observe?: PlaytestObserver): Promise<void>;
+    share?: MergePlanSharePort;
     edit?(plan: MergePlan, files: MergePlanFiles, title: string, save: (edit: MergePlanCodeEdit) => Promise<string>):
         Promise<string | undefined>;
 }
 
-export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play, edit}: Props) {
+export function MergePlanPanel({document, locale, context, journal, persistent, branch, head, branches, scope, create, play, edit, share}: Props) {
     const text = locale.startsWith('ja') ? words.ja : words.en;
     const labels = labelsFor(locale);
     const [open, setOpen] = useState(false);
@@ -76,6 +83,13 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
     branchReader.current = branches;
     const scopeReader = useRef(scope);
     scopeReader.current = scope;
+    const playtest = useMemo(createMergePlanPlaytest, [context]);
+    const [connection, setConnection] = useState<{url: string; token: string; context: object}>();
+    const sharing = connection?.context === context ? connection : undefined;
+    useEffect(() => {
+        if (!sharing || !share) return;
+        return () => {void share.stop(sharing.token).catch(() => {});};
+    }, [share, sharing]);
 
     useEffect(() => {
         const current = dialog.current;
@@ -164,6 +178,22 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
             <h2>{text.title}</h2>
             <p>{text.help}</p>
             {!persistent && <p>{text.temporary}</p>}
+            {share && (sharing ? <div className="twgit-merge-plan-sharing">
+                <p>{text.sharing}</p>
+                <label>MCP URL <input readOnly value={sharing.url} onFocus={event => event.currentTarget.select()}/></label>
+                <label>{text.token} <input readOnly value={sharing.token} onFocus={event => event.currentTarget.select()}/></label>
+                <button type="button" disabled={busy} onClick={() => void act(async () => {
+                    await share.stop(sharing.token);
+                    setConnection(undefined);
+                })}>{text.stopShare}</button>
+            </div> : <button type="button" disabled={busy || !plans} onClick={() => void act(async () => {
+                const current = await scope();
+                const read = createMergePlanReader(journal, current, playtest);
+                const result = await share.start({repository: current.root.name, folder: current.folder}, read);
+                if (!result) return;
+                if (activeContext.current === context) setConnection({...result, context});
+                else await share.stop(result.token);
+            })}>{text.share}</button>)}
             {storageError && <p role="alert">{text.storageFailed}</p>}
             {branch && head && <form className="twgit-merge-plan-create" onSubmit={event => {
                 event.preventDefault();
@@ -193,7 +223,7 @@ export function MergePlanPanel({document, locale, context, journal, persistent, 
                     duplicate={plan => void act(() => add(duplicateMergePlan(plan)))}
                     play={(plan, title) => void act(async () => {
                         const files = await journal.files(plan);
-                        return play(plan, files, title, mergePlaytestRequest(plan, files, await journal.seed(plan)));
+                        return play(plan, files, title, mergePlaytestRequest(plan, files, await journal.seed(plan)), sharing && playtest.observe(plan));
                     })}
                     edit={edit && ((plan, title) => act(async () => {
                         const files = await journal.files(plan);
