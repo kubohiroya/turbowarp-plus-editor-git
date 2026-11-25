@@ -40,6 +40,7 @@ export {createScratchBlocksDiffLocator} from './block-diff-location.js';
 export {createEditorBlockLocator} from './editor-block-locator.js';
 import {createEditorBlockLocator} from './editor-block-locator.js';
 import type {LocatorVM} from './editor-block-locator.js';
+import {MergePlanPanel, type MergePlanSession} from './merge-plan-panel.js';
 
 export {createScratchBlocksDiffRenderer} from './scratch-block-diff-renderer.js';
 export type {ScratchBlockDiffRendererOptions, ScratchBlocksPort} from './scratch-block-diff-renderer.js';
@@ -80,7 +81,8 @@ export interface GitHost {
     saveProjectFiles?(): Promise<void>;
     restoreProjectVersions?: boolean;
     validateProjectVersion?(files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>): void;
-    previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>}): Promise<void>;
+    previewProjectVersion?(request: {oid: string; folder: string; files: ReadonlyMap<string, Uint8Array<ArrayBuffer>>;
+        title?: string; guard?: () => void}): Promise<void>;
     isProjectDirty(): boolean;
     isProjectRunning?(): boolean;
     subscribe?(listener: (event: 'loaded' | 'changed' | 'folder') => void): () => void;
@@ -798,7 +800,8 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     const versionDirectory = host.projectDirectory?.();
     const hasProject = host.projectDirectory ? !!versionDirectory : state.project !== null;
     const canUseVersions = !!state.repository && hasProject;
-    const projectVersionScope = async (repository: Repository) => {
+    const mergePlans = useMemo<MergePlanSession>(() => ({plans: []}), [state.repository, state.project, versionDirectory]);
+    const projectVersionScope = async (repository: Repository, trackRefresh = true) => {
         const project = current.current.project;
         const directory = host.projectDirectory?.();
         const ticket = epoch.current;
@@ -806,7 +809,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         const folder = host.projectDirectory ? parts?.join('/') : project;
         if (folder === null || folder === undefined) throw new GitPanelError('invalid');
         const guard = () => {
-            if (!alive.current || epoch.current !== ticket || current.current.repository !== repository ||
+            if (!alive.current || (trackRefresh && epoch.current !== ticket) || current.current.repository !== repository ||
                 (host.projectDirectory ? host.projectDirectory() !== directory : current.current.project !== project))
                 throw new GitPanelError('changed');
         };
@@ -915,6 +918,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         github={release.github} connection={host.connectionSettings} exportProject={release.exportProject} onClose={() => setRelease(undefined)}/>;
     if (!shown) return <>{null}{connectionDialog}{releaseDialog}</>;
     const snapshot = state.snapshot;
+    const mergePlanRefs = refs ?? snapshot;
     const branching = !!host.localWrite && !!snapshot;
     const canRecord = !!host.localWrite && !!snapshot?.branch;
     const writable = canRecord && !commitView;
@@ -1017,6 +1021,28 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     {state.repository && !!host.connectionSettings?.modes.length &&
                         <button type="button" className="twgit-panel-action" disabled={state.busy || connectionBusy}
                             onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
+                    {state.repository && canUseVersions && host.previewProjectVersion &&
+                        <MergePlanPanel document={document} locale={locale} session={mergePlans}
+                            branch={mergePlanRefs?.branch} head={mergePlanRefs?.head ?? null}
+                            branches={state.repository.mergePlanBranches}
+                            create={async (expected, from) => {
+                                const repository = state.repository!;
+                                const {folder, guard} = await projectVersionScope(repository, false);
+                                const plan = await repository.planMerge(folder, expected, from);
+                                guard();
+                                return plan;
+                            }}
+                            play={async (plan, title) => {
+                                const {folder, guard} = await projectVersionScope(state.repository!, false);
+                                if (folder !== plan.folder) throw new GitPanelError('changed');
+                                try {
+                                    await host.previewProjectVersion!({oid: plan.id, title, folder, guard,
+                                        files: plan.previewFiles()});
+                                } catch (error) {
+                                    if (error instanceof GitPanelError) throw error;
+                                    throw new GitPanelError('versionOpenFailed');
+                                }
+                            }}/>}
                 </div>
                 {!slot && <CloseButton label={labels.close} onClick={closePanel}/>}
             </header>

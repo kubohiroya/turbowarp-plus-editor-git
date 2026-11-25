@@ -33,14 +33,16 @@ export interface ProjectVersionPreviewOptions {
     page: string;
     /** Extra query parameters for the page, such as startup flags that turn Editor features off. */
     params?: Readonly<Record<string, string>>;
+    /** The caller's localized label for a preview outside the commit history. */
+    title?: string;
 }
 
 export function openProjectVersionPreview(document: Document, oid: string, archive: ArrayBuffer, locale: string,
-    {page, params = {}}: ProjectVersionPreviewOptions) {
+    {page, params = {}, title}: ProjectVersionPreviewOptions) {
     const text = projectVersionPreviewMessages(locale);
     const preview = document.createElement('dialog');
     const heading = document.createElement('h2');
-    heading.textContent = `${text.title} · ${oid.slice(0, 12)}`;
+    heading.textContent = title ?? `${text.title} · ${oid.slice(0, 12)}`;
     preview.setAttribute('aria-label', heading.textContent);
     const close = document.createElement('button');
     close.type = 'button';
@@ -127,6 +129,10 @@ export async function packProjectVersion(files: ReadonlyMap<string, Uint8Array>,
     const archive = new Zip();
     for (const name of manifest.archiveEntries) {
         if (name === 'project.json') archive.file(name, JSON.stringify(project));
+        else if (name === 'tw-plus/workspace.json') {
+            const workspace = files.get('.tw-plus/workspace.json');
+            if (workspace) archive.file(name, workspace);
+        }
         else archive.file(name, read(files, `${manifest.assetsDirectory}/${name}`));
     }
     return archive.generateAsync({type: 'arraybuffer'});

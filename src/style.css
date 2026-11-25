@@ -407,6 +407,32 @@
     justify-content: flex-end;
     gap: .5rem;
 }
+.twgit-merge-plan-dialog {
+    box-sizing: border-box;
+    width: min(42rem, 92vw);
+    max-height: 88vh;
+    overflow: auto;
+    color: CanvasText;
+    background: Canvas;
+}
+.twgit-merge-plan-create, .twgit-merge-plan-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: .5rem;
+}
+.twgit-merge-plan-create > p { flex-basis: 100%; margin: 0; }
+.twgit-merge-plan-create select { max-width: min(17rem, 55vw); }
+.twgit-merge-candidate {
+    margin: .7rem 0;
+    padding: .65rem;
+    border: 1px solid color-mix(in srgb, CanvasText 28%, Canvas);
+    border-radius: .35rem;
+    overflow-wrap: anywhere;
+}
+.twgit-merge-candidate h3, .twgit-merge-candidate p { margin: 0 0 .4rem; }
+.twgit-merge-candidate details { margin-bottom: .4rem; }
+.twgit-merge-plan-dialog > .twgit-merge-plan-actions { justify-content: end; }
 .twgit-remote-repository-dialog .twgit-connection-body > label { display: grid; gap: 4px; }
 .twgit-remote-repository-dialog input[type="url"] { font: inherit; width: 100%; box-sizing: border-box; }
 .twgit-remote-repository-dialog fieldset { border: 0; margin: 8px 0; padding: 0; }
