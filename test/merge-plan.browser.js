@@ -196,7 +196,6 @@ test('tests the selected saved generation and reviews its persisted result befor
     await run.click();
     await generation.selectOption({label: 'Generation 1'});
     releaseFrame();
-    await page.unroute('**/test-frame.html', delayNextTest);
     await expect(first).toContainText('Passed 1 · Failed 0');
     await expect(run).toBeEnabled({timeout: 30_000});
     await generation.selectOption({label: 'Generation 2'});
