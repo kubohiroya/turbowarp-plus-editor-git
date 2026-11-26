@@ -56,6 +56,7 @@ type Author = {name: string; email: string};
 type CreationIntent = Pick<GitHubRepositoryDraft, 'owner' | 'name' | 'description' | 'visibility' | 'topics'> &
     {operationId: string; seedDigest: string};
 type CreateTask = RepositoryCreationProgress & {directory: FileSystemDirectoryHandle; files?: readonly SeedFile[];
+    browserProjectId?: string | null;
     timestamp: number; author: Author; intent: CreationIntent; oid?: string};
 
 export interface RepositoryCreationProvider<Session extends GitHubCreationAccount> {
@@ -123,6 +124,11 @@ export function creationError(code: string) {
     return Object.assign(new Error(code), {code});
 }
 
+// Match the managed storage's ID grammar without tying this workflow to its implementation.
+const browserProjectIdPattern = /^[a-z0-9-]{1,64}$/u;
+const validBrowserProjectId = (id: unknown): id is string =>
+    typeof id === 'string' && browserProjectIdPattern.test(id) && id.trim() === id;
+
 const errorCode = (error: unknown) => (error as {code?: string})?.code;
 const sameName = (left: string, right: string) => left.toLowerCase() === right.toLowerCase();
 const progress = ({operationId, mode, account, owner, name, visibility, phase, repository}: CreateTask):
@@ -152,7 +158,7 @@ async function digestSeed(files: readonly SeedFile[]) {
 }
 
 export function createProjectRepositoryWorkflow<Session extends GitHubCreationAccount, WriteGrant>({
-    journal, provider, exclusive, prepare, startWrite, releaseWrite, push, openProject, pickDirectory
+    journal, provider, exclusive, prepare, startWrite, releaseWrite, push, openProject, openLegacyProject, pickDirectory
 }: {
     journal: RepositoryCreationJournal;
     provider: RepositoryCreationProvider<Session>;
@@ -163,7 +169,9 @@ export function createProjectRepositoryWorkflow<Session extends GitHubCreationAc
     releaseWrite(grant: WriteGrant): Promise<void>;
     push(input: {directory: FileSystemDirectoryHandle; repository: RepositoryReceipt; operationId: string; oid: string;
         grant: WriteGrant; signal: AbortSignal}): Promise<void>;
-    openProject(directory: FileSystemDirectoryHandle, root: FileSystemDirectoryHandle): Promise<boolean>;
+    openProject(directory: FileSystemDirectoryHandle, root: FileSystemDirectoryHandle, browserProjectId?: string | null): Promise<boolean>;
+    /** Hosts that require destination provenance can offer an explicit chooser without using the legacy handle. */
+    openLegacyProject?(): Promise<boolean>;
     pickDirectory(): Promise<FileSystemDirectoryHandle | null>;
 }) {
     const requireAccess = async (directory: FileSystemDirectoryHandle) => {
@@ -181,16 +189,19 @@ export function createProjectRepositoryWorkflow<Session extends GitHubCreationAc
     };
     return {
         connect: provider.connect,
-        async start({directory, draft, files, author, signal}: {
+        async start({directory, draft, files, author, signal, browserProjectId}: {
             directory: FileSystemDirectoryHandle; draft: GitHubRepositoryDraft; files: readonly SeedFile[];
             author: Author; signal: AbortSignal;
+            /** Managed ID, null for a known device folder, or absent for an old caller or journal. */
+            browserProjectId?: string | null;
         }): Promise<RepositoryCreationProgress> {
+            if (browserProjectId != null && !validBrowserProjectId(browserProjectId)) throw creationError('invalidRequest');
             const {account, owner, name, visibility, description, topics} = draft;
             const operationId = crypto.randomUUID();
             const intent = {operationId, seedDigest: await digestSeed(files), owner, name, visibility, description, topics};
             signal.throwIfAborted();
             const task = {operationId, mode: provider.mode, account, owner, name, visibility, phase: 'create' as const,
-                directory, files, timestamp: Math.floor(Date.now() / 1000), author, intent};
+                directory, ...(browserProjectId === undefined ? {} : {browserProjectId}), files, timestamp: Math.floor(Date.now() / 1000), author, intent};
             try {await journal.add(task);} catch (error) {
                 if ((error as DOMException).name === 'ConstraintError') throw creationError('pendingRepository');
                 throw error;
@@ -301,9 +312,15 @@ export function createProjectRepositoryWorkflow<Session extends GitHubCreationAc
             return exclusive(current.operationId, async () => {
                 const task = await journal.read(current.operationId);
                 if (task?.phase !== 'open' || task.mode !== provider.mode) return false;
-                await requireAccess(task.directory);
-                // The project is at the root of the repository.
-                if (!await openProject(task.directory, task.directory)) return false;
+                const id = task.browserProjectId;
+                if (id != null && !validBrowserProjectId(id)) return false;
+                if (id === undefined && openLegacyProject) {
+                    if (!await openLegacyProject()) return false;
+                } else {
+                    if (id == null) await requireAccess(task.directory);
+                    // The project is at the root. Managed destinations reopen by ID, not by the journal's cloned handle.
+                    if (!await openProject(task.directory, task.directory, id)) return false;
+                }
                 await journal.remove(task.operationId);
                 return true;
             });
