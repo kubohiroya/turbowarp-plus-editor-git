@@ -26,7 +26,8 @@ type DiskRepository = Target & {directory: FileSystemDirectoryHandle; operationI
 /** Folders kept in the browser's own storage (OPFS), where the browser cannot pick folders. */
 export interface BrowserRepositoryFolders {
     /** Makes a new empty folder named `title`, for the repository with its project folder inside. */
-    create(title: string): Promise<FileSystemDirectoryHandle>;
+    create(title: string): Promise<FileSystemDirectoryHandle |
+        {directory: FileSystemDirectoryHandle; browserProjectId: string}>;
     /** Lets the user choose one of the folders, or resolves with `null`. */
     choose(): Promise<FileSystemDirectoryHandle | null>;
 }
@@ -174,7 +175,7 @@ function cloudflareProvider(view: Window, {bffOrigin}: Cloudflare, services: Pro
 }
 
 export function bindProjectRepositoryCreation({view, desktop, cloudflare, browserFolders, createBrowserFolder, locale, author, prepareSource,
-    openProject, services}: {
+    openProject, openLegacyProject, services}: {
     /** What the host's build supplies; see `ProjectRepositoryHostServices`. */
     services: ProjectRepositoryHostServices;
     view: CreationWindow;
@@ -187,7 +188,8 @@ export function bindProjectRepositoryCreation({view, desktop, cloudflare, browse
     locale: string;
     author(): Promise<Author | undefined>;
     prepareSource(serialize: () => Promise<Uint8Array>, current: () => boolean, title: string): Promise<ReadonlyMap<string, Uint8Array>>;
-    openProject(directory: FileSystemDirectoryHandle, root: FileSystemDirectoryHandle): Promise<boolean>;
+    openProject(directory: FileSystemDirectoryHandle, root: FileSystemDirectoryHandle, browserProjectId?: string | null): Promise<boolean>;
+    openLegacyProject?(): Promise<boolean>;
 }) {
     if (!view.indexedDB || !view.navigator.locks || !(browserFolders || view.showDirectoryPicker) || !view.crypto?.subtle ||
         typeof services?.createRepositoryClient !== 'function' || typeof services.composeRepositorySeed !== 'function' ||
@@ -263,6 +265,7 @@ export function bindProjectRepositoryCreation({view, desktop, cloudflare, browse
                 getWriteGrant: async () => grant});
         },
         openProject,
+        openLegacyProject,
         pickDirectory
     });
     return {
@@ -295,7 +298,11 @@ export function bindProjectRepositoryCreation({view, desktop, cloudflare, browse
             toolchainVersion);
             const identity = await author() ?? {name: draft.account, email: draft.account + '@users.noreply.github.com'};
             if (!current()) return null;
-            return workflow.start({directory: directory ?? await createInBrowser!(draft.title), draft, author: identity, files: [...seed].map(([path, bytes]) => ({path, bytes})), signal});
+            const destination = directory ?? await createInBrowser!(draft.title);
+            const managed = 'browserProjectId' in destination;
+            return workflow.start({directory: managed ? destination.directory : destination,
+                browserProjectId: managed ? destination.browserProjectId : directory ? null : undefined,
+                draft, author: identity, files: [...seed].map(([path, bytes]) => ({path, bytes})), signal});
         }
     };
 }
