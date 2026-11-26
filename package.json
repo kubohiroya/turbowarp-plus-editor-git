@@ -79,6 +79,10 @@
     "./project-version-preview": {
       "types": "./dist/project-version-preview.d.ts",
       "default": "./dist/project-version-preview.js"
+    },
+    "./save-commit-workflows": {
+      "types": "./dist/save-commit-workflows.d.ts",
+      "default": "./dist/save-commit-workflows.js"
     }
   },
   "files": [
@@ -90,7 +94,8 @@
     "THIRD_PARTY_NOTICES.md",
     "test/smart-http-fixture.js",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "EDITOR-MIGRATION.md"
   ],
   "publishConfig": {
     "access": "public"
