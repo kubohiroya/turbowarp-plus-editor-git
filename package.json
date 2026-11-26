@@ -113,10 +113,10 @@
     }
   },
   "devDependencies": {
-    "@kubohiroya/sb3-toolchain": "0.28.1",
+    "@kubohiroya/sb3-toolchain": "0.30.0",
     "@kubohiroya/turbowarp-plus-editor-auth": "0.5.0",
     "@kubohiroya/turbowarp-plus-editor-test-runtime": "0.3.2",
-    "@kubohiroya/turbowarp-plus-editor-windows": "0.2.2",
+    "@kubohiroya/turbowarp-plus-editor-windows": "0.2.3",
     "@playwright/test": "1.64.1",
     "@types/node": "24.19.2",
     "@types/react": "16.14.70",
