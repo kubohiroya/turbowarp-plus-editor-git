@@ -1,6 +1,6 @@
 {
   "name": "@kubohiroya/turbowarp-plus-editor-git",
-  "version": "0.32.1",
+  "version": "0.32.2",
   "description": "Read-only local Git panel for TurboWarp Plus Editor",
   "type": "module",
   "license": "MPL-2.0",
@@ -79,6 +79,10 @@
     "./project-version-preview": {
       "types": "./dist/project-version-preview.d.ts",
       "default": "./dist/project-version-preview.js"
+    },
+    "./save-commit-workflows": {
+      "types": "./dist/save-commit-workflows.d.ts",
+      "default": "./dist/save-commit-workflows.js"
     }
   },
   "files": [
@@ -90,7 +94,8 @@
     "THIRD_PARTY_NOTICES.md",
     "test/smart-http-fixture.js",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "EDITOR-MIGRATION.md"
   ],
   "publishConfig": {
     "access": "public"

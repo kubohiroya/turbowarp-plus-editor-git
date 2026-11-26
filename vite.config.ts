@@ -17,6 +17,7 @@ export default defineConfig({
                 'pull-request-queue': 'src/pull-request-queue.ts',
                 'github-publication-host': 'src/github-publication-host.ts',
                 'project-source-diff': 'src/project-source-diff.tsx',
+                'save-commit-workflows': 'src/save-commit-workflows.ts',
                 'project-publication': 'src/project-publication.ts',
                 'cloudflare-publication': 'src/cloudflare-publication.ts',
                 'project-commit-dialog': 'src/project-commit-dialog.ts',
