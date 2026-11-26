@@ -41,6 +41,24 @@ async function gitBytes(root) {
     return result;
 }
 
+test('opens a project at its exact repository root without resolving the handle', async t => {
+    const {handle, write} = await fixture(t);
+    await write('project.source.json', '{"targets":[]}\n');
+    const resolve = handle.resolve.bind(handle);
+    let calls = 0;
+    handle.resolve = async directory => {
+        calls++;
+        assert.notEqual(directory, handle, 'the known root never needs resolve()');
+        return resolve(directory);
+    };
+    const repository = await openRepository(handle);
+    assert.equal(await repository.defaultProject(await repository.browse()), '');
+    assert.equal(await repository.openProject(''), handle);
+    assert.equal(calls, 0);
+    assert.equal((await repository.openProject('projects/demo')).name, 'demo');
+    assert.equal(calls, 1);
+});
+
 test('matches CLI changes, separates staged and working bytes, and keeps Git metadata read-only', async t => {
     const {root, git, write, handle} = await fixture(t);
     await write('notes.txt', 'staged\n'); git('add', 'notes.txt');

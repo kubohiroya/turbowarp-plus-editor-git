@@ -149,6 +149,10 @@ export const upstreamWalkLimit = 1000;
 const trackingRef = (branchRef: string) => 'refs/remotes/origin/' + branchRef.slice('refs/heads/'.length);
 const sameMetadata = (a: Metadata, b: Metadata) => a.size === b.size && [...a].every(([path, bytes]) => sameBytes(bytes, b.get(path) ?? null));
 
+// Roots opened by the host are deliberately the same object as the project when it is at the root.
+export const resolveFromRoot = (root: FileSystemDirectoryHandle, directory: FileSystemDirectoryHandle):
+Promise<string[] | null> => root === directory ? Promise.resolve([]) : root.resolve(directory);
+
 export async function openRepository(root: FileSystemDirectoryHandle) {
     // Linked worktrees and submodules may point outside the granted directory.
     try {await root.getDirectoryHandle('.git');} catch (error) {
@@ -947,7 +951,7 @@ export async function openRepository(root: FileSystemDirectoryHandle) {
                 if (entry.name === '.git') throw new GitPanelError('invalid');
             }
         }
-        const parentParts = await root.resolve(directory);
+        const parentParts = await resolveFromRoot(root, directory);
         if (parentParts === null || parentParts.join('/') !== parts.join('/')) throw new GitPanelError('invalid');
         await directory.getFileHandle('project.source.json');
         return directory;

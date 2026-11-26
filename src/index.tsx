@@ -7,7 +7,7 @@ import {FileIdentity, GitStatusBadge} from './file-presentation.js';
 import {findElement, ProjectChangeListView, ProjectElementView, projectChangeLabels, useProjectChanges} from './project-change-list.js';
 import {confirmProjectRestore} from './project-restore-dialog.js';
 import type {ChangedFile} from './project-change-model.js';
-import {openRepository} from './repository.js';
+import {openRepository, resolveFromRoot} from './repository.js';
 import type {BranchRefs, Repository, Snapshot, FileChange, FileDiff, HistoryCommit, HistoryCursor} from './repository.js';
 import {BranchButton, useBranchSnackbar} from './branch-button.js';
 import {changeMarks, fileStatuses} from './change-marks.js';
@@ -411,7 +411,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     const openProjectPath = async (root: FileSystemDirectoryHandle) => {
         const directory = host.projectDirectory?.();
-        return directory ? (await root.resolve(directory))?.join('/') ?? null : null;
+        return directory ? (await resolveFromRoot(root, directory))?.join('/') ?? null : null;
     };
     controller.refresh = async (automatic = false, whileHidden = false) => {
         if (!alive.current || !current.current.repository) return;
@@ -517,7 +517,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     };
     controller.selectRepository = async (root, directory) => {
         const result = await run(async () => {
-            const relative = await root.resolve(directory);
+            const relative = await resolveFromRoot(root, directory);
             if (!relative) throw new GitPanelError('invalid');
             const previous = current.current.repository;
             const disconnect = !previous || !await previous.root.isSameEntry(root);
@@ -828,7 +828,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         const project = current.current.project;
         const directory = host.projectDirectory?.();
         const ticket = epoch.current;
-        const parts = directory ? await repository.root.resolve(directory) : null;
+        const parts = directory ? await resolveFromRoot(repository.root, directory) : null;
         const folder = host.projectDirectory ? parts?.join('/') : project;
         if (folder === null || folder === undefined) throw new GitPanelError('invalid');
         const guard = () => {
@@ -881,7 +881,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
     } : undefined;
     controller.changeBranch = changeBranch;
     controller.changeExplorerEntry = (repository, directory, kind, entry, isCurrent) => localOperation(async (active, guard) => {
-        const parts = await active.root.resolve(directory);
+        const parts = await resolveFromRoot(active.root, directory);
         const relative = pathParts(entry.path);
         if (!parts || !relative.length || relative.join('/') !== entry.path) throw new GitPanelError('invalid');
         const path = [...parts, ...relative].join('/');
@@ -1519,7 +1519,7 @@ export async function readProjectHeadFile(vm: object, directory: FileSystemDirec
     if (!controller) return null;
     const repository = controller.repository;
     if (repository) {
-        const scope = await repository.root.resolve(directory);
+        const scope = await resolveFromRoot(repository.root, directory);
         if (scope) return repository.readHeadFile([...scope, path].join('/'), limit);
     }
     // The project itself may be the repository root even before a repository is chosen in the Git panel.
@@ -1546,7 +1546,7 @@ export function followChangeMarks(vm: object, directory: FileSystemDirectoryHand
         const {repository, snapshot} = controller ?? {repository: null, snapshot: null};
         if (snapshot === read) return;
         read = snapshot;
-        const path = repository && snapshot ? await repository.root.resolve(directory).catch(() => null) : null;
+        const path = repository && snapshot ? await resolveFromRoot(repository.root, directory).catch(() => null) : null;
         if (!stopped && read === snapshot) listener(path ? changeMarks(snapshot!.changes, path.join('/')) : new Map());
     };
     const unregister = findController(vm, controller => {
@@ -1575,7 +1575,7 @@ export function followFileStatuses(vm: object, directory: FileSystemDirectoryHan
         stopWatching();
         listener(new Map());
         if (!next) return;
-        const path = await next.root.resolve(directory).catch(() => null);
+        const path = await resolveFromRoot(next.root, directory).catch(() => null);
         if (!path || generation !== ticket) return;
         const scope = path.join('/');
         let fingerprint: string | undefined;
@@ -1669,7 +1669,7 @@ export function followExplorerGit(vm: object, directory: FileSystemDirectoryHand
             previous = repository;
             const current = ++ticket;
             listener();
-            if (!repository || !controller || !await repository.root.resolve(directory).catch(() => null) || current !== ticket) return;
+            if (!repository || !controller || !await resolveFromRoot(repository.root, directory).catch(() => null) || current !== ticket) return;
             listener({
                 change: (kind, entry, isCurrent) => controller.changeExplorerEntry(repository, directory, kind, entry,
                     () => current === ticket && isCurrent()),
