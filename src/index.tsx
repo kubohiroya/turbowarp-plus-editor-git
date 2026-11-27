@@ -1,4 +1,7 @@
 import React, {useEffect, useMemo, useRef, useState} from 'react';
+import type {GitCollaborationPort, CommitAttribution} from './collaboration.js';
+export {readOutgoingCommits, inspectPairRepository, hasPairCommit} from './collaboration.js';
+export type {GitCollaborationPort, CommitAttribution, CollaborationRecord} from './collaboration.js';
 import {createPortal, render, unmountComponentAtNode} from 'react-dom';
 import {CloseButton} from './close-button.js';
 import {FileDiffView} from './file-diff-view.js';
@@ -76,6 +79,7 @@ export {inspectPublicationRepository, pushPublicationCommit} from './publish-ref
 export type {PullRequestPublication} from './publication-ui-port.js';
 
 export interface GitHost {
+    collaboration?: GitCollaborationPort;
     connectionSettings?: GitConnectionSettings;
     pullRequestPublication?(): PullRequestPublication | undefined;
     renderReviewBlock?: ProjectBlockRenderer;
@@ -151,6 +155,7 @@ export type ExplorerGitActions = {
 };
 /** The panel's side of its entries: set by the panel as it renders, used by the branch buttons and `mountGitPanel`'s result. */
 interface Controller {
+    collaboration?: GitCollaborationPort;
     open(locale: string, inactive?: boolean): void;
     openCommit(locale: string, repository: Repository, oid: string): void;
     refresh(automatic?: boolean, whileHidden?: boolean): Promise<void>;
@@ -172,6 +177,7 @@ interface Controller {
     connect(locale: string): void;
     /** The GitHub connection modes the host offers; empty without a GitHub connection. */
     connectionModes: readonly ConnectionMode[];
+    unifiedAccounts?: boolean;
     openRelease(locale: string, github: string | null, exportProject?: () => void): void;
     selectRepository(root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle): Promise<boolean>;
     openVersion?: (oid: string) => Promise<HistoryActionResult>;
@@ -368,6 +374,9 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             return {done: true};
         } catch (error) {
             if (epoch.current !== ticket) return {done: false};
+            if ((error as {code?: string})?.code === 'cancelled') {
+                setState(previous => ({...previous, busy: false})); return {done: false};
+            }
             const code = error instanceof GitPanelError ? error.code : 'failed';
             // A background read that met another tool still writing tries again on the next check, without an alert.
             if (automatic && code === 'changed') {
@@ -646,11 +655,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
             remoteRequest.current = request;
             let mergeFrom: string | undefined;
             try {
-                const result = await repository.remoteOperation(operation, getSession, () => {
+                const execute = (session: typeof getSession) => repository.remoteOperation(operation, session, () => {
                     if (epoch.current !== ticket) throw new GitPanelError('changed');
                     if (operation === 'pull' && (host.isProjectDirty() || host.isProjectRunning?.()))
                         throw new GitPanelError('pullUnsafe');
                 }, request.signal, !!host.previewProjectVersion && current.current.project !== null);
+                const result = operation === 'push' && host.collaboration ?
+                    await host.collaboration.runPush(repository.root, execute) : await execute(getSession);
                 mergeFrom = result?.mergeFrom;
             } finally {
                 remoteRequest.current = undefined;
@@ -696,7 +707,15 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 }
             };
             guard();
-            const operation = typeof request === 'function' ? await request(repository, guard) : request;
+            let operation = typeof request === 'function' ? await request(repository, guard) : request;
+            let attribution: CommitAttribution | null | undefined;
+            if (operation.kind === 'commit' && host.collaboration) {
+                attribution = await host.collaboration.prepareCommit(repository.root, operation.message);
+                guard();
+                if (attribution === null) return {};
+                if (attribution) operation = {...operation, message: attribution.message,
+                    author: attribution.author, explicitAuthor: true};
+            }
             const check = () => {
                 guard();
                 // Staging records the saved files; edits still in the Editor would be left out without a word.
@@ -714,7 +733,10 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     (host.isProjectDirty() || host.isProjectRunning?.())) throw new GitPanelError('switchUnsafe');
             };
             check();
-            if (!('paths' in operation) || operation.paths.length) await repository.localOperation(operation, check);
+            if (!('paths' in operation) || operation.paths.length) {
+                const oid = await repository.localOperation(operation, check);
+                if (oid && attribution?.collaboration) await host.collaboration!.committed(repository.root, oid, attribution.collaboration);
+            }
             if (operation.kind === 'commit') setMessage('');
             const snapshot = await repository.read(current.current.project ?? '');
             const update = {snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null, notice};
@@ -872,7 +894,12 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                 return {};
             }
             check();
-            await repository.localOperation({kind: 'restoreProject', plan, author: host.localWrite?.author?.()}, check);
+            const attribution = await host.collaboration?.prepareCommit(repository.root, `Restore ${plan.folder || 'project'} from ${plan.oid}`);
+            if (attribution === null) {cancelled = true; return {};}
+            check();
+            const restoredOid = await repository.localOperation({kind: 'restoreProject', plan, author: host.localWrite?.author?.(),
+                ...attribution && {author: attribution.author, explicitAuthor: true, message: attribution.message}}, check);
+            if (restoredOid && attribution?.collaboration) await host.collaboration!.committed(repository.root, restoredOid, attribution.collaboration);
             const snapshot = await repository.read(folder);
             return {project: folder, snapshot, changes: snapshot.changes, selected: null, diff: null, commit: null, notice: labels.versionRestored};
         });
@@ -909,11 +936,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
         if (!result.done && result.error || current.current.repository !== before) controller.open(language);
     };
     controller.connect = language => {
+        if (host.connectionSettings?.openAccountSettings) {host.connectionSettings.openAccountSettings(language); return;}
         if (connectionBusy || !current.current.repository || !host.connectionSettings?.modes.length) return;
         setLocale(language);
         setConnectionOpen(true);
     };
     controller.connectionModes = host.connectionSettings?.modes ?? [];
+    controller.unifiedAccounts = !!host.connectionSettings?.openAccountSettings;
     controller.clearRepository = () => {
         // The panel is opening a project of its own repository, as after a branch switch. The host closes the folder
         // while the project loads, which does not leave the repository.
@@ -1043,7 +1072,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                             onClick={() => void openProject(state.defaultProject!)}><PanelIcon name="choose"/>{labels.openDefault}</button>}
                     {state.repository && !!host.connectionSettings?.modes.length &&
                         <button type="button" className="twgit-panel-action" disabled={state.busy || connectionBusy}
-                            onClick={() => setConnectionOpen(true)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
+                            onClick={() => controller.connect(locale)}><PanelIcon name="globe"/>{labels.connectGitHub}</button>}
                     {state.repository && canUseVersions && host.previewProjectVersion &&
                         <MergePlanPanel document={document} locale={locale} context={mergePlanContext} persistent={persistentMergePlans}
                             suggestion={mergeStart?.repository === state.repository ? mergeStart : undefined}
@@ -1093,9 +1122,13 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                                 check();
                                 const message = await confirmMergeCommit(document, locale, title, plan, changes, labels, result);
                                 if (message === undefined) return;
+                                const attribution = await host.collaboration?.prepareCommit(repository.root, message);
+                                if (attribution === null) return;
                                 check();
                                 const oid = await repository.localOperation({kind: 'finalizeMergePlan', plan, files,
-                                    message, validate, author: host.localWrite?.author?.()}, check);
+                                    message, validate, author: host.localWrite?.author?.(),
+                                    ...attribution && {message: attribution.message, author: attribution.author, explicitAuthor: true}}, check);
+                                if (oid && attribution?.collaboration) await host.collaboration!.committed(repository.root, oid, attribution.collaboration);
                                 if (alive.current && current.current.repository === repository) {
                                     setState(previous => ({...previous, notice: labels.mergeCommitDone}));
                                     void controller.refresh(true);
@@ -1161,6 +1194,7 @@ function GitPanel({vm, document, host, controller}: {vm: object; document: Docum
                     {state.snapshot && <HistoryScope branch={state.snapshot.branch} head={state.snapshot.head} locale={locale}/>}
                     {state.snapshot && <HistoryGraph commits={history.commits} selected={state.commit?.oid ?? null} locale={locale} busy={state.busy}
                         onSelect={oid => void selectCommit(oid)} hasMore={!!history.cursor} loadingMore={history.loading}
+                        onShowWork={host.collaboration?.showCommitWork} workLabel={host.collaboration?.workLabel}
                         onShowMore={showMoreHistory} localBranches={state.snapshot.branches} onOpenVersion={controller.openVersion} onRestoreVersion={controller.restoreVersion}
                         {...branching ? {
                             onCreateBranch: (oid: string, name: string, checkout: boolean) =>
@@ -1277,6 +1311,7 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     const root = document.createElement('div');
     document.body.append(root);
     const controller = createController();
+    controller.collaboration = host.collaboration;
     if (host.openFolder) {
         controller.openFolder = locale => host.openFolder!(locale);
         if (host.openBrowserFolder) controller.openBrowserFolder = locale => host.openBrowserFolder!(locale);
@@ -1288,7 +1323,12 @@ export function mountGitPanel({vm, document, host}: {vm: object; document: Docum
     return {refresh: () => controller.refresh(), open: (locale: string, inactive?: boolean) => controller.open(locale, inactive),
         selectRepository: (root: FileSystemDirectoryHandle, project: FileSystemDirectoryHandle) =>
             controller.selectRepository(root, project),
-        clearRepository: () => controller.clearRepository(), getCommitRepository() {
+        clearRepository: () => controller.clearRepository(),
+        showCommit(oid: string, locale = 'en') {
+            if (controller.repository) controller.openCommit(locale, controller.repository, oid);
+        },
+        switchBranch: (name: string) => controller.changeBranch({kind: 'switchBranch', name}),
+        getCommitRepository() {
         const repository = controller.repository;
         if (!host.localWrite || !repository) return null;
         return {
@@ -1444,7 +1484,7 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
         <ol>
             {modes.length > 0 && <li>
                 <p>{labels.setupConnection}</p>
-                <button type="button" onClick={() => setPreferences(true)}>{labels.connectionMethod}</button>
+                <button type="button" onClick={() => controller.unifiedAccounts ? controller.connect(locale) : setPreferences(true)}>{labels.connectionMethod}</button>
             </li>}
             {openFolder ? <li>
                 <p>{labels.setupFolder}</p>
@@ -1477,7 +1517,8 @@ function HistoryEntry({vm, locale, query}: {vm: object; locale: string; query: s
         </div>}
         {!term && <HistoryScope branch={state.branch} head={state.head} locale={locale}/>}
         {term && !history.loading && !matches.length && <p role="status">{history.cursor ? labels.historySearchMore : labels.historyNoMatches}</p>}
-        <HistoryGraph commits={matches} flat={Boolean(term)} selected={selected} locale={locale} busy={state.busy} onSelect={oid => {
+        <HistoryGraph commits={matches} flat={Boolean(term)} selected={selected} locale={locale} busy={state.busy}
+            onShowWork={controller.collaboration?.showCommitWork} workLabel={controller.collaboration?.workLabel} onSelect={oid => {
             setSelected(oid);
             controller.openCommit(locale, repository, oid);
         }}

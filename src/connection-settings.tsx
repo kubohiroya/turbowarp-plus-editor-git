@@ -13,6 +13,7 @@ type DesktopAuthOptions =
 type DesktopAuthMethod = DesktopAuthOptions['method'];
 
 export interface GitConnectionSettings {
+    openAccountSettings?(locale: string): void;
     modes: readonly Mode[];
     getView(): {
         mode: Mode | null;

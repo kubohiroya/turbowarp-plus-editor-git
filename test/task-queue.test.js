@@ -19,6 +19,22 @@ function memoryJournal(beforePut) {
     };
 }
 
+test('a queued shared commit freezes its representative and survives later identity changes', async t => {
+    const {git, write, makeQueue} = await fixture(t);
+    const queue = makeQueue();
+    await write('project/project.source.json', '{"targets":[1]}\n');
+    const collaboration = {sessionId: 'pair-1', range: {sessionId: 'pair-1', from: 0, to: 3}, representative: 'alice'};
+    const job = await queue.enqueue({selection: await queue.capture({scope: 'project'}), message: 'Shared work\n\nCo-authored-by: Bob <bob@example.test>',
+        author: {name: 'Alice', email: 'alice@example.test'}, explicitAuthor: true, collaboration});
+    git('config', 'user.name', 'Bob'); git('config', 'user.email', 'bob@example.test');
+    const result = await queue.run(job.id);
+    assert.equal(result.status, 'completed');
+    assert.equal(git('log', '-1', '--format=%an|%ae|%cn|%ce'), 'Alice|alice@example.test|Alice|alice@example.test');
+    assert.equal(git('config', 'user.name'), 'Bob');
+    assert.deepEqual(result.collaboration, collaboration);
+    assert.deepEqual((await queue.run(job.id)), result);
+});
+
 async function fixture(t, journal = memoryJournal()) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'twgit-queue-'));
     t.after(() => fs.rm(root, {recursive: true, force: true}));

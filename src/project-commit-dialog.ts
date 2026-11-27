@@ -1,9 +1,11 @@
 import {dialogAction, dialogActions} from '@kubohiroya/turbowarp-plus-editor-windows';
 import type {PublicationCommit} from './project-publication.js';
+import type {CommitAttribution, CollaborationRecord} from './collaboration.js';
 
 type Localize = (ja: string, en: string) => string;
 
 export interface ProjectCommitJob {
+    collaboration?: CollaborationRecord;
     id: string;
     message: string;
     status: 'queued' | 'prepared' | 'completed' | 'blocked' | 'failed';
@@ -12,7 +14,7 @@ export interface ProjectCommitJob {
 }
 
 export interface ProjectCommitPort {
-    prepare(current: () => boolean): Promise<{
+    prepare(current: () => boolean, attribution?: CommitAttribution): Promise<{
         branch: string;
         paths: readonly string[];
         enqueue(message: string): Promise<ProjectCommitJob>;

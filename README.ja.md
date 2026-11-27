@@ -1,5 +1,9 @@
 # TurboWarp Plus Editor Git
 
+## ペア作業との接続
+
+`GitHost.collaboration` は独立したペア作業パッケージの確認・記録・送信に接続します。接続がない場合の既存動作は維持します。明示した代表者は `explicitAuthor` によってそのコミットの作者・コミッターに使い、リポジトリやユーザー全体のGit設定を書き換えません。保存コミットのキューは確認済みの名義と共同作業区間を保持し、再実行時に現在の代表者から読み直しません。送信対象の祖先関係を手元のGitから読み、履歴のメニューから関連する作業区間を開けます。[Editor #883](https://github.com/kubohiroya/turbowarp-plus-editor/issues/883)
+
 [English](README.md)
 
 TurboWarp Plus Editor に「ローカル Git」パネルを追加します。リポジトリルートを一度選びます。そのルートが sb3-toolchain v1 の作品フォルダです。作品の編集と保存には Editor の project-folder 接続を使います。

@@ -28,6 +28,17 @@ async function fixture(t, {identity = true} = {}) {
 }
 const run = (repository, operation) => repository.localOperation(operation, () => {});
 
+test('an explicit pair representative overrides config only for this commit', async t => {
+    const {root, git, write, repository} = await fixture(t);
+    const config = await fs.readFile(path.join(root, '.git/config'));
+    await write('notes.txt', 'shared work\n');
+    await run(repository, {kind: 'stage', paths: ['notes.txt']});
+    await run(repository, {kind: 'commit', message: 'Shared work', explicitAuthor: true,
+        author: {name: 'Pair representative', email: 'pair@example.test'}});
+    assert.equal(git('log', '-1', '--format=%an|%cn'), 'Pair representative|Pair representative');
+    assert.deepEqual(await fs.readFile(path.join(root, '.git/config')), config);
+});
+
 test('stages, unstages and commits as Git CLI sees it, without touching the work tree or config', async t => {
     const {root, git, write, repository} = await fixture(t);
     const config = await fs.readFile(path.join(root, '.git/config'));

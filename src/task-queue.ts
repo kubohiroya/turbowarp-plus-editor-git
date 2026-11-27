@@ -2,6 +2,7 @@ import git from 'isomorphic-git';
 import {createReadOnlyFs, GitPanelError, pathParts} from './filesystem.js';
 import {applyQueuedCommit, readLocalRef, withGitMutationLock} from './local-operations.js';
 import type {CommitSelection, GitAuthor} from './local-operations.js';
+import type {CollaborationRecord} from './collaboration.js';
 import {openRepository} from './repository.js';
 
 export type {CommitSelection, GitAuthor};
@@ -15,6 +16,9 @@ type JobState =
     | {status: 'blocked' | 'failed'; error: Failure; preparedOid?: string};
 
 export type SaveCommitJob = JobState & {
+    author?: GitAuthor;
+    explicitAuthor?: boolean;
+    collaboration?: CollaborationRecord;
     id: string;
     createdAt: number;
     message: string;
@@ -37,8 +41,8 @@ export interface SaveCommitJournal {
 const safePath = (path: string) => path.length > 0 && pathParts(path).join('/') === path &&
     !path.includes('\\') && !pathParts(path).some(part => part.toLowerCase() === '.git');
 const isOid = (oid: string | null) => oid === null || /^[0-9a-f]{40}$/u.test(oid);
-const withoutState = ({id, createdAt, message, selection, publicationRef}: SaveCommitJob) =>
-    ({id, createdAt, message, selection, publicationRef});
+const withoutState = ({id, createdAt, message, selection, publicationRef, author, explicitAuthor, collaboration}: SaveCommitJob) =>
+    ({id, createdAt, message, selection, publicationRef, author, explicitAuthor, collaboration});
 
 const sourceFiles = new Set(['project.source.json', 'sb3-source.json', 'embedded-extensions.json']);
 const sourceChild = /^(?:assets\/[a-f0-9]{32}\.[A-Za-z0-9]+|extensions\/[A-Za-z0-9._-]+\.(?:js|manifest\.json))$/u;
@@ -96,7 +100,8 @@ export function createSaveCommitQueue({root, journal, projectFolder, guard = () 
             guard();
             commitOid = await wasApplied();
             if (!commitOid) {
-                commitOid = await applyQueuedCommit(root, job.message, await author?.(), guard, {
+                commitOid = await applyQueuedCommit(root, job.message, job.author ?? await author?.(), guard, {
+                    explicitAuthor: job.explicitAuthor,
                     selection: job.selection,
                     timestamp: Math.floor(job.createdAt / 1000),
                     async prepared(oid) {
@@ -144,7 +149,9 @@ export function createSaveCommitQueue({root, journal, projectFolder, guard = () 
             if (selected.some(path => !safePath(path) || !files.has(path))) throw new GitPanelError('invalid');
             return {branch: snapshot.branch, head: snapshot.head, files: selected.map(path => ({path, oid: files.get(path) ?? null}))};
         },
-        async enqueue({selection, message}: {selection: CommitSelection; message: string}): Promise<SaveCommitJob> {
+        async enqueue({selection, message, author: selectedAuthor, explicitAuthor, collaboration}: {
+            selection: CommitSelection; message: string; author?: GitAuthor; explicitAuthor?: boolean;
+            collaboration?: CollaborationRecord}): Promise<SaveCommitJob> {
             guard();
             const subject = message.trim();
             if (!subject) throw new GitPanelError('commitMessage');
@@ -158,6 +165,23 @@ export function createSaveCommitQueue({root, journal, projectFolder, guard = () 
                 selection: {...selection, files: selection.files.map(file => ({...file}))},
                 status: 'queued', publicationRef: 'refs/heads/tw-plus/pr-' + id
             };
+            if (selectedAuthor) {
+                if (typeof selectedAuthor.name !== 'string' || typeof selectedAuthor.email !== 'string' ||
+                    !selectedAuthor.name.trim() || !selectedAuthor.email.trim() || /[\r\n<>\u0000]/u.test(selectedAuthor.name + selectedAuthor.email))
+                    throw new GitPanelError('author');
+                job.author = {name: selectedAuthor.name, email: selectedAuthor.email};
+            }
+            if (explicitAuthor) {
+                if (!job.author) throw new GitPanelError('author');
+                job.explicitAuthor = true;
+            }
+            if (collaboration) {
+                const {sessionId, range, representative} = collaboration;
+                if (typeof sessionId !== 'string' || typeof representative !== 'string' || range?.sessionId !== sessionId ||
+                    !Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to) || range.from < 0 || range.from >= range.to)
+                    throw new GitPanelError('invalid');
+                job.collaboration = {sessionId, representative, range: {sessionId, from: range.from, to: range.to}};
+            }
             await journal.put({root, job});
             return job;
         },

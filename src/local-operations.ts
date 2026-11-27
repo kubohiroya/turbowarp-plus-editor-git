@@ -11,9 +11,9 @@ export type GitAuthor = {name: string; email: string};
 export type LocalOperation =
     | {kind: 'stage'; paths: readonly string[]}
     | {kind: 'unstage'; paths: readonly string[]}
-    | {kind: 'commit'; message: string; author?: GitAuthor; selection?: CommitSelection}
-    | {kind: 'restoreProject'; plan: ProjectRestorePlan; author?: GitAuthor}
-    | {kind: 'finalizeMergePlan'; plan: MergePlan; files: MergePlanFiles; message: string; author?: GitAuthor;
+    | {kind: 'commit'; message: string; author?: GitAuthor; explicitAuthor?: boolean; selection?: CommitSelection}
+    | {kind: 'restoreProject'; plan: ProjectRestorePlan; author?: GitAuthor; explicitAuthor?: boolean; message?: string}
+    | {kind: 'finalizeMergePlan'; plan: MergePlan; files: MergePlanFiles; message: string; author?: GitAuthor; explicitAuthor?: boolean;
         validate: ValidateMergeProject}
     /**
      * Creates `name` at HEAD, at the commit `at`, or at `origin/<name>` with `fromRemote`, and switches to it with
@@ -38,6 +38,7 @@ export interface CommitSelection {
 }
 
 interface QueuedCommit {
+    explicitAuthor?: boolean;
     selection: CommitSelection;
     timestamp: number;
     prepared(oid: string): Promise<void>;
@@ -63,7 +64,7 @@ export async function runLocalOperation(root: FileSystemDirectoryHandle, operati
 /** The queue holds the Git mutation lock from its journal read through its final state write. */
 export function applyQueuedCommit(root: FileSystemDirectoryHandle, message: string, author: GitAuthor | undefined,
     guard: () => void, queued: QueuedCommit) {
-    return applyLocalOperation(root, {kind: 'commit', message, author}, guard, queued);
+    return applyLocalOperation(root, {kind: 'commit', message, author, explicitAuthor: queued.explicitAuthor}, guard, queued);
 }
 
 async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: LocalOperation, guard: () => void,
@@ -124,7 +125,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
                 }
             };
             await expectCleanIndex(options);
-            const author = await commitAuthor(options, operation.author);
+            const author = await commitAuthor(options, operation.author, operation.explicitAuthor);
             for (const {path, after} of changes) {
                 if (after) continue;
                 await options.fs.promises.unlink('/' + path);
@@ -139,7 +140,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
                 await git.updateIndex({...options, filepath: path, oid: after, mode: 0o100644, add: true});
             }
             await assertIndex(options, current.oid, selected, true);
-            commitOid = await git.commit({...options, ref: current.ref, author, parent: [current.oid, incoming.oid],
+            commitOid = await git.commit({...options, ref: current.ref, author, committer: operation.explicitAuthor ? author : undefined, parent: [current.oid, incoming.oid],
                 message: message + '\n'});
             verify = async phase => {
                 const fresh = {...options, fs: createReadOnlyFs(root), cache: {}};
@@ -188,7 +189,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
                 if (error instanceof GitPanelError && error.code === 'changed') throw new GitPanelError('restoreUnsafe');
                 throw error;
             });
-            const author = await commitAuthor(options, operation.author);
+            const author = await commitAuthor(options, operation.author, operation.explicitAuthor);
             for (const {path, after} of fresh.changes) {
                 if (after) {
                     const {blob} = await git.readBlob({...options, oid: after});
@@ -202,8 +203,8 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             }
             const selected = new Map(fresh.changes.map(({path, after}) => [path, after]));
             await assertIndex(options, fresh.head, selected, true);
-            commitOid = await git.commit({...options, author, parent: [fresh.head],
-                message: `Restore ${plan.folder || 'project'} from ${plan.oid}\n`});
+            commitOid = await git.commit({...options, author, committer: operation.explicitAuthor ? author : undefined, parent: [fresh.head],
+                message: operation.message ? operation.message.trim() + '\n' : `Restore ${plan.folder || 'project'} from ${plan.oid}\n`});
             // A different editor may change the branch or project while our staged writes are applied.
             verify = async phase => {
                 const live = {...options, fs: createReadOnlyFs(root), cache: {}};
@@ -291,7 +292,7 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             if (!message) throw new GitPanelError('commitMessage');
             const ref = await git.currentBranch(options);
             if (!ref) throw new GitPanelError('unsupported');
-            const {name, email} = await commitAuthor(options, operation.author);
+            const {name, email} = await commitAuthor(options, operation.author, operation.explicitAuthor);
             if (queued) {
                 const {head, branch, files} = queued.selection;
                 if (ref !== branch || await readLocalRef(options, 'HEAD') !== head) throw new GitPanelError('changed');
@@ -314,7 +315,8 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             const staged = (await git.statusMatrix({...options, refresh: false})).some(([, head, , stage]) => head !== stage);
             if (!staged) throw new GitPanelError('nothingStaged');
             const author = queued ? {name, email, timestamp: queued.timestamp, timezoneOffset: 0} : {name, email};
-            commitOid = await git.commit({...options, message: message + '\n', author, committer: queued ? author : undefined});
+            commitOid = await git.commit({...options, message: message + '\n', author,
+                committer: queued || operation.explicitAuthor ? author : undefined});
             await restoreIndex?.();
             if (selection) await assertWorktree(createReadOnlyFs(root), selection.files);
             if (queued) {
@@ -375,7 +377,13 @@ async function indexVersion(entry: {type(): Promise<string>; oid(): Promise<stri
 
 type GitReadOptions = Omit<Parameters<typeof git.resolveRef>[0], 'ref'>;
 
-async function commitAuthor(options: GitReadOptions, fallback?: GitAuthor): Promise<GitAuthor> {
+async function commitAuthor(options: GitReadOptions, fallback?: GitAuthor, explicit = false): Promise<GitAuthor> {
+    if (explicit) {
+        const name = fallback?.name?.trim(), email = fallback?.email?.trim();
+        if (!name || !email || /[\r\n<>\u0000]/u.test(name + email) || !/^[^\s@]+@[^\s@]+$/u.test(email))
+            throw new GitPanelError('author');
+        return {name, email};
+    }
     const configured = async (path: string) => {
         const value = await git.getConfig({...options, path});
         return typeof value === 'string' && value.trim() ? value : undefined;
