@@ -204,6 +204,20 @@ async function applyLocalOperation(root: FileSystemDirectoryHandle, operation: L
             await assertIndex(options, fresh.head, selected, true);
             commitOid = await git.commit({...options, author, parent: [fresh.head],
                 message: `Restore ${plan.folder || 'project'} from ${plan.oid}\n`});
+            // A different editor may change the branch or project while our staged writes are applied.
+            verify = async phase => {
+                const live = {...options, fs: createReadOnlyFs(root), cache: {}};
+                if (await git.currentBranch(live) !== fresh.branch ||
+                    await git.resolveRef({...live, ref: 'HEAD'}) !== fresh.head) throw new GitPanelError('changed');
+                const prepared = phase === 'beforeRefs';
+                await assertIndex(live, fresh.head, selected, prepared);
+                await assertWorktree(live.fs, prepared ? fresh.changes.map(({path, after: oid}) => ({path, oid})) : oldFiles);
+                const statuses = await git.statusMatrix({...live, refresh: false,
+                    filepaths: plan.folder ? [plan.folder] : undefined,
+                    filter: path => path.startsWith(prefix) && projectVersionFile(path.slice(prefix.length))});
+                if (statuses.some(([, head, worktree, stage]) =>
+                    (head || stage) && worktree !== (prepared ? stage : head))) throw new GitPanelError('changed');
+            };
         } else if (operation.kind === 'createBranch' || operation.kind === 'switchBranch') {
             const name = operation.name.trim();
             const local = `refs/heads/${name}`;
