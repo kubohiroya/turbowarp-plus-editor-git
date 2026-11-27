@@ -166,3 +166,96 @@ test('rolls back worktree and index when restoring a file fails', async t => {
     assert.equal(await fs.readFile(path.join(root, folder, 'assets/new.svg'), 'utf8'), '<svg id="new"/>');
     await assert.rejects(fs.stat(path.join(root, folder, 'assets/old.svg')), {code: 'ENOENT'});
 });
+
+test('restoring refuses a branch switch during the writes and rolls back its files', async t => {
+    const {root, git, folder, old, current} = await versions(t);
+    git('branch', 'external');
+    const index = await fs.readFile(path.join(root, '.git/index'));
+    let switched = false;
+    const repository = await openRepository(directoryHandle(root, filename => {
+        if (!switched && filename.endsWith('/.git/index')) {
+            switched = true;
+            git('symbolic-ref', 'HEAD', 'refs/heads/external');
+        }
+    }));
+    const plan = await repository.planProjectRestore(old, folder);
+    await assert.rejects(run(repository, {kind: 'restoreProject', plan}), {code: 'changed'});
+    assert.equal(switched, true);
+    assert.equal(git('symbolic-ref', '--short', 'HEAD'), 'external');
+    assert.equal(git('rev-parse', 'main'), current);
+    assert.equal(git('rev-parse', 'HEAD'), current);
+    assert.deepEqual(await fs.readFile(path.join(root, '.git/index')), index);
+    assert.equal(git('status', '--porcelain'), '');
+});
+
+test('restoring detects a concurrent edit to an unchanged project input before recording', async t => {
+    const {root, git, folder, old, current} = await versions(t);
+    const index = await fs.readFile(path.join(root, '.git/index'));
+    let edited = false;
+    const repository = await openRepository(directoryHandle(root, async filename => {
+        if (!edited && filename.endsWith('/.git/index')) {
+            edited = true;
+            await fs.writeFile(path.join(root, folder, 'sb3-source.json'), 'external project settings');
+        }
+    }));
+    const plan = await repository.planProjectRestore(old, folder);
+    await assert.rejects(run(repository, {kind: 'restoreProject', plan}), {code: 'changed'});
+    assert.equal(edited, true);
+    assert.equal(git('rev-parse', 'HEAD'), current);
+    assert.deepEqual(await fs.readFile(path.join(root, '.git/index')), index);
+    assert.equal(await fs.readFile(path.join(root, folder, 'sb3-source.json'), 'utf8'), 'external project settings');
+    assert.equal(git('diff', '--name-only'), folder + '/sb3-source.json');
+    assert.equal(git('ls-files', '--others', '--exclude-standard'), '');
+});
+
+test('restores sound, extension and settings inputs without reverting a neighbouring project', async t => {
+    const {root, git, write, repository, folder} = await versions(t);
+    const neighbour = 'projects/demo-copy';
+    await fs.mkdir(path.join(root, folder, 'extensions'));
+    await fs.mkdir(path.join(root, neighbour));
+    const inputs = {
+        'assets/old.wav': Buffer.from([0, 1, 255, 128]),
+        'extensions/old.js': 'old extension',
+        'embedded-extensions.json': '{"extensions":["old"]}',
+        'sb3-source.json': '{"formatVersion":1,"old":true}'
+    };
+    for (const [name, bytes] of Object.entries(inputs)) await write(folder + '/' + name, bytes);
+    await write(neighbour + '/project.source.json', 'old neighbour');
+    git('add', '.'); git('commit', '-qm', 'old media inputs');
+    const old = git('rev-parse', 'HEAD');
+    await fs.unlink(path.join(root, folder, 'assets/old.wav'));
+    await fs.unlink(path.join(root, folder, 'extensions/old.js'));
+    await write(folder + '/assets/new.wav', Buffer.from([128, 255, 1, 0]));
+    await write(folder + '/extensions/new.js', 'new extension');
+    await write(folder + '/embedded-extensions.json', '{"extensions":["new"]}');
+    await write(folder + '/sb3-source.json', '{"formatVersion":1,"old":false}');
+    await write(neighbour + '/project.source.json', 'current neighbour');
+    git('add', '.'); git('commit', '-qm', 'current media inputs');
+    const current = git('rev-parse', 'HEAD');
+    await run(repository, {kind: 'restoreProject', plan: await repository.planProjectRestore(old, folder)});
+    assert.equal(git('rev-parse', 'HEAD^'), current);
+    assert.equal(git('diff', old, 'HEAD', '--', folder), '');
+    assert.equal(await fs.readFile(path.join(root, neighbour, 'project.source.json'), 'utf8'), 'current neighbour');
+    assert.equal(git('status', '--porcelain'), '');
+});
+
+for (const failure of ['.git/index', '.git/refs/heads/main']) {
+    test(`rolls back restored files when writing ${failure} fails`, async t => {
+        const {root, git, folder, old, current} = await versions(t);
+        const index = await fs.readFile(path.join(root, '.git/index'));
+        let failed = false;
+        const repository = await openRepository(directoryHandle(root, filename => {
+            if (!failed && filename === path.join(root, failure)) {
+                failed = true;
+                throw new Error('injected late write failure');
+            }
+        }));
+        const plan = await repository.planProjectRestore(old, folder);
+        await assert.rejects(run(repository, {kind: 'restoreProject', plan}), /injected late write failure/);
+        assert.equal(failed, true);
+        assert.equal(git('rev-parse', 'HEAD'), current);
+        assert.deepEqual(await fs.readFile(path.join(root, '.git/index')), index);
+        assert.equal(git('status', '--porcelain'), '');
+        assert.equal(git('ls-files', '--others', '--exclude-standard'), '');
+    });
+}
