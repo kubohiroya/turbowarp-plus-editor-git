@@ -18,7 +18,7 @@ for (const type of ['dragenter', 'dragover', 'drop']) window.addEventListener(ty
 }, {capture: true});
 window.showDirectoryPicker = async () => directory;
 
-globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, deviceFolders, reopens}) => {
+globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, deviceFolders, reopens, unified}) => {
     document.head.append(Object.assign(document.createElement('style'), {textContent: style}));
     document.body.style.cssText = 'margin: 0; background: Canvas; font: 12px/1.5 system-ui, sans-serif';
     const bar = Object.assign(document.createElement('div'), {id: 'menu-bar'});
@@ -64,7 +64,8 @@ globalThis.mountEntry = ({locale, writable, panelFirst, connection, folders, dev
         } : {},
         // A GitHub connection that never connects, enough to show where Git is set up.
         ...connection ? {connectionSettings: {modes: ['cloudflare'], getView: () => ({mode: 'cloudflare', state: {status: 'disconnected'}}),
-            async select() {}, async connect() {}, async refresh() {}, async disconnect() {}}} : {}}});
+            async select() {}, async connect() {}, async refresh() {}, async disconnect() {},
+            ...unified ? {openAccountSettings: language => {host.accountSettings = (host.accountSettings ?? []).concat(language);}} : {}}} : {}}});
     host.setDirty = dirty => {host.dirty = dirty; notify?.('changed');};
     // The button may be rendered before or after the panel is mounted.
     if (panelFirst) globalThis.panel = mount();

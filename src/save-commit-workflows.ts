@@ -6,11 +6,13 @@ import {inspectPublicationRepository, pushPublicationCommit} from './publish-ref
 import {bindDesktopPublicationPushSession, createProjectPublication, type PublicationBridge, type ProjectPublicationPort} from './project-publication.js';
 import {createCloudflarePublicationBridge} from './cloudflare-publication.js';
 import type {ProjectCommitJob, ProjectCommitPort} from './project-commit-dialog.js';
+import type {CommitAttribution, GitCollaborationPort} from './collaboration.js';
 
 type Selection = {branch: string; files: {path: string}[]};
 export interface SaveCommitQueue {
     capture(): Promise<Selection>;
-    enqueue(input: {selection: Selection; message: string}): Promise<ProjectCommitJob>;
+    enqueue(input: {selection: Selection; message: string; author?: GitAuthor; explicitAuthor?: boolean;
+        collaboration?: CommitAttribution['collaboration']}): Promise<ProjectCommitJob>;
     list(): Promise<ProjectCommitJob[]>;
     run(id: string): Promise<ProjectCommitJob>;
 }
@@ -18,6 +20,7 @@ type CommitJournal = unknown;
 type PublicationGitAccess = {root: FileSystemDirectoryHandle;
     getSession: ReturnType<typeof createGitConnectionSettings>['getSession']; guard(): void};
 export interface SaveCommitWorkflowOptions {
+    collaboration?: GitCollaborationPort;
     view: Window;
     folder: {readonly directory: FileSystemDirectoryHandle | null; save?(): Promise<unknown>};
     getRepository(): {root: FileSystemDirectoryHandle; current(): boolean} | null | undefined;
@@ -96,7 +99,7 @@ export function createSaveCommitWorkflows(options: SaveCommitWorkflowOptions): (
                 guard, author: readAuthor});
         })();
         return {...common, publication: canPublish ? publication?.port : undefined, commit: {
-            async prepare(current) {
+            async prepare(current, preparedAttribution) {
                 const queue = await getQueue();
                 const selection = await saveWithLock(async () => {
                     if (!current()) return null;
@@ -109,11 +112,19 @@ export function createSaveCommitWorkflows(options: SaveCommitWorkflowOptions): (
                 });
                 if (!selection) return null;
                 return {branch: selection.branch, paths: selection.files.map(file => file.path),
-                    enqueue: message => queue.enqueue({selection, message})};
+                    enqueue: async message => {
+                        const attribution = preparedAttribution ?? await options.collaboration?.prepareCommit(repository.root, message);
+                        guard();
+                        if (attribution === null) throw Object.assign(new Error('Cancelled'), {code: 'cancelled'});
+                        return queue.enqueue({selection, message: attribution?.message ?? message,
+                            ...attribution && {author: attribution.author, explicitAuthor: true, collaboration: attribution.collaboration}});
+                    }};
             },
             async jobs() {return (await getQueue()).list();},
             async run(id) {
                 const job = await (await getQueue()).run(id);
+                if (job.status === 'completed' && job.commitOid && job.collaboration)
+                    await options.collaboration?.committed(repository.root, job.commitOid, job.collaboration);
                 options.refresh();
                 return job;
             }

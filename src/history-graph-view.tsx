@@ -15,6 +15,8 @@ export function HistoryScope({branch, head, locale = 'en'}: {branch: string | un
 /** How a write action ended: `error` is the message to show when it did not run to the end. */
 export type HistoryActionResult = {done: true} | {done: false; error?: string};
 export interface HistoryGraphProps {
+    onShowWork?(oid: string): void;
+    workLabel?: string;
     /** Commits newest first, each child above its parents, as `Repository.history` returns them page by page. */
     commits: readonly HistoryCommit[];
     /** The commit shown as selected. */
@@ -109,6 +111,8 @@ export function HistoryGraph(props: HistoryGraphProps) {
     };
     const actionsFor = (commit: HistoryCommit): Action[] => {
         const actions: Action[] = [];
+        if (props.onShowWork && props.workLabel) actions.push({id: 'pair-work', label: props.workLabel,
+            run: () => {closeMenu('row'); props.onShowWork!(commit.oid);}});
         const versionAction = (id: string, label: string, action: (oid: string) => Promise<HistoryActionResult>) => ({
             id, label, run: () => {
                 setStatus('');

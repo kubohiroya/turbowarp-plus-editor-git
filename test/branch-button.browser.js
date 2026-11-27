@@ -540,3 +540,22 @@ test('without device folders (Safari, Firefox), the setup shows Open Folder as u
     assert.deepEqual(errors, []);
 });
 
+
+test('unified account settings replace both legacy connection entry points when the host supplies them', async t => {
+    const root=await fs.mkdtemp(path.join(os.tmpdir(),'twgit-unified-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+    execFileSync('git',['init','-q','-b','main'],{cwd:root});
+    const server=await serveEditorRuntime({script:fileURLToPath(new URL('./branch-entry-page.js',import.meta.url))});
+    const browser=await chromium.launch({headless:true,args:['--enable-experimental-web-platform-features']});
+    t.after(async()=>{await browser.close();await server.close();});
+    const page=await browser.newPage({viewport:{width:900,height:700}});await page.goto(server.url);
+    await page.evaluate(options=>mountEntry(options),{locale:'ja',writable:true,panelFirst:true,connection:true,unified:true});
+    const cdp=await page.context().newCDPSession(page);
+    for(const type of ['dragEnter','dragOver','drop'])await cdp.send('Input.dispatchDragEvent',{type,x:100,y:100,data:{items:[],files:[root],dragOperationsMask:1}});
+    await page.waitForFunction(()=>window.directoryReady);
+    const side=page.locator('#side');await side.getByRole('button',{name:'接続方式…',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>host.accountSettings),['ja']);assert.equal(await page.getByRole('dialog').count(),0);
+    await side.getByRole('button',{name:'リポジトリを選択…',exact:true}).click();
+    await page.locator('#menu-bar').getByRole('button').first().waitFor();await page.keyboard.press('Escape');
+    await side.getByRole('button',{name:'GitHub に接続…',exact:true}).click();
+    assert.deepEqual(await page.evaluate(()=>host.accountSettings),['ja','ja']);assert.equal(await page.getByRole('dialog').count(),0);
+});

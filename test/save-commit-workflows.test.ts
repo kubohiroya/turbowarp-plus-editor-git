@@ -45,3 +45,17 @@ test('missing services leave commit unavailable, and a folder outside the reposi
     f.options.getRepository = () => ({root: {resolve: async () => null}, current: () => true}) as never;
     await assert.rejects(f.workflows()().commit!.jobs(), {code: 'outsideRepository'});
 });
+
+test('a solo account supplies the confirmed author without creating a pair timeline record', async () => {
+    const f=fixture();let captured: unknown,recorded=false;
+    const author={name:'Chosen account',email:'chosen@example.test'};
+    const create=f.options.createCommitQueue;
+    f.options.createCommitQueue=()=>({...create(),enqueue:async input=>{captured=input;return {id:'solo'};},
+        run:async()=>({id:'solo',status:'completed',commitOid:'a'.repeat(40)})}) as never;
+    Object.assign(f.options,{collaboration:{async prepareCommit(){return {message:'Solo change',author,explicitAuthor:true};},
+        async committed(){recorded=true;}}});
+    const commit=f.workflows()().commit!,prepared=await commit.prepare(()=>true);
+    await prepared!.enqueue('Original');await commit.run('solo');
+    assert.deepEqual((captured as {author:unknown}).author,author);
+    assert.equal((captured as {collaboration?:unknown}).collaboration,undefined);assert.equal(recorded,false);
+});
