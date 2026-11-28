@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {test} from 'node:test';
-import {readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {chromium, expect} from '@playwright/test';
 import {mergePlanFixture} from './merge-plan-fixture.js';
@@ -16,12 +17,26 @@ const mime = {'.html': 'text/html', '.js': 'application/javascript', '.css': 'te
 
 const options = {skip: !build && 'Set E2E_PROJECT_FOLDER_BUILD to a built Editor with this Git package', timeout: 120_000};
 
-async function start(t, fixture, testDigest) {
+async function start(t, fixture, testDigest, {allowWrites = false} = {}) {
     assert.ok(path.isAbsolute(build));
     const args = ['--enable-experimental-web-platform-features', '--enable-unsafe-swiftshader'];
-    const browser = await chromium.launch({channel: 'chromium', headless: true, args});
-    t.after(() => browser.close());
-    const context = await browser.newContext({viewport: {width: 1260, height: 940}});
+    const viewport = {width: 1260, height: 940};
+    let context;
+    if (allowWrites) {
+        // Writing to the chosen folder asks for permission, which nobody answers in a headless browser.
+        // Start from a profile that already allows it, as a person would by answering the prompt.
+        const profile = await mkdtemp(path.join(tmpdir(), 'twgit-merge-profile-'));
+        t.after(() => rm(profile, {recursive: true, force: true}));
+        await mkdir(path.join(profile, 'Default'));
+        await writeFile(path.join(profile, 'Default', 'Preferences'), JSON.stringify({profile: {
+            default_content_setting_values: {file_system_write_guard: 1, file_system_read_guard: 1}}}));
+        context = await chromium.launchPersistentContext(profile, {channel: 'chromium', headless: true, args, viewport});
+        t.after(() => context.close());
+    } else {
+        const browser = await chromium.launch({channel: 'chromium', headless: true, args});
+        t.after(() => browser.close());
+        context = await browser.newContext({viewport});
+    }
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -66,7 +81,8 @@ async function start(t, fixture, testDigest) {
     }
     async function open() {
         // Use the Editor's receiving tab, where Open Folder hands the selected directory to this Editor.
-        await page.goto(origin + prefix + 'editor.html?lang=en&twPlusOpenTab=playtest-fixture');
+        // The Editor starts in the Scratch layout unless the new layout is chosen (Editor #890); the Git panel is in the new one.
+        await page.goto(origin + prefix + 'editor.html?lang=en&twPlusOpenTab=playtest-fixture&twPlusStandardLayout=1');
         await page.waitForFunction(() => window.vm?.runtime.getTargetForStage(), null, {timeout: 45_000});
         await dropDirectory(fixture.root);
         await page.waitForFunction(() => window.mergePlanFixtureReady);
@@ -531,6 +547,17 @@ test('pauses before an unresolved command, edits it in place and resumes the sam
     assert.ok(draft);
     await expect(draft.locator('.twgit-playtest-band')).toHaveCount(2);
     const workspace = draft.locator('.blocklySvg > .blocklyWorkspace > .blocklyBlockCanvas');
+    // The horizontal and vertical bands cross on the conflicting input of the paused block.
+    const conflictingInput = workspace.locator('[data-id="move"] .blocklyEditableText').filter({hasText: /^10$/});
+    await expect.poll(async () => {
+        const [input, ...bands] = await Promise.all([conflictingInput.boundingBox(),
+            ...(await draft.locator('.twgit-playtest-band').all()).map(band => band.boundingBox())]);
+        if (!input || bands.some(band => !band)) return false;
+        const horizontal = bands.find(band => band.width > band.height), vertical = bands.find(band => band.height > band.width);
+        const x = input.x + input.width / 2, y = input.y + input.height / 2;
+        return Boolean(horizontal && vertical && horizontal.y <= y && y <= horizontal.y + horizontal.height &&
+            vertical.x <= x && x <= vertical.x + vertical.width);
+    }, {message: 'the bands cross on the conflicting STEPS input'}).toBe(true);
     for (const [blockId, label] of [['advance', '✓ Last executed'], ['move', '▶ Next to execute']]) {
         const marker = draft.getByText(label, {exact: true});
         await expect(marker).toBeVisible();
@@ -673,5 +700,40 @@ test('saves adopted blocks as a new generation and reopens it without changing t
         await original.player.getByRole('button', {name: 'Close', exact: true}).click();
     }
     assert.deepEqual(await fixture.snapshot(), before);
+    assert.deepEqual(errors, []);
+});
+
+
+test('creates a candidate, duplicates it, plays a generation and commits that generation', options, async t => {
+    const fixture = await mergePlanFixture(t, '');
+    fixture.git('reset', '--hard');
+    await rm(path.join(fixture.project, 'notes.txt'));
+    await fixture.put(35, 30);
+    const head = fixture.commit('Change the same block locally');
+    const {page, candidate, createCandidate, play, errors} = await start(t, fixture, undefined, {allowWrites: true});
+    await createCandidate();
+    await candidate(1).getByRole('button', {name: 'Duplicate'}).click();
+    const copy = candidate(2);
+    await expect(copy).toContainText('Copied from Candidate 1');
+    await copy.getByText(/Choose versions for conflicting changes/).click();
+    await copy.getByLabel(/project.source.json.*Walker/).selectOption('incoming');
+    await copy.getByRole('button', {name: 'Save as new generation'}).click();
+    await expect(copy.getByRole('combobox', {name: /^Generation/}).locator('option:checked')).toHaveText('Generation 2');
+    await play(2, 2, 25, 105);
+    await copy.getByRole('button', {name: 'Finalize this generation…'}).click();
+    const confirm = page.getByRole('dialog', {name: 'Review merge commit'});
+    await expect(confirm).toContainText('Candidate 2 · Generation 2');
+    await confirm.getByRole('button', {name: 'Create merge commit'}).click();
+    const plans = page.getByRole('dialog', {name: 'Merge plans'});
+    // Writing the folder takes a while; wait for the commit itself rather than the notice, which a refresh replaces.
+    await expect.poll(() => fixture.git('rev-parse', 'HEAD'), {timeout: 60_000}).not.toBe(head);
+    await expect(plans.getByRole('alert').filter({hasText: /\S/})).toHaveCount(0);
+    const commit = fixture.git('rev-parse', 'HEAD');
+    assert.equal(fixture.git('show', '-s', '--format=%P', commit), head + ' ' + fixture.incoming);
+    assert.equal(fixture.git('symbolic-ref', 'HEAD'), 'refs/heads/main');
+    assert.equal(fixture.git('status', '--porcelain'), '');
+    const merged = JSON.parse(fixture.git('show', commit + ':project.source.json'));
+    const walker = merged.targets.find(target => target.name === 'Walker');
+    assert.deepEqual(walker.blocks.move.inputs.STEPS, [1, [4, '25']], 'the incoming side chosen in generation 2');
     assert.deepEqual(errors, []);
 });
