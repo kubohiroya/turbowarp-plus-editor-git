@@ -281,7 +281,7 @@ AIエージェントは読み取り専用MCPの `merge_plan_get_generation` と 
 
 `./repository-rename` は、作品名の変更に合わせて作品の GitHub のリポジトリの名前を変えます（[Editor #681](https://github.com/kubohiroya/turbowarp-plus-editor/issues/681)）。`renameRemoteRepository({remote, name, getSession})` は、書き込みのセッションで、接続のプロキシ（keybroker の Worker または Desktop のループバックプロキシの `POST /v1/github/<owner>/<repo>/name`）に新しい名前だけを送り、新しいリモートを返します。失敗はプロキシのコードを持つ `RepositoryRenameError` です。`REPOSITORY_NAME_UNAVAILABLE`（名前が使われている）、`ADMINISTRATION_PERMISSION_REQUIRED`（GitHub App のインストール先が Administration: Read and write を承認していない）、`FORBIDDEN`（リポジトリの管理者でない、または読み取りだけのログイン）、`GITHUB_API_UNAVAILABLE`（プロキシに改名の経路がない）。`unknown` は、改名されたかどうか分からない結果を表します。同じ名前でやり直せば完了します。`isRepositoryName` は GitHub の規則を確かめます。作品の保存用の別名も同じ規則に従います。
 
-続いて `writeOriginUrl(root, {from, to})` が、Git の変更のロックの中で、今の origin がまだ `from` のときだけ `remote.origin.url` を書き換えます。パネルが `.git/config` に書くのはこれだけで、ほかのキーはそのまま残します。ホストは auth パッケージの `renameRemote(from, to)` で接続を移すので、ログインはやり直しません。
+`readOriginUrl(root)` は、パネルが接続に使う、Git の設定にあるままの origin を読みます。続いて `writeOriginUrl(root, {from, to})` が、Git の変更のロックの中で、今の origin がまだ `from` のときだけ `remote.origin.url` を書き換えます。パネルが `.git/config` に書くのはこれだけで、ほかのキーはそのまま残します。ホストは auth パッケージの `renameRemote(from, to)` で接続を移すので、ログインはやり直しません。
 
 ## 公開
 

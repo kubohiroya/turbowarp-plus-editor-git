@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
 import * as git from 'isomorphic-git';
-import {isRepositoryName, renameRemoteRepository, writeOriginUrl} from '@kubohiroya/turbowarp-plus-editor-git/repository-rename';
+import {isRepositoryName, readOriginUrl, renameRemoteRepository, writeOriginUrl} from '@kubohiroya/turbowarp-plus-editor-git/repository-rename';
 import {directoryHandle} from './directory.js';
 
 const proxyOrigin = 'http://127.0.0.1:4567';
@@ -91,7 +91,9 @@ async function repository(origin) {
 test('rewrites only remote.origin.url in .git/config', async () => {
     const dir = await repository('https://github.com/fixture/work.git');
     const before = await fs.readFile(path.join(dir, '.git', 'config'), 'utf8');
+    assert.equal(await readOriginUrl(directoryHandle(dir)), 'https://github.com/fixture/work.git');
     await writeOriginUrl(directoryHandle(dir), {from: remote, to: 'https://github.com/fixture/renamed.git'});
+    assert.equal(await readOriginUrl(directoryHandle(dir)), 'https://github.com/fixture/renamed.git');
     const after = await fs.readFile(path.join(dir, '.git', 'config'), 'utf8');
     assert.equal(after, before.replace('https://github.com/fixture/work.git', 'https://github.com/fixture/renamed.git'));
     assert.equal(await git.getConfig({fs, dir, path: 'user.name'}), 'Fixture');
@@ -103,6 +105,7 @@ test('leaves a different origin alone', async () => {
     const before = await fs.readFile(path.join(dir, '.git', 'config'), 'utf8');
     await assert.rejects(writeOriginUrl(directoryHandle(dir), {from: remote, to: 'https://github.com/fixture/renamed.git'}),
         {code: 'ORIGIN_CHANGED'});
+    assert.equal(await readOriginUrl(directoryHandle(await repository())), undefined);
     await assert.rejects(writeOriginUrl(directoryHandle(await repository()), {from: remote,
         to: 'https://github.com/fixture/renamed.git'}), {code: 'ORIGIN_CHANGED'});
     await assert.rejects(writeOriginUrl(directoryHandle(dir), {from: remote, to: 'https://example.test/x.git'}),

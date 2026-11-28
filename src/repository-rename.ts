@@ -146,6 +146,19 @@ export async function renameRemoteRepository({remote, name, getSession, fetch: s
 }
 
 /**
+ * The granted repository's `remote.origin.url` as Git config holds it, the value the panel connects with, or
+ * `undefined` when there is no repository or origin.
+ */
+export async function readOriginUrl(root: FileSystemDirectoryHandle): Promise<string | undefined> {
+    try {await root.getDirectoryHandle('.git');} catch (error) {
+        if (['NotFoundError', 'TypeMismatchError'].includes((error as {name?: string}).name ?? '')) return undefined;
+        throw error;
+    }
+    const value = await git.getConfig({fs: createReadOnlyFs(root), dir: '/', gitdir: '/.git', path: 'remote.origin.url'});
+    return typeof value === 'string' && value ? value : undefined;
+}
+
+/**
  * Rewrites `remote.origin.url` of the granted repository from `from` to `to`, and nothing else in `.git/config`.
  * The current value is checked under the Git mutation lock first; a different origin is left alone
  * (`ORIGIN_CHANGED`). This is the only write to `.git/config` that the panel makes.
