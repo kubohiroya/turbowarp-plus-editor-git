@@ -124,6 +124,12 @@ Each kind of file merges as follows.
 
 `checkProject(project)` checks block links, variable and list references, block comments and the current costume index. Do not commit a project with problems.
 
+## Renaming the repository
+
+`./repository-rename` renames a project's GitHub repository when the project is renamed ([Editor #681](https://github.com/kubohiroya/turbowarp-plus-editor/issues/681)). `renameRemoteRepository({remote, name, getSession})` sends only the new name to the connection's proxy (`POST /v1/github/<owner>/<repo>/name` on the keybroker Worker or the Desktop loopback proxy) with the write session, and returns the new remote. Errors are `RepositoryRenameError` codes from the proxy: `REPOSITORY_NAME_UNAVAILABLE` (the name is in use), `ADMINISTRATION_PERMISSION_REQUIRED` (the GitHub App installation has not approved Administration: Read and write), `FORBIDDEN` (not an admin of the repository, or a read-only login) and `GITHUB_API_UNAVAILABLE` (the proxy has no rename route). `unknown` marks an outcome that may have renamed the repository; retrying with the same name completes it. `isRepositoryName` checks GitHub's rule, which the project's save name follows.
+
+`writeOriginUrl(root, {from, to})` then rewrites `remote.origin.url`, under the Git mutation lock, only when the current origin is still `from`. It is the panel's only write to `.git/config`; every other key is kept. The host moves the connection with the auth package's `renameRemote(from, to)`, so no new login is needed.
+
 ## Release
 
 `.github/workflows/release.yml` publishes to npm. Push a `v<version>` tag that names the

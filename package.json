@@ -1,6 +1,6 @@
 {
   "name": "@kubohiroya/turbowarp-plus-editor-git",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "description": "Read-only local Git panel for TurboWarp Plus Editor",
   "type": "module",
   "license": "MPL-2.0",
@@ -20,6 +20,10 @@
       "default": "./dist/repository.js"
     },
     "./style.css": "./dist/style.css",
+    "./repository-rename": {
+      "types": "./dist/repository-rename.d.ts",
+      "default": "./dist/repository-rename.js"
+    },
     "./smart-http": {
       "types": "./dist/smart-http.d.ts",
       "default": "./dist/smart-http.js"
